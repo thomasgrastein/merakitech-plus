@@ -729,6 +729,10 @@ recommendation in the plan, the decision wins.
 6. **Vendor OTA block: NOT YET.** No router (UniFi) block and no on-device hosts pin for now. Risk accepted: while
    Meraki+ runs, the vendor update code does not run. Revisit before phase 1b hardware tests, since a stock boot during
    testing is exposed to vendor OTA; the detect-and-repair layer still applies.
+   **Revisited (maintainer, after phase 1b shipped):** still no block; the risk is accepted for the phase 1b hardware
+   tests as well. Mitigation during tests: vendor download/install is user-triggered from the stock Software Update
+   page, so nobody navigates there while stock runs; the detect-and-repair layer (installer `status` + on-screen
+   notice) remains the safety net.
 7. **Channel: stable only.** No beta channel.
 8. **Board guard in the updater: NO.** The updater does not refuse non-Gen1 board fingerprints (maintainer's choice,
    deviating from the recommendation). The installer's existing board check is unchanged. Consequence: Gen2 or other
