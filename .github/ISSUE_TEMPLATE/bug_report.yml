@@ -17,7 +17,7 @@ body:
     id: version
     attributes:
       label: Meraki+ version (DIAGNOSTICS → VERSION)
-      placeholder: V6.20
+      placeholder: V6.21
     validations: {required: true}
   - type: dropdown
     id: area

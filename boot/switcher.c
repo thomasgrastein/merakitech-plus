@@ -29,6 +29,7 @@
  *  - Mode is verified via readlink(/proc/<pid>/exe) for each pidof demo_v9:
  *      /customer/demo_v9     → A mode (stock)  → the gesture may switch to B
  *      /new_customer/demo_v9 → B mode (merakiplus)  → does nothing
+ *      /new_customer/merakiplus/rel/<name>/demo_v9 → B mode (a release started by the v6.21 launcher)
  *      no demo_v9            → does nothing
  *  - The watchdog race is avoided with SIGSTOP-first: test.sh only checks ps-grep "demo_v9"
  *    (1 s loop). Kill→wait→launch would leave a window where the watchdog
@@ -340,11 +341,18 @@ static int gesture_sysfs_sample(Gesture *g, int x, int y, int points, int64_t no
 typedef enum { MODE_NONE = 0, MODE_A, MODE_B } Mode;
 typedef enum { ACT_SWITCH_A = 0, ACT_IDLE_B, ACT_IDLE_NONE, ACT_IDLE_MIXED } Action;
 
+/* v6.21 (OTA phase 1b): /new_customer/demo_v9 is the launcher, which exec()s a release
+ * /new_customer/merakiplus/rel/<name>/demo_v9 (same PID) — both are B mode. */
+#define REL_PREFIX "/new_customer/merakiplus/rel/"
 static Mode classify_exe(const char *exe)
 {
     if (!exe) return MODE_NONE;
     if (strcmp(exe, "/customer/demo_v9") == 0)     return MODE_A;
     if (strcmp(exe, "/new_customer/demo_v9") == 0) return MODE_B;
+    size_t n = strlen(exe), pl = strlen(REL_PREFIX), sl = strlen("/demo_v9");
+    if (n > pl + sl && strncmp(exe, REL_PREFIX, pl) == 0 && strcmp(exe + n - sl, "/demo_v9") == 0
+        && exe[pl] != '.' && exe[pl] != '/' && strchr(exe + pl, '/') == exe + n - sl)
+        return MODE_B;
     return MODE_NONE;
 }
 
@@ -439,8 +447,8 @@ static int find_demos(int *pids, char exes[][256], int max)
 
 static int pid_alive(int pid) { return kill(pid, 0) == 0 || errno != ESRCH; }
 
-/* Wait until /proc/<pid>/exe matches expected (ms budget). 1=ok. */
-static int wait_exe(int pid, const char *expected, int budget_ms)
+/* Wait until /proc/<pid>/exe is a Meraki+ (B-mode) executable (ms budget). 1=ok. */
+static int wait_exe(int pid, int budget_ms)
 {
     int64_t deadline = mono_ms() + budget_ms;
     while (mono_ms() < deadline) {
@@ -449,7 +457,7 @@ static int wait_exe(int pid, const char *expected, int budget_ms)
         ssize_t r = readlink(path, buf, sizeof buf - 1);
         if (r > 0) {
             buf[r] = 0;
-            if (strcmp(buf, expected) == 0 && pid_alive(pid)) return 1;
+            if (classify_exe(buf) == MODE_B && pid_alive(pid)) return 1;
         }
         if (!pid_alive(pid)) return 0;
         usleep(50000);
@@ -476,6 +484,7 @@ static void do_switch(int pid_a)
         setsid();
         if (chdir("/new_customer") != 0) _exit(126);
         setenv("LD_LIBRARY_PATH", "/new_customer/libs:/config/wifi", 1);
+        setenv("MERAKIPLUS_LAUNCH", "gesture", 1);   /* the launcher: an explicit start, try Meraki+ again */
         int nul = open("/dev/null", O_RDONLY);
         if (nul >= 0) { dup2(nul, 0); close(nul); }
         int out = open("/tmp/merakiplus_boot.log", O_WRONLY | O_CREAT | O_APPEND, 0644);
@@ -484,7 +493,7 @@ static void do_switch(int pid_a)
         _exit(127);
     }
     logline("switch A→B: launched B pid %d (/new_customer/demo_v9)", (int)child);
-    if (wait_exe((int)child, "/new_customer/demo_v9", 2000)) {
+    if (wait_exe((int)child, 2000)) {
         logline("switch A→B: B verified (exe link) — SIGKILL pid %d", pid_a);
         kill(pid_a, SIGKILL);
         int64_t deadline = mono_ms() + 2000;
@@ -1118,6 +1127,11 @@ int main(void)
     /* 17: mode classification */
     CHECK(classify_exe("/customer/demo_v9") == MODE_A,     "exe /customer/demo_v9 → A");
     CHECK(classify_exe("/new_customer/demo_v9") == MODE_B, "exe /new_customer/demo_v9 → B");
+    CHECK(classify_exe("/new_customer/merakiplus/rel/6.21-42cd7b9d/demo_v9") == MODE_B, "exe of a release (via the launcher) → B");
+    CHECK(classify_exe("/new_customer/merakiplus/rel/.stage-6.21/demo_v9") == MODE_NONE, "a stage directory is not B");
+    CHECK(classify_exe("/new_customer/merakiplus/rel/a/b/demo_v9") == MODE_NONE, "nested path is not B");
+    CHECK(classify_exe("/new_customer/merakiplus/rel//demo_v9") == MODE_NONE, "empty release name is not B");
+    CHECK(classify_exe("/new_customer/merakiplus/rel/6.21/demo_v9x") == MODE_NONE, "other file name is not B");
     CHECK(classify_exe("/tmp/andet") == MODE_NONE,         "unknown exe → NONE");
     CHECK(classify_exe(NULL) == MODE_NONE,                 "NULL exe → NONE");
 

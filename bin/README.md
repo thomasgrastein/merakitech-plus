@@ -2,9 +2,11 @@
 
 | File | What | Built from |
 |---|---|---|
-| `merakiplus` | **Meraki+ v6.20** device binary (static ARMv7, musl). Installed as `/new_customer/demo_v9`. | `src/merakiplus.c` |
-| `merakiplus_snd` | sound helper (ARMv7, dynamic against the display's glibc 2.28; `dlopen`s the display's own `libmi_*.so` at run time). Installed as `/new_customer/merakiplus/merakiplus_snd`, next to `audio/` | `src/merakiplus_snd.c` |
+| `merakiplus` | **Meraki+ v6.21** device binary (static ARMv7, musl). Installed as `/new_customer/merakiplus/rel/<version>-<sha8>/demo_v9`. | `src/merakiplus.c` |
+| `merakiplus_boot` | the launcher (static ARMv7, no UI/network/UART). Installed as `/new_customer/demo_v9`; starts the chosen release and rolls back (docs/ota-plan.md phase 1b) | `src/merakiplus_boot.c` |
+| `merakiplus_snd` | sound helper (ARMv7, dynamic against the display's glibc 2.28; `dlopen`s the display's own `libmi_*.so` at run time). Installed into each release directory, next to `audio/` | `src/merakiplus_snd.c` |
 | `switcher` | gesture switcher daemon (center-hold 5 s → stock to Meraki+), only with `--gesture` | `boot/switcher.c` |
+| `merakiplus_boot` | `c0035acd75049bea2570a6ea99c4ab5d` | `./build.sh` → `build/merakiplus_boot` |
 | `grab_shim.so` | tiny LD_PRELOAD shim so the switcher can see touches while the stock UI runs (only with `--gesture`) | `boot/grab_shim.c` |
 | `tinj_hold` | touch injector used for on-device testing of the gesture | `boot/tinj_hold.c` |
 | `keyinj` | key injector used for on-device testing of the power button | `src/keyinj.c` |
@@ -16,6 +18,13 @@
 **No vendor firmware, libraries or scripts are included here or anywhere in this repository.**
 
 ## Provenance of the ARM binaries
+
+**v6.21 (2026-11-22, launcher + automatic rollback, OTA plan phase 1b):** new `merakiplus_boot` (`c0035acd…`);
+`merakiplus`, `merakiplus_sim_arm` and the two host SIM builds rebuilt from the v6.21 source (release-relative sound files,
+healthy marker, exec-reload, SYSTEM line, vendor-update notice); `switcher` rebuilt (a release started by the launcher is
+Meraki+). All with the official zig 0.17.1. `merakiplus_snd`, `tinj_hold`, `keyinj`, `grab_shim.so` and `audio/` are
+byte-identical to v6.20. **Not yet verified on a machine**: covered by the launcher watchdog model (host + ARMv7 container),
+the power-cut replays, the installer suite, the UI self-test (EN + DA, also as a 32-bit ARM binary) and the switcher self-test.
 
 **v6.20 (2026-11-22, steam during a brew):** `merakiplus`, `merakiplus_sim_arm` and the two host SIM builds were rebuilt
 from the v6.20 source with the official zig 0.17.1. The change is the steam start guard (a latched steam start is allowed
@@ -97,14 +106,14 @@ self-test and the simulator E2E suite.
 
 | File | md5 (this repo) | Built with |
 |---|---|---|
-| `merakiplus` (V6.20) | `6c0b4cd1091dd330d3248a86a54e017f` | `./build.sh` → `build/merakiplus` |
-| `merakiplus_sim_arm` (V6.20) | `70bf25551b568b5cd608560f85060cc0` | `./build.sh` → `build/merakiplus_sim_arm` |
+| `merakiplus` (V6.21) | `624a561f50e7c0cdab4ca14186b69d8b` | `./build.sh` → `build/merakiplus` |
+| `merakiplus_sim_arm` (V6.21) | `86f6fa71b879928ae734550de07a78f7` | `./build.sh` → `build/merakiplus_sim_arm` |
 | `merakiplus_snd` (V6.18.1) | `a7659c176b8ef78385b0b612a69e81ca` | `./build.sh` → `build/merakiplus_snd` |
-| `switcher` | `f2b95b16b33a9e1bc868a2f5b2414e6b` | `./build.sh` → `build/switcher` |
+| `switcher` | `e02a463c16278545c04b8e4022b8369f` | `./build.sh` → `build/switcher` |
 | `tinj_hold` | `e9806fb92e9b8a7e506a34639173c648` | `./build.sh` → `build/tinj_hold` |
 | `keyinj` | `a0cbd4bc2a670abe0e250ec34a193843` | `./build.sh` → `build/keyinj` |
-| `merakiplus_sim-linux-x86_64` (V6.20) | `c418d7fb39233d0c0a7693eb4d110765` | `zig cc -target x86_64-linux-musl -DMERAKIPLUS_SIM -O2 -static -s src/merakiplus.c -lm` |
-| `merakiplus_sim-macos-arm64` (V6.20) | `58f1684f9440728f9ec92fc231cffa84` | `zig cc -DMERAKIPLUS_SIM -O2 -s src/merakiplus.c -lm` (Mach-O builds are not bit-reproducible) |
+| `merakiplus_sim-linux-x86_64` (V6.21) | `f96f108867f327e69f73deade02dcd9e` | `zig cc -target x86_64-linux-musl -DMERAKIPLUS_SIM -O2 -static -s src/merakiplus.c -lm` |
+| `merakiplus_sim-macos-arm64` (V6.21) | `946a37d73b8dceb45de9ea3bb430d81b` | `zig cc -DMERAKIPLUS_SIM -O2 -s src/merakiplus.c -lm` (Mach-O builds are not bit-reproducible) |
 
 The ARM builds above are reproducible: running `./build.sh` on the same sources with the **official**
 zig 0.17.1 release (the ziglang.org tarball CI installs) gives the same md5 on macOS and Linux,
@@ -115,7 +124,7 @@ reproducible file with the official toolchain (`switcher`, `tinj_hold`, `keyinj`
 Note that a zig cache shared with a Homebrew zig of the same version can hand its objects to the official
 zig: use a separate `ZIG_GLOBAL_CACHE_DIR`. `tests/hygiene.py` rejects Homebrew-built files in `bin/`. The Linux SIM build (`-target x86_64-linux-musl
 -static -s`) is reproducible the same way. CI enforces this on every push and PR
-(`tests/check_bins.py`): the committed `bin/` must be byte-identical to fresh builds of these seven
+(`tests/check_bins.py`): the committed `bin/` must be byte-identical to fresh builds of these eight
 reproducible targets, so a source change without a `bin/` rebuild fails CI. `grab_shim.so` (trimmed
 verified build, see below) and `merakiplus_sim-macos-arm64` (Mach-O is not bit-reproducible) are
 excluded from that check; `tests/hygiene.py` still md5-gates every file in `bin/`.

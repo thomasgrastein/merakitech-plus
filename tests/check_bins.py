@@ -31,6 +31,7 @@ REPRODUCIBLE = (
     "tinj_hold",
     "keyinj",
     "merakiplus_snd",
+    "merakiplus_boot",
     "merakiplus_sim-linux-x86_64",
 )
 

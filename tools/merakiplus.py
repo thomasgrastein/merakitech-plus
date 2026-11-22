@@ -28,9 +28,16 @@ Safety model (see README "Security and OTA" and the disclaimer):
   * No reboot is ever sent. Activation uses the vendor watchdog (exec-reload) or a
     stop-first runtime switch (SIGSTOP old UI, start new, verify, then kill old; on failure
     the old UI is resumed with SIGCONT).
-  * After activation a 60 s health check: the same Meraki+ process must keep running (no crash,
-    no watchdog restart) and must be receiving data from the controller. On failure the installer
-    says so and points to ./revert.sh (no automatic rollback yet — docs/ota-plan.md phase 1b).
+  * Since v6.21 (docs/ota-plan.md phase 1b) every Meraki+ version lives complete in its own release
+    directory /new_customer/merakiplus/rel/<version>-<sha>/ (UI, sound helper, sounds, MANIFEST), staged
+    under .stage-<name> and renamed into place after a sync. A small launcher becomes /new_customer/demo_v9:
+    it starts the release named by the state file ota/state (written tmp -> sync -> rename -> sync) and
+    rolls back on its own: a new version that does not become healthy within 3 starts -> the previous
+    version -> the stock UI from slot A (read-only; the boot flag is never touched).
+  * A new version is installed as a TRIAL (pending). It is activated when the machine is idle — by the
+    running UI itself (exec-reload, same PID) or, for older UIs, through the vendor watchdog — and the
+    health check waits for the UI's own healthy marker (60 s running, controller answering). Then the
+    installer commits it (current/previous); otherwise the launcher rolls it back after 3 failed starts.
 """
 import argparse
 import base64
@@ -49,17 +56,18 @@ import time
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
-VERSION = "6.20"
+VERSION = "6.21"
 REPO = "thomasgrastein/merakitech-plus"
 RAW_BASE = "https://raw.githubusercontent.com/" + REPO + "/{ref}/bin/{name}"
 RAW_AUDIO = "https://raw.githubusercontent.com/" + REPO + "/{ref}/audio/{name}"
 
 # md5 of the shipped device binaries in bin/ (kept in sync with bin/MD5SUMS by CI).
 BIN_MD5 = {
-    "merakiplus": "6c0b4cd1091dd330d3248a86a54e017f",
-    "switcher": "f2b95b16b33a9e1bc868a2f5b2414e6b",
+    "merakiplus": "624a561f50e7c0cdab4ca14186b69d8b",
+    "switcher": "e02a463c16278545c04b8e4022b8369f",
     "grab_shim.so": "c42076c807c54d477a5868977404186d",
     "merakiplus_snd": "a7659c176b8ef78385b0b612a69e81ca",
+    "merakiplus_boot": "c0035acd75049bea2570a6ea99c4ab5d",
 }
 # v6.18: Meraki+'s own sounds (tools/gen_audio.py; docs/audio.md; v6.19: marimba / glockenspiel timbres) — installed next to the sound helper
 AUDIO_MD5 = {
@@ -70,10 +78,11 @@ AUDIO_MD5 = {
 # SHA-256 of the same files (docs/ota-plan.md phase 1a). Checked on the computer before upload, and on the display
 # when its busybox has sha256sum. md5 stays as well (the display always has md5sum; older docs/scripts quote it).
 BIN_SHA256 = {
-    "merakiplus": "42cd7b9d28ebf670bf5bedaa44beb81bfb501a7832d871b1a4e364caa105b595",
-    "switcher": "96377054939bc5f734a632c1c87d1ac584f52dfe482abc8e07e07094bed3f8b7",
+    "merakiplus": "d1d9ddb59856b3ce390b9223c6a189e94c159c3b99b1a1b54c5eee10bd58df6a",
+    "switcher": "6af721e297e8d13dedc9ad9c14bf39d925eb7d4cc7ae9fab49f99b428873d5bf",
     "grab_shim.so": "c02f61b53ec4613f04950966bcfab7e7aa2ad53dfe1035eae22a542861d268d7",
     "merakiplus_snd": "84c06c507a04d0c06ae9250a60405f10bcf05b105e481144869180fd30d479cb",
+    "merakiplus_boot": "4cbcc5fb20469ba25b79ee1523b4639a2a81af84e96b996e97d2af0d535fd8ed",
 }
 AUDIO_SHA256 = {
     "start.wav": "4633a9ecd800119732886e5255f404d76eb9743dda3ebdd2c270d5106650ff01",
@@ -81,6 +90,8 @@ AUDIO_SHA256 = {
     "ready_steam.wav": "85bd297c597f9239829cb5db1dc67fc6ce6dbef910a7972555ad0826377f91f1",
 }
 MERAKIPLUS_MARK = "@(#)merakiplus "        # embedded in every Meraki+ binary (src/merakiplus.c MERAKIPLUS_MARK)
+LAUNCHER_MARK = "@(#)merakiplus-launcher "  # only in the launcher (src/merakiplus_boot.c)
+RELOAD_MARK = "/tmp/merakiplus_reload"     # a UI that contains this string can exec-reload itself (v6.21+)
 
 # ---- device layout (vendor A/B scheme, see docs/boot.md) ----
 A_DIR, B_DIR = "/customer", "/new_customer"
@@ -96,6 +107,17 @@ STATE = BOOTDIR + "/merakiplus.state"
 SND_HELPER = OURDIR + "/merakiplus_snd"                 # v6.18: plays a sound via the display's own libmi_ao.so
 AUDIO_DIR = OURDIR + "/audio"                           # v6.18: start.wav, ready_extract.wav, ready_steam.wav
 SWITCHER, SHIM = BOOTDIR + "/switcher", BOOTDIR + "/grab_shim.so"
+# v6.21 (docs/ota-plan.md §5.2): release directories + the launcher's state
+REL_DIR = OURDIR + "/rel"                               # rel/<version>-<sha8>/{demo_v9, merakiplus_snd, audio/, MANIFEST}
+OTA_DIR = OURDIR + "/ota"
+OTA_STATE = OTA_DIR + "/state"                          # the commit point: current / previous / pending / tries / last
+OTA_HEALTHY = OTA_DIR + "/healthy"                      # written by a UI on trial once it is healthy
+OTA_LOG = OTA_DIR + "/launch.log"                       # the launcher's events (rollbacks, fallbacks)
+HMARK = "/tmp/merakiplus_healthy"                       # the UI's healthy marker (boot_id + pid), every start
+RELOAD = RELOAD_MARK                                    # ask the running UI to exec the launcher when idle
+LAUNCH_VOL = "/tmp/merakiplus_launch"                   # the launcher's per-boot counters
+BOOT_ID = "/proc/sys/kernel/random/boot_id"
+LAUNCHER_NEW = B_DIR + "/.demo_v9.launcher"             # the uploaded launcher, selftested before the rename
 GUARD_LINE = ("[ -x /new_customer/merakiplus/boot/switcher ] && { [ -f /new_customer/merakiplus/boot/grab_shim.so ] "
               "&& export LD_PRELOAD=/new_customer/merakiplus/boot/grab_shim.so${LD_PRELOAD:+:$LD_PRELOAD}; "
               "/new_customer/merakiplus/boot/switcher & }")
@@ -112,7 +134,7 @@ VENDOR_PENDING = (A_DIR + "/temp.tar.gz", A_DIR + "/demo_temp")
 # temp files our own atomic steps create; a power cut can leave them behind (never the final names)
 LEFTOVER_GLOBS = (OURDIR + "/*.part", OURDIR + "/.*.tmp", AUDIO_DIR + "/*.part", BOOTDIR + "/*.part",
                   BOOTDIR + "/.*.tmp", BOOTDIR + "/*.tmp", B_DIR + "/.demo_v9.tmp", DEMO_SH + ".part",
-                  A_DIR + "/.demo.sh.tmp")
+                  A_DIR + "/.demo.sh.tmp", OTA_DIR + "/*.tmp*", B_DIR + "/.demo_v9.launcher*")
 
 # ============================================================ legacy migration only
 # BEGIN legacy-compat (legacy migration only)
@@ -568,6 +590,43 @@ def check_arm_elf(data, name, shared=False):
         raise Abort(f"{name}: unexpected ELF type {et}")
 
 
+# ============================================================ release directories (v6.21, docs/ota-plan.md §5)
+def rel_name(version, ui_bytes):
+    """Release directory name: <version>-<first 8 hex of the UI's SHA-256> (content-addressed: never rewritten)."""
+    return f"{version}-{sha256b(ui_bytes)[:8]}"
+
+
+def manifest(version, files):
+    """MANIFEST of a release directory: one 'file <path> <size> <sha256>' line per file. The launcher checks the
+    demo_v9 line before every start (size + SHA-256)."""
+    return ("merakiplus-release 1\nversion " + version + "\n" +
+            "".join(f"file {n} {len(b)} {sha256b(b)}\n" for n, b in files)).encode()
+
+
+def is_b_family(exe):
+    """Meraki+ started for slot B: the launcher path itself or a release it exec()ed."""
+    return exe == B_EXE or (exe.startswith(REL_DIR + "/") and exe.endswith("/demo_v9")
+                            and "/." not in exe[len(REL_DIR):] and exe.count("/") == REL_DIR.count("/") + 2)
+
+
+def kv_text(text):
+    return dict(l.split("=", 1) for l in text.splitlines() if "=" in l)
+
+
+def ota_state_text(st):
+    keys = ("format", "current", "previous", "pending", "tries", "last")
+    d = dict(st)
+    d["format"] = "1"
+    return "".join(f"{k}={d.get(k, '')}\n" for k in keys) + "".join(f"{k}={v}\n" for k, v in st.items() if k not in keys)
+
+
+def write_ota_state(dev, state):
+    """tmp -> sync -> rename -> sync: a power cut leaves the old or the new state file (the launcher reads it)."""
+    body = ota_state_text(state).replace("\n", "\\n")
+    t = dev.d(OTA_STATE) + ".tmp.I"
+    dev.w(f"mkdir -p {dev.d(OTA_DIR)} && printf '{body}' > {t} && sync && mv -f {t} {dev.d(OTA_STATE)} && sync")
+
+
 # ============================================================ state inspection
 def inspect(dev):
     st = {}
@@ -616,6 +675,21 @@ def inspect(dev):
     running = {e for _, e in st["procs"]}
     st["stray"] = [f for f in (l[2:][len(dev.p):] for l in sb.splitlines() if l.startswith("S "))
                    if f != STAGE and f not in running]
+    # v6.21: launcher + release directories + the launcher's state and this boot's counters
+    st["launcher"] = st["b_exists"] and dev.sh(f"grep -q -F '{LAUNCHER_MARK}' {dev.d(B_EXE)} 2>/dev/null && echo Y || echo N",
+                                               check=False)[1].strip().endswith("Y")
+    _, rl = dev.sh(f"for d in {dev.d(REL_DIR)}/* {dev.d(REL_DIR)}/.stage-* {dev.d(REL_DIR)}/.damaged-*; do [ -d \"$d\" ] && echo \"R ${{d##*/}}\"; done; true",
+                   check=False)
+    names = [l[2:].strip() for l in rl.splitlines() if l.startswith("R ")]
+    st["rels"] = [n for n in names if not n.startswith(".")]
+    st["rel_junk"] = [n for n in names if n.startswith(".")]
+    _, o = dev.sh(f"cat {dev.d(OTA_STATE)} 2>/dev/null; true", check=False)
+    st["ota"] = kv_text(o) if "format=1" in o else {}
+    _, o = dev.sh(f"cat {dev.d(LAUNCH_VOL)} 2>/dev/null; echo; echo BOOTID=$(cat {dev.d(BOOT_ID)} 2>/dev/null)", check=False)
+    st["boot_id"] = next((l[7:].strip() for l in o.splitlines() if l.startswith("BOOTID=")), "")
+    st["launch"] = {k: v for k, v in kv_text(o).items() if k != "BOOTID"}
+    _, o = dev.sh(f"cat {dev.d(HMARK)} 2>/dev/null; true", check=False)
+    st["hmark"] = kv_text(o)
     st["vendor"] = vendor_traces(dev, st)
     return st
 
@@ -647,6 +721,8 @@ def vendor_traces(dev, st):
 
 
 def slot_of(exe):
+    if exe.startswith(REL_DIR + "/"):
+        return "B, release " + exe[len(REL_DIR) + 1:].split("/")[0]
     return {A_EXE: "A (stock)", B_EXE: "B"}.get(exe, exe)
 
 
@@ -662,6 +738,22 @@ def print_status(o, st):
     o.say(f"  demo.sh guard line : {st['guard_lines']}   switcher running: {bool(st['switcher_pids'])}")
     o.say(f"  backups            : slot-B {'yes' if st['bak_b'] else ('was-empty' if st['bak_b_absent'] else 'no')}"
           f", demo.sh {'yes' if st['bak_sh'] else 'no'}")
+    if st["launcher"] or st["rels"] or st["ota"]:
+        ota = st["ota"]
+        o.say(f"  launcher           : {'installed in slot B' if st['launcher'] else 'NOT in slot B'}")
+        o.say(f"  releases           : current {ota.get('current') or '-'}, previous {ota.get('previous') or '-'}"
+              + (f", TRIAL {ota['pending']} (started {ota.get('tries', '0')}x)" if ota.get("pending") else "")
+              + f"   [on flash: {', '.join(st['rels']) or 'none'}]")
+        if ota.get("last", "").startswith("rolled_back:"):
+            r = ota["last"].split(":")
+            o.say(f"  last rollback      : {r[1]} ({r[2] if len(r) > 2 else '?'}) — the launcher went back automatically")
+        ln = st["launch"]
+        if ln.get("boot") and ln.get("boot") == st["boot_id"]:
+            lvl = {"0": "current", "1": "previous (fallback)", "2": "STOCK UI (fallback)"}.get(ln.get("level", "0"), "?")
+            o.say(f"  this boot          : running {lvl}; {ln.get('rel', '?')} started {ln.get('streak', '?')}x in a row")
+        hm = st["hmark"]
+        if hm.get("boot") == st["boot_id"] and hm.get("boot"):
+            o.say(f"  healthy marker     : {hm.get('state', '?')} (pid {hm.get('pid', '?')}, release {hm.get('rel') or '-'}, this boot)")
     if st["legacy"]["dir"] or st["legacy"]["guard"]:
         o.say("  older install      : found in the pre-rename layout — migrated by install / revert")
     if st["vendor"]:
@@ -692,18 +784,18 @@ def require_device(st):
 
 
 # ============================================================ activation (no reboot)
-def find_new(dev, exe, old, budget):
+def find_new(dev, match, old, budget):
     t_end = time.time() + budget
     while time.time() < t_end:
         procs = dev.ui_procs()
-        new = [p for p, e in procs if e == exe and p not in old]
+        new = [p for p, e in procs if match(e) and p not in old]
         if new:
             return new[0], procs
         time.sleep(1)
     return None, dev.ui_procs()
 
 
-def stop_first_switch(dev, o, target_dir, target_exe, ldp, logname):
+def stop_first_switch(dev, o, target_dir, match, ldp, logname, exe_name):
     """Runtime switch without reboot: SIGSTOP the running UI(s) (the watchdog still sees the
     pid, so it does not race us), start the target, verify it, then kill the old one.
     On failure the old UI is resumed with SIGCONT and the new one is killed."""
@@ -714,66 +806,105 @@ def stop_first_switch(dev, o, target_dir, target_exe, ldp, logname):
         dev.sh(f"for p in {olds}; do kill -STOP $p; done")
     dev.sh(f"cd {dev.d(target_dir)} && LD_LIBRARY_PATH={ldp} nohup ./demo_v9 > {dev.d('/tmp/' + logname)} "
            f"2>&1 < /dev/null & sleep 2")
-    pid, procs = find_new(dev, target_exe, old, 8)
+    pid, procs = find_new(dev, match, old, 8)
     if pid is None:
         if olds:
             dev.sh(f"for p in {olds}; do kill -CONT $p; done", check=False)
-        stray = [p for p, e in procs if e == target_exe and p not in old]
+        stray = [p for p, e in procs if match(e) and p not in old]
         if stray:
             dev.sh("kill -9 " + " ".join(map(str, stray)), check=False)
-        raise Abort(f"{target_exe} did not start; the previous UI was resumed. "
+        raise Abort(f"{exe_name} did not start; the previous UI was resumed. "
                     f"See /tmp/{logname} on the display.")
     if olds:
         dev.sh(f"kill -9 {olds}; sleep 1", check=False)
     return pid
 
 
-def activate_meraki(dev, o, st, want_md5):
-    """Make the freshly installed slot-B binary the running UI."""
+def live_exe(dev, pid):
+    e = dev.sh(f"readlink {dev.d('/proc')}/{pid}/exe", check=False)[1].strip()
+    if e.endswith(" (deleted)"):
+        e = e[:-len(" (deleted)")]
+    return e[len(dev.p):] if dev.p and e.startswith(dev.p) else e
+
+
+def ui_can_reload(dev, pid):
+    """v6.21+: the UI execs the launcher itself when idle (same PID, no signal, never during an activity)."""
+    return dev.sh(f"grep -q -F '{RELOAD_MARK}' {dev.d('/proc')}/{pid}/exe 2>/dev/null && echo Y || echo N",
+                  check=False)[1].strip().endswith("Y")
+
+
+def activate_meraki(dev, o, st, want_md5, want_exe, reload_wait):
+    """Make the new release the running UI. Returns its pid, or None when it is deferred (machine busy)."""
     procs = st["procs"]
     if len(procs) > 1:
         raise Abort(f"Several UIs are running at once ({procs}) — unusual state; not touching it. "
                     "Power-cycle the machine and run install again.")
-    if procs and procs[0][1] == B_EXE and dev.md5(f"/proc/{procs[0][0]}/exe") == want_md5:
+    if procs and procs[0][1] == want_exe and dev.md5(f"/proc/{procs[0][0]}/exe") == want_md5:
         o.ok(f"Meraki+ {VERSION} is already the running UI (pid {procs[0][0]})")
         return procs[0][0]
+    reloadable = bool(procs) and is_b_family(procs[0][1]) and ui_can_reload(dev, procs[0][0])
     if dev.dry:
-        how = "watchdog exec-reload (kill -TERM, watchdog restarts slot B)" if st["watchdog"] == "B" \
-            else "stop-first runtime switch (SIGSTOP stock, start slot B, verify, kill stock)"
+        how = ("exec-reload by the running Meraki+ when idle (same PID)" if reloadable else
+               "watchdog exec-reload (kill -TERM, the watchdog restarts the launcher)" if st["watchdog"] == "B" and procs
+               else "stop-first runtime switch (SIGSTOP the running UI, start the launcher, verify, kill the old UI)")
         o.say(f"  [dry-run] would activate via {how}")
         return None
+    if reloadable:
+        pid = procs[0][0]
+        o.say(f"  exec-reload: the running Meraki+ (pid {pid}) restarts itself into the new release as soon as the machine")
+        o.say("  is idle on HOME (same PID — the watchdog never sees a gap; never during an activity)")
+        dev.w(f"touch {dev.d(RELOAD)}")
+        t_end = time.time() + reload_wait
+        while time.time() < t_end:
+            e = live_exe(dev, pid)
+            if e == want_exe:
+                return pid
+            if not e:
+                break
+            time.sleep(1)
+        if live_exe(dev, pid):
+            o.warn(f"Meraki+ did not restart within {reload_wait} s — the machine is busy or not on HOME.")
+            o.say("  The new version starts by itself when the machine is idle on HOME, or at the next power-on.")
+            return None
+        o.warn("the running Meraki+ ended instead of reloading — waiting for the watchdog")
+        pid, _ = find_new(dev, is_b_family, [pid], 15)
+        if pid is None:
+            pid = stop_first_switch(dev, o, B_DIR, is_b_family, B_LDP, "merakiplus_boot.log", B_EXE)
+        return pid
     if st["watchdog"] == "B" and procs:
         old = procs[0][0]
-        o.say(f"  watchdog exec-reload: kill -TERM {old}; the vendor watchdog restarts {B_EXE}")
+        o.say(f"  watchdog exec-reload: kill -TERM {old}; the vendor watchdog restarts {B_EXE} (the launcher)")
         dev.changed = True
         dev.sh(f"kill -TERM {old}")
-        pid, _ = find_new(dev, B_EXE, [old], 15)
+        pid, _ = find_new(dev, is_b_family, [old], 15)
         if pid is None:
             o.warn("watchdog did not restart slot B within 15 s — starting it directly")
-            pid = stop_first_switch(dev, o, B_DIR, B_EXE, B_LDP, "merakiplus_boot.log")
+            pid = stop_first_switch(dev, o, B_DIR, is_b_family, B_LDP, "merakiplus_boot.log", B_EXE)
     else:
-        o.say("  stop-first runtime switch: pause stock UI, start Meraki+, verify, then stop stock")
-        pid = stop_first_switch(dev, o, B_DIR, B_EXE, B_LDP, "merakiplus_boot.log")
+        o.say("  stop-first runtime switch: pause the running UI, start Meraki+ (launcher), verify, then stop the old UI")
+        pid = stop_first_switch(dev, o, B_DIR, is_b_family, B_LDP, "merakiplus_boot.log", B_EXE)
     return pid
 
 
-def health_fail(why, ip):
+def health_fail(why, ip, trial_note=""):
     raise Abort(f"HEALTH CHECK FAILED: {why}\n"
-                f"  Meraki+ is installed but not healthy. Go back to the stock UI now:\n"
+                + (f"  {trial_note}\n" if trial_note else "") +
+                f"  Go back to the stock UI now:\n"
                 f"      ./revert.sh --ip {ip}\n"
                 f"  and please open an issue with the log file.")
 
 
-def verify_running(dev, o, pid, want_md5, ip):
-    exe = dev.sh(f"readlink {dev.d('/proc')}/{pid}/exe", check=False)[1].strip()
+def verify_running(dev, o, pid, want_md5, want_exe, ip, trial_note=""):
+    exe = live_exe(dev, pid)
     if not exe:
-        health_fail(f"Meraki+ (pid {pid}) stopped right after it was started", ip)
-    if exe != dev.d(B_EXE):
-        raise Abort(f"pid {pid} runs {exe}, not {B_EXE}")
+        health_fail(f"Meraki+ (pid {pid}) stopped right after it was started", ip, trial_note)
+    if exe != want_exe:
+        raise Abort(f"pid {pid} runs {exe}, not {want_exe} (the launcher chose another release — see "
+                    f"./install.sh status and {OTA_LOG})")
     live = dev.md5(f"/proc/{pid}/exe")
     if live != want_md5:
         raise Abort(f"The running binary has md5 {live}, expected {want_md5}")
-    o.ok(f"running UI pid {pid}: exe {B_EXE}, live md5 {live}")
+    o.ok(f"running UI pid {pid}: exe {want_exe}, live md5 {live}")
 
 
 def ls_e_age(line, now_line):
@@ -803,12 +934,16 @@ def controller_link(dev, pid):
     return fd_open, ls_e_age(ls, dt)
 
 
-def health_check(dev, o, pid, seconds, ip):
-    """Phase 1a 'healthy' (docs/ota-plan.md): the same Meraki+ process runs for `seconds` (no crash, no
-    watchdog restart) and receives data from the controller. Read-only; no automatic rollback (phase 1b)."""
+def health_check(dev, o, pid, seconds, ip, trial_note=""):
+    """Phase 1b 'healthy' (docs/ota-plan.md §5.4): the UI writes /tmp/merakiplus_healthy (boot_id + its PID) once it has
+    run 60 s with the controller answering for 30 s. The same process must stay alive until then (no crash, no
+    restart). Without the marker, the controller link is measured from outside (1a: tty atime) to say why."""
     def fail(why):
-        health_fail(why, ip)
-    o.say(f"  health check: watching pid {pid} for {seconds} s (crash, restart, controller link) …")
+        health_fail(why, ip, trial_note)
+    limit = seconds + (30 if seconds >= 20 else 3)
+    o.say(f"  health check: waiting up to {limit} s for Meraki+ (pid {pid}) to report healthy "
+          f"(running, controller answering) …")
+    boot = dev.sh(f"cat {dev.d(BOOT_ID)} 2>/dev/null; true", check=False)[1].strip()
     t0, step = time.time(), (5 if seconds >= 20 else 1)
     while True:
         el = time.time() - t0
@@ -816,19 +951,20 @@ def health_check(dev, o, pid, seconds, ip):
         if pid not in [p for p, _ in procs]:
             fail(f"Meraki+ (pid {pid}) stopped after {int(el)} s" +
                  (f"; now running: {', '.join(f'pid {p} = {slot_of(e)}' for p, e in procs)}" if procs else ""))
-        if el >= seconds:
+        hm = kv_text(dev.sh(f"cat {dev.d(HMARK)} 2>/dev/null; true", check=False)[1])
+        if hm.get("pid") == str(pid) and hm.get("state") == "healthy" and (hm.get("boot") == boot or not boot):
             break
-        time.sleep(min(step, max(0.2, seconds - el)))
-    o.ok(f"same process for {seconds} s (no crash, no restart)")
+        if el >= limit:
+            fd_open, age = controller_link(dev, pid)
+            if not fd_open:
+                fail(f"Meraki+ does not hold the controller link ({UART_DEV}) open")
+            if age is not None and age > LINK_FRESH_S:
+                fail(f"no data from the coffee machine's controller for {age} s (link {UART_DEV} is open but silent)")
+            fail(f"Meraki+ did not report healthy within {limit} s (is the coffee machine switched on?)")
+        time.sleep(min(step, max(0.2, limit - el)))
+    o.ok(f"same process for {int(el)} s (no crash, no restart); Meraki+ reports healthy (boot {boot[:8] or '?'}, pid {pid})")
     fd_open, age = controller_link(dev, pid)
-    if not fd_open:
-        fail(f"Meraki+ does not hold the controller link ({UART_DEV}) open")
-    if age is None:
-        o.warn(f"controller traffic could not be measured on this firmware (no stat / ls -e); check that HOME "
-               f"shows live temperatures. {UART_DEV} is open.")
-    elif age > LINK_FRESH_S:
-        fail(f"no data from the coffee machine's controller for {age} s (link {UART_DEV} is open but silent)")
-    else:
+    if age is not None and fd_open:
         o.ok(f"controller link live: last data from the controller {max(age, 0)} s ago")
     _, lg = dev.sh(f"grep 'net-vagt startet' {dev.d('/tmp/merakiplus_net.log')} 2>/dev/null | tail -n 1", check=False)
     if ("V" + VERSION) in lg:
@@ -837,28 +973,35 @@ def health_check(dev, o, pid, seconds, ip):
 
 # ============================================================ install
 def cmd_install(dev, o, args):
-    o.step("1/7 Checking the display (read-only)")
+    o.step("1/8 Checking the display (read-only)")
     st = inspect(dev)
     print_status(o, st)
     require_device(st)
     if not st["procs"]:
         o.warn("no UI process running right now (the watchdog usually restarts one within a second)")
 
-    o.step("2/7 Getting and verifying the Meraki+ binaries")
+    o.step("2/8 Getting and verifying the Meraki+ files")
     merakiplus = get_binary("merakiplus", args, o)
     check_arm_elf(merakiplus, "merakiplus")
     want = BIN_MD5["merakiplus"]
     snd = get_binary("merakiplus_snd", args, o)                  # v6.18: sound helper + our own sounds
     check_arm_elf(snd, "merakiplus_snd")
+    boot = get_binary("merakiplus_boot", args, o)                # v6.21: the launcher (/new_customer/demo_v9)
+    check_arm_elf(boot, "merakiplus_boot")
     sounds = {n: get_binary(n, args, o, sub="audio") for n in AUDIO_MD5}
     extra = {}
-    if args.gesture:
+    has_switcher = dev.exists(SWITCHER)
+    if args.gesture or has_switcher:                             # an installed switcher must understand release paths
         extra["switcher"] = get_binary("switcher", args, o)
         check_arm_elf(extra["switcher"], "switcher")
         extra["grab_shim.so"] = get_binary("grab_shim.so", args, o)
         check_arm_elf(extra["grab_shim.so"], "grab_shim.so", shared=True)
-    # free space for updates too: every upload (.part) + the slot-B copy + margin (the old inodes stay until renamed)
-    need_kb = (len(merakiplus) * 2 + len(snd) + sum(map(len, sounds.values())) + sum(map(len, extra.values()))) // 1024 + 512
+    rel = rel_name(VERSION, merakiplus)
+    rel_exe = f"{REL_DIR}/{rel}/demo_v9"
+    files = [("demo_v9", merakiplus), ("merakiplus_snd", snd)] + [("audio/" + n, b) for n, b in sounds.items()]
+    man = manifest(VERSION, files)
+    # free space: the new release + the launcher (+ its upload) + a migrated copy of the running build + margin
+    need_kb = (sum(len(b) for _, b in files) * 2 + len(boot) * 2 + sum(map(len, extra.values()))) // 1024 + 512
     if st["b_free_kb"] is not None and st["b_free_kb"] < need_kb:
         raise Abort(f"Only {st['b_free_kb']} KB free on /new_customer — need about {need_kb} KB. Nothing was changed.")
 
@@ -870,9 +1013,10 @@ def cmd_install(dev, o, args):
 
     if legacy_migrate(dev, o, st, rewrite_guard=True) and not dev.dry:
         st = inspect(dev)
-    if st["leftovers"]:
-        dev.w("rm -f " + " ".join(dev.d(f) for f in st["leftovers"]) + "; sync")
-        o.ok(f"removed {len(st['leftovers'])} temp file(s) left by an interrupted earlier run")
+    if st["leftovers"] or st["rel_junk"]:
+        dev.w("rm -f " + " ".join(dev.d(f) for f in st["leftovers"]) + "; " +
+              "".join(f"rm -rf {dev.d(REL_DIR)}/{n}; " for n in st["rel_junk"]) + "sync")
+        o.ok(f"removed {len(st['leftovers']) + len(st['rel_junk'])} temp file(s)/dir(s) left by an interrupted earlier run")
     if st["stray"]:
         if not args.yes and not dev.dry and sys.stdin.isatty() and \
                 confirm(f"  Remove {len(st['stray'])} old Meraki+ build(s) from {OURDIR} (not used by anything)?", False):
@@ -880,7 +1024,7 @@ def cmd_install(dev, o, args):
             o.ok("old builds removed")
         else:
             o.say(f"  {len(st['stray'])} old Meraki+ build(s) in {OURDIR} kept (see status; safe to delete by hand)")
-    o.step("3/7 Backups (only taken once; never overwritten)")
+    o.step("3/8 Backups (only taken once; never overwritten)")
     dev.w(f"mkdir -p {dev.d(BOOTDIR)}")
     if st["bak_b"] or st["bak_b_absent"]:
         o.ok("slot-B backup already exists — kept as is")
@@ -917,27 +1061,36 @@ def cmd_install(dev, o, args):
         dev.w(f"printf '{lines}' > {dev.d(STATE)}.tmp && sync && mv -f {dev.d(STATE)}.tmp {dev.d(STATE)} && sync")
         o.ok("boot state recorded (used by revert and by vendor-update detection)")
 
-    o.step(f"4/7 Installing Meraki+ {VERSION} into slot B")
-    if dev.md5(STAGE) == want:
-        o.ok(f"staged copy {STAGE} already up to date")
-    else:
-        dev.push(merakiplus, STAGE)
-        o.ok(f"uploaded and verified {STAGE}")
-    install_sound(dev, o, snd, sounds)
-    if st["b_md5"] == want:
-        o.ok(f"{B_EXE} already is Meraki+ {VERSION}")
-    else:
-        dev.atomic_copy(STAGE, B_EXE, want)
-        o.ok(f"{B_EXE} replaced atomically (md5 {want})")
 
-    o.step("5/7 Optional parts")
+    o.step(f"4/8 Release directory {REL_DIR}/{rel}")
+    ota = dict(st["ota"])
+    if not ota:
+        old = migrate_flat(dev, o, st, rel)
+        ota = {"current": old, "previous": "", "pending": "", "tries": "0", "last": ""}
+    install_release(dev, o, rel, files, man)
+
+    o.step("5/8 The launcher (/new_customer/demo_v9) and the release state")
+    new_ota = dict(ota)
+    if ota.get("current") == rel and not ota.get("pending"):
+        o.ok(f"{rel} is already the committed release")
+    else:
+        new_ota.update(pending=rel, tries="0")                    # a trial: the launcher rolls it back if it never gets healthy
+        if new_ota.get("current") == rel:
+            new_ota["current"] = ota.get("previous", "")          # (re-trial of a build that is current: keep a real fallback)
+    if new_ota != st["ota"]:
+        dev.w(f"rm -f {dev.d(OTA_HEALTHY)}")
+        write_ota_state(dev, new_ota)
+        o.ok(f"state: current {new_ota.get('current') or '-'}, previous {new_ota.get('previous') or '-'}, "
+             f"trial {new_ota.get('pending') or '-'}")
+    install_launcher(dev, o, st, boot)
+    if dev.exists(STAGE):                                         # the v6.15..v6.20 staged copy is not used any more
+        dev.w(f"rm -f {dev.d(STAGE)} && sync")
+        o.ok(f"{STAGE} removed (replaced by the release directory)")
+
+    o.step("6/8 Optional parts")
+    if extra:
+        install_switcher(dev, o, st, extra)
     if args.gesture:
-        for name, dest in (("switcher", SWITCHER), ("grab_shim.so", SHIM)):
-            if dev.md5(dest) == BIN_MD5[name]:
-                o.ok(f"{dest} up to date")
-            else:
-                dev.push(extra[name], dest, mode="755")
-                o.ok(f"{dest} uploaded and verified")
         install_guard(dev, o)
     else:
         o.say("  --gesture not given: /customer/demo.sh is left untouched")
@@ -952,46 +1105,163 @@ def cmd_install(dev, o, args):
     else:
         o.say("  --persist not given: after a power cycle the machine starts the stock UI again")
 
-    o.step("6/7 Activating Meraki+ now (no reboot)")
+    o.step("7/8 Activating Meraki+ now (no reboot)")
     if args.no_activate:
-        o.say("  --no-activate given: skipping")
+        o.say("  --no-activate given: the new version starts at the next power-on (or the next start of the launcher)")
         pid = None
     else:
-        pid = activate_meraki(dev, o, inspect(dev) if not dev.dry else st, want)
+        pid = activate_meraki(dev, o, inspect(dev) if not dev.dry else st, want, rel_exe, args.reload_wait)
 
-    o.step("7/7 Verifying")
-    if pid and not dev.dry:
-        verify_running(dev, o, pid, want, args.ip)
+    o.step("8/8 Verifying")
+    prev = new_ota.get("current") or "the stock UI"
+    trial_note = (f"Meraki+ {VERSION} stays on TRIAL: if it never becomes healthy, the launcher goes back to {prev} "
+                  f"by itself after 3 failed starts." if new_ota.get("pending") == rel else "")
     if not dev.dry:
-        if dev.md5(B_EXE) != want:
-            raise Abort("slot B binary md5 changed unexpectedly")
+        if dev.md5(B_EXE) != BIN_MD5["merakiplus_boot"]:
+            raise Abort("slot B does not hold the launcher (md5 changed unexpectedly)")
+        for n, b in files:
+            if dev.md5(f"{REL_DIR}/{rel}/{n}") != md5b(b):
+                raise Abort(f"{REL_DIR}/{rel}/{n} has the wrong md5 — run ./revert.sh")
         if dev.md5(A_EXE) != st["a_md5"]:
             raise Abort("slot A binary changed — this must never happen; please open an issue")
-        o.ok("slot A untouched, slot B verified")
+        o.ok("slot A untouched; launcher and release directory verified")
     if pid and not dev.dry:
-        health_check(dev, o, pid, args.health_seconds, args.ip)
+        verify_running(dev, o, pid, want, rel_exe, args.ip, trial_note)
+        health_check(dev, o, pid, args.health_seconds, args.ip, trial_note)
+        commit_release(dev, o, rel)
     o.say("")
     o.say(f"Done. Meraki+ {VERSION} is " + ("installed (dry-run: nothing was changed)" if dev.dry else
-          "healthy and running" if pid else "installed (not started: --no-activate)") + ".")
+          "healthy and running" if pid else
+          "installed as a trial; it starts by itself (idle HOME, or the next power-on)") + ".")
     o.say("  Check on the screen: the gear on HOME -> SYSTEM shows 'MERAKI+ V" + VERSION + "' under its title.")
     o.say(f"  Undo everything:     ./revert.sh --ip {args.ip}")
 
 
-def install_sound(dev, o, snd, sounds):
-    """v6.18: the sound helper + the three WAVs (before the UI is activated, so it finds them). md5-gated, idempotent."""
-    if dev.md5(SND_HELPER) == BIN_MD5["merakiplus_snd"]:
-        o.ok(f"{SND_HELPER} up to date")
-    else:
-        dev.push(snd, SND_HELPER, mode="755")
-        o.ok(f"{SND_HELPER} uploaded and verified (sound player; uses the display's own libmi_ao.so)")
-    dev.w(f"mkdir -p {dev.d(AUDIO_DIR)}")
-    for name, data in sounds.items():
-        dest = AUDIO_DIR + "/" + name
-        if dev.md5(dest) == AUDIO_MD5[name]:
+def install_release(dev, o, name, files, man, src=None):
+    """A complete release directory, all or nothing: everything goes into rel/.stage-<name> (each file uploaded or
+    copied, md5-verified, synced), the MANIFEST last, then `sync` and ONE rename to rel/<name>. A power cut leaves
+    either no rel/<name> (the stage is removed by the next install) or the complete one. Existing directories are
+    content-addressed and never rewritten; a damaged one is moved aside."""
+    target, stage = f"{REL_DIR}/{name}", f"{REL_DIR}/.stage-{name}"
+    if dev.exists(target):
+        bad = [n for n, b in files if dev.md5(f"{target}/{n}") != md5b(b)] + \
+              (["MANIFEST"] if dev.md5(f"{target}/MANIFEST") != md5b(man) else [])
+        if not bad:
+            o.ok(f"{target} already complete (md5 verified)")
+            return
+        o.warn(f"{target} is damaged ({', '.join(bad)}) — moved aside and installed again")
+        dev.w(f"mv {dev.d(target)} {dev.d(REL_DIR)}/.damaged-{name}-{random.randrange(1 << 30)} && sync")
+    dev.w(f"rm -rf {dev.d(stage)}; mkdir -p {dev.d(stage)}/audio")
+    for n, b in files:
+        mode = "644" if n.startswith("audio/") or n == "MANIFEST" else "755"
+        if src and n in src:
+            dev.w(f"cp {dev.d(src[n])} {dev.d(stage)}/{n} && chmod {mode} {dev.d(stage)}/{n}")
+            if not dev.dry and dev.md5(f"{stage}/{n}") != md5b(b):
+                raise Abort(f"copy of {src[n]} into {stage} has the wrong md5; nothing was switched")
+        else:
+            dev.push(b, f"{stage}/{n}", mode=mode)
+    dev.push(man, f"{stage}/MANIFEST", mode="644")
+    dev.w(f"sync && mv {dev.d(stage)} {dev.d(target)} && sync")
+    o.ok(f"{target}: {len(files)} files + MANIFEST, verified, renamed into place in one step")
+
+
+def migrate_flat(dev, o, st, new_rel):
+    """First install with release directories: the Meraki+ build that slot B runs today (v6.17..v6.20 layout, the UI
+    itself as /new_customer/demo_v9) becomes a release directory too, so it is the rollback target ('current' until the
+    new version has proven itself). Copied on the display; the old files stay where they are."""
+    if not (st["b_exists"] and st["b_ours"]) or st["launcher"]:
+        return ""
+    data = dev.read(B_EXE) if not dev.dry else b""
+    m = re.search(rb"@\(#\)merakiplus V([0-9][0-9.]*) ", data)
+    if dev.dry:
+        o.say(f"  [dry-run] would copy the Meraki+ build in slot B into {REL_DIR}/<its version> (rollback target)")
+        return ""
+    if not m:
+        o.warn("slot B holds a Meraki+ build without a version marker — not kept as a rollback target")
+        return ""
+    ver = m.group(1).decode()
+    name = rel_name(ver, data)
+    if name == new_rel:
+        return ""
+    files, src = [("demo_v9", data)], {"demo_v9": B_EXE}
+    if dev.exists(SND_HELPER):
+        files.append(("merakiplus_snd", dev.read(SND_HELPER)))
+        src["merakiplus_snd"] = SND_HELPER
+    for n in AUDIO_MD5:
+        if dev.exists(f"{AUDIO_DIR}/{n}"):
+            files.append(("audio/" + n, dev.read(f"{AUDIO_DIR}/{n}")))
+            src["audio/" + n] = f"{AUDIO_DIR}/{n}"
+    o.say(f"  migrating the running layout: Meraki+ V{ver} from {B_EXE} -> {REL_DIR}/{name} (rollback target)")
+    install_release(dev, o, name, files, manifest(ver, files), src)
+    return name
+
+
+def install_launcher(dev, o, st, boot):
+    """Upload the launcher next to slot B's program, run its selftest ON THE DISPLAY, then rename it over
+    /new_customer/demo_v9 (after a sync). Releases and the state file are in place before this step, so every
+    power cut leaves either the old program or the launcher with something to start."""
+    want = BIN_MD5["merakiplus_boot"]
+    if st["launcher"] and st["b_md5"] == want:
+        o.ok(f"{B_EXE} already is the launcher (md5 {want})")
+        return
+    dev.push(boot, LAUNCHER_NEW, mode="755")
+    if not dev.dry:
+        host = os.environ.get("MERAKIPLUS_TEST_LAUNCHER_HOST") if dev.p else None    # mock display: run the host build
+        if dev.p and not host:
+            o.debug("mock display without MERAKIPLUS_TEST_LAUNCHER_HOST: on-display selftest skipped")
+        else:
+            exe = host or dev.d(LAUNCHER_NEW)
+            _, out = dev.sh(f"rm -rf {dev.d(OTA_DIR)}/selftest; {exe} --selftest {dev.d(OTA_DIR)}/selftest 2>&1; true",
+                            check=False)
+            if not re.search(r"selftest: (\d+)/\1 OK", out):
+                dev.sh(f"rm -f {dev.d(LAUNCHER_NEW)}", check=False)
+                raise Abort(f"the launcher's selftest failed on the display — nothing was switched:\n{out[-400:]}")
+            o.ok("launcher selftest on the display: " + out.strip().splitlines()[-1])
+    dev.w(f"mv -f {dev.d(LAUNCHER_NEW)} {dev.d(B_EXE)} && sync")
+    if not dev.dry and dev.md5(B_EXE) != want:
+        raise Abort(f"{B_EXE} has the wrong md5 after the rename — run ./revert.sh")
+    o.ok(f"{B_EXE} is now the launcher (md5 {want}); the previous program in slot B is in the backups")
+
+
+def install_switcher(dev, o, st, extra):
+    """Switcher + shim up to date; a running switcher of an older build is restarted (v6.21: it must recognise a
+    release started by the launcher as Meraki+), with the same LD_PRELOAD the demo.sh guard line gives it."""
+    changed = False
+    for name, dest in (("switcher", SWITCHER), ("grab_shim.so", SHIM)):
+        if dev.md5(dest) == BIN_MD5[name]:
             o.ok(f"{dest} up to date")
         else:
-            dev.push(data, dest, mode="644")
+            dev.push(extra[name], dest, mode="755")
             o.ok(f"{dest} uploaded and verified")
+            changed |= name == "switcher"
+    pids = st["switcher_pids"]
+    if pids and (changed or dev.md5(f"/proc/{pids[0]}/exe") != BIN_MD5["switcher"]):
+        dev.w("kill " + " ".join(map(str, pids)) + " 2>/dev/null; sleep 1; true")
+        left = [p for p in dev.pids_named("switcher") if p in pids]
+        if left:
+            dev.w("kill -9 " + " ".join(map(str, left)) + " 2>/dev/null; true")
+        pre = f"LD_PRELOAD={dev.d(SHIM)} " if dev.exists(SHIM) else ""
+        dev.w(f"cd / && {pre}nohup {dev.d(SWITCHER)} > /dev/null 2>&1 < /dev/null & sleep 1")
+        o.ok("gesture switcher restarted with the new build" if dev.dry or dev.pids_named("switcher")
+             else "gesture switcher stopped; it starts again at the next power-on")
+
+
+def commit_release(dev, o, rel):
+    """Healthy: current=<rel>, previous=<old current>, trial cleared (the launcher would do the same at its next start).
+    Then only what current/previous name is kept in rel/."""
+    ota = kv_text(dev.sh(f"cat {dev.d(OTA_STATE)} 2>/dev/null; true", check=False)[1])
+    if ota.get("pending") == rel:
+        if ota.get("current") != rel:
+            ota["previous"] = ota.get("current", "")
+        ota.update(current=rel, pending="", tries="0", last="ok:" + rel)
+        write_ota_state(dev, ota)
+        o.ok(f"committed: current {rel}, previous {ota.get('previous') or '-'}")
+    keep = {ota.get("current", ""), ota.get("previous", ""), ota.get("pending", "")} - {""}
+    _, rl = dev.sh(f"for d in {dev.d(REL_DIR)}/*; do [ -d \"$d\" ] && echo \"R ${{d##*/}}\"; done; true", check=False)
+    old = [l[2:].strip() for l in rl.splitlines() if l.startswith("R ") and l[2:].strip() not in keep]
+    if old:
+        dev.w("".join(f"rm -rf {dev.d(REL_DIR)}/{n}; " for n in old) + "sync")
+        o.ok(f"removed {len(old)} older release(s) not needed for a rollback: {', '.join(old)}")
 
 
 def install_guard(dev, o):
@@ -1028,7 +1298,8 @@ def cmd_revert(dev, o, args):
     print_status(o, st)
     require_device(st)
     nothing = (not st["b_ours"] and not st["guard_lines"] and not st["switcher_pids"]
-               and not any(e == B_EXE for _, e in st["procs"]) and not st["state"])
+               and not any(is_b_family(e) for _, e in st["procs"]) and not st["state"]
+               and not st["rels"] and not st["ota"] and not st["launcher"])
     if nothing and not args.purge:
         o.say("\nMeraki+ is not installed here — nothing to revert.")
         return
@@ -1041,12 +1312,12 @@ def cmd_revert(dev, o, args):
         return legacy_path(path) if dev.dry and st["legacy"]["dir"] and not dev.exists(path) else path
 
     o.step("2/6 Switching the running UI back to stock (no reboot)")
-    running_ours = [p for p, e in st["procs"] if e == B_EXE and st["b_ours"]]
+    running_ours = [p for p, e in st["procs"] if (e == B_EXE and st["b_ours"]) or (is_b_family(e) and e != B_EXE)]
     if running_ours:
         if dev.dry:
             o.say("  [dry-run] would stop Meraki+ and start the stock UI from slot A (stop-first)")
         else:
-            pid = stop_first_switch(dev, o, A_DIR, A_EXE, A_LDP, "a_relaunch.log")
+            pid = stop_first_switch(dev, o, A_DIR, lambda e: e == A_EXE, A_LDP, "a_relaunch.log", A_EXE)
             o.ok(f"stock UI running again (pid {pid}, {A_EXE})")
     else:
         o.ok("Meraki+ is not the running UI")
@@ -1101,8 +1372,11 @@ def cmd_revert(dev, o, args):
         dev.w(f"rm -rf {dev.d(OURDIR)} {dev.d(LEGACY_DIR)} && sync")
         o.ok(f"{OURDIR} removed (backups, language file and settings backups included)")
     else:
-        dev.w(f"rm -f {dev.d(STAGE)} {dev.d(STATE)} {dev.d(SND_HELPER)}; rm -rf {dev.d(AUDIO_DIR)}; sync")
-        o.say(f"  backups kept in {BOOTDIR} (remove with --purge); the sound player and sounds were removed")
+        dev.w(f"rm -f {dev.d(STAGE)} {dev.d(STATE)} {dev.d(SND_HELPER)} {dev.d(LAUNCHER_NEW)}; "
+              f"rm -rf {dev.d(AUDIO_DIR)} {dev.d(REL_DIR)} {dev.d(OTA_DIR)}; sync")
+        o.say(f"  backups kept in {BOOTDIR} (remove with --purge); the launcher's releases ({REL_DIR}), its state and "
+              f"the sound player were removed")
+    dev.w(f"rm -f {dev.d(HMARK)} {dev.d(RELOAD)} {dev.d(LAUNCH_VOL)}")
 
     o.step("6/6 Verifying")
     if dev.dry:
@@ -1114,7 +1388,7 @@ def cmd_revert(dev, o, args):
         raise Abort("slot A changed — this must never happen; please open an issue")
     if end["guard_lines"] or end["switcher_pids"]:
         raise Abort("demo.sh / switcher not fully removed — see the status above")
-    if any(e == B_EXE for _, e in end["procs"]) and end["b_ours"]:
+    if any((e == B_EXE and end["b_ours"]) or (is_b_family(e) and e != B_EXE) for _, e in end["procs"]):
         raise Abort("Meraki+ is still running")
     o.say("\nDone. The display runs the stock UI; Meraki+ is removed.")
 
@@ -1199,6 +1473,7 @@ def main(argv=None):
     p.add_argument("--ref", default=os.environ.get("MERAKIPLUS_REF", "main"), help="git ref to download bin/ from")
     p.add_argument("--bin-dir", help="use binaries from this directory (sha256 + md5 checked)")
     p.add_argument("--health-seconds", type=int, default=HEALTH_S, help=argparse.SUPPRESS)   # tests
+    p.add_argument("--reload-wait", type=int, default=45, help=argparse.SUPPRESS)              # tests
     p = sub.add_parser("revert", help="restore the stock UI and remove Meraki+")
     common(p)
     p.add_argument("--purge", action="store_true", help="also delete /new_customer/merakiplus (backups, language, settings backups)")

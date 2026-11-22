@@ -6,6 +6,12 @@
 > manufacturer's files are not included; IP addresses and other personal data have been removed.
 > References to `FINDINGS`, `REVERT.md` and `GESTUS-FIX.md` are to the author's working notes; the
 > gesture fix is published as [gesture.md](gesture.md).
+>
+> **Since v6.21** `/new_customer/demo_v9` is no longer the UI itself but Meraki+'s **launcher**
+> (`src/merakiplus_boot.c`): the watchdog and the gesture switcher start it, and it `exec`s (same PID) the UI from
+> `/new_customer/merakiplus/rel/<version>-<sha8>/demo_v9`, or — when no Meraki+ version works — the stock UI from slot A.
+> Where this document says "merakiplus = `/new_customer/demo_v9`", read "the launcher, then a release". The switcher
+> treats both paths as B mode. Details: [ota-plan.md phase 1b](ota-plan.md#phase-1b--implemented-2026-11-22).
 
 **Date:** 2026-11-17 · **Status:** PREPARATION — everything built and verified LOCALLY (self-tests +
 mock dry run). The device is offline; device runs happen later via `boot_install.py` when the user is

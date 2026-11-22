@@ -1,7 +1,8 @@
 # Secure updates (OTA) for Meraki+ — inventory and plan
 
-Status: **phase 1a implemented** (hardened companion installer, see [Phase 1a — implemented](#phase-1a--implemented-2026-11-22));
-phases 1b–4 are a plan, not implemented. It builds on the vendor A/B mechanism described in
+Status: **phases 1a and 1b implemented** (v6.21: hardened companion installer, launcher, release directories and
+automatic rollback — see [Phase 1a — implemented](#phase-1a--implemented-2026-11-22) and
+[Phase 1b — implemented](#phase-1b--implemented-2026-11-22)); phases 2–4 are a plan, not implemented. It builds on the vendor A/B mechanism described in
 [boot.md](boot.md) and refines its §7 (vendor OTA interaction).
 Confidence: **H** = proven from code or an on-device observation; **M** = strong inference; **L** = guess.
 
@@ -536,7 +537,78 @@ Deviations from the plan text above, all deliberate:
   (P2). Until then the installer degrades to warnings, never to a false success.
 - Hardware: the "one ordinary update on the user's machine" is pending (the machine was offline).
 
-### Phase 1b — launcher, release directories, auto-rollback (3–4 d)
+### Phase 1b — implemented (2026-11-22)
+
+Shipped as **v6.21** (the first release with the phase 1a installer too). Not yet verified on hardware (see the end of
+this section).
+
+| Item | Implementation |
+|---|---|
+| Layout | `/new_customer/demo_v9` = the launcher; `/new_customer/merakiplus/rel/<version>-<sha8>/` = `demo_v9` (UI), `merakiplus_snd`, `audio/*.wav`, `MANIFEST` (`file <path> <size> <sha256>` per file); `ota/state`, `ota/healthy`, `ota/launch.log`, `ota/lock`. Settings, backups and the gesture parts stay where they were. |
+| Launcher | `src/merakiplus_boot.c`, static musl ARMv7, ~60 KB (stdio; the plan's 40 KB target was not pursued), no UI/network/UART, no signals. Algorithm as §5.4 with these concrete rules: a trial (`pending`) gets `tries+1` written (tmp → fsync → rename → fsync dir) **before** the exec; at the 4th start without a healthy marker (3 failed starts) or when its files do not match the `MANIFEST` it is rolled back (`last=rolled_back:<name>:crashloop|damaged`). A trial that wrote `ota/healthy` is committed at the next launcher start (or by the installer right away). Steady state writes **nothing** to flash: per-boot counters live in `/tmp/merakiplus_launch` (boot id, release, PID of the last start, starts in a row without a healthy marker, start times). A level (current → previous → stock) is left for the rest of the boot after 3 starts in a row without healthy, a 7th start within 10 min, or a `MANIFEST` mismatch. An explicit start (`MERAKIPLUS_LAUNCH=gesture|reload|install`) resets the level. Stock = `chdir /customer`, slot A's `LD_LIBRARY_PATH`, `execv /customer/demo_v9`, argv0 `./demo_v9`, Meraki+ variables removed. The UI gets `MERAKIPLUS_REL`, `MERAKIPLUS_RELNAME`, `MERAKIPLUS_TRIAL`, `MERAKIPLUS_FALLBACK`, `MERAKIPLUS_NOTE`. `--dry`, `--selftest <dir>`, `--version`. |
+| Healthy | The UI writes `/tmp/merakiplus_healthy` (`boot=<boot_id> pid=<pid> rel=<name> state=healthy`) once it has run ≥ 60 s **and** the controller has answered without a gap (link up = a frame within 1.5 s) for ≥ 30 s; on a trial also `ota/healthy` on flash. A deliberate exit (SWITCH TO ORIGINAL, exec-reload, SIGTERM) writes `state=exit`, so it does not count as a failed start. boot_id + PID make a marker from an earlier boot or process worthless. |
+| Activation (§13 decision 3) | The installer writes `pending=<new>` and, when the running UI is v6.21+, `/tmp/merakiplus_reload`. The UI checks it every 2 s and, only when idle (HOME or the OFF screen, no activity, nothing in the write queue, no save, no dialog, no touch, no sound playing), marks every descriptor close-on-exec and `execv`s the launcher — same PID, no signal. A busy machine defers it (the installer says so; the trial starts when idle or at the next power-on). Older UIs: the 1a paths (watchdog exec-reload / stop-first switch). `--no-activate`: next power-on. |
+| Installer | Stages `rel/.stage-<name>` (every file uploaded or copied on the display, md5 + SHA-256 when available, synced), writes the `MANIFEST` last, `sync`, one rename. First install with this layout: the running v6.17–v6.20 UI is copied into its own release directory (rollback target, `current`), the new one becomes `pending`. Then the state file, then the launcher: uploaded next to slot B, **selftested on the display**, synced, renamed over `/new_customer/demo_v9`. After healthy: commit (`current`/`previous`) and removal of release directories nobody references. Health failure: exit 1, the trial stays (the launcher rolls it back after 3 failed starts), `./revert.sh` advice. An installed switcher is refreshed (it must classify `rel/<name>/demo_v9` as Meraki+) and the running one restarted with the guard line's `LD_PRELOAD`. `status`: launcher, releases, trial, last rollback, this boot's level, healthy marker. `revert.sh`: as before, plus `rel/`, `ota/` and the flat sound files are removed; backups stay. |
+| UI | v6.21: release-relative sound helper/WAVs (`MERAKIPLUS_REL`, else its own exe directory, else the v6.18–v6.20 paths); a release exe counts as slot B; the SYSTEM line shows `· TRIAL` / `· V6.22 FAILED` / `· FALLBACK` / the vendor notice; one-time toasts for a rollback and a vendor update. The plan's SYSTEM › UPDATES section (CHECK NOW, INSTALL, ROLL BACK) belongs to phase 3. |
+| Vendor OTA notice (§7 layer 3, deferred from 1a) | The UI checks at start for `/customer/temp.tar.gz`, `/customer/demo_temp`, and an installed gesture without its `demo.sh` line. |
+
+Power cut at each step (all verified by replay, see Tests):
+
+| Step | On flash after a cut | Next start |
+|---|---|---|
+| Upload/copy into `rel/.stage-<name>` | partial stage, unreferenced | old program or launcher as before; the next install removes the stage |
+| Rename stage → `rel/<name>` | no `rel/<name>` or the complete one | as before |
+| State write (installer or launcher) | the old or the new state file (tmp + sync + rename + sync) | the release the old or the new state names |
+| Launcher upload + selftest | `.demo_v9.launcher` (removed by the next install), old `/new_customer/demo_v9` | the old program (vendor or the previous Meraki+) |
+| Launcher rename | old program or the launcher; releases + state were synced before | old program, or the launcher starts the trial / current |
+| Launcher `tries+1` before the exec | old or new `tries` | the trial again (counts towards the limit) |
+| Healthy marker / commit | old or new | uncommitted: the next start commits it |
+| Revert | slot B is restored before `rel/` is removed | vendor program; leftovers are removed by the next revert |
+
+Tests (all without hardware):
+
+- `tests/launcher_watchdog.sh` — the vendor watchdog (restart after every exit) with fake UIs: crash before Wi-Fi on a
+  first install (3 trial starts → stock), crash in every release (new ×3 → current ×3 → previous ×3 → stock; after a
+  power cycle again, with no state write), healthy trial → commit, healthy-on-flash survives a power cut, healthy then
+  crashing (7th start in 10 min → previous), hang, damaged current / trial, clean exits, no state file, stage names;
+  the environment the UI gets. Runs with the host build in CI and with the static ARM build in an arm32v7 container
+  (`python3 tests/test_launcher.py --arm`, local).
+- `tests/test_launcher.py` — selftest + the model + **power-cut replay**: every launcher file operation is logged
+  (`MERAKIPLUS_BOOT_OPLOG`); for every prefix the flash contents are rebuilt keeping only synced data (renames after
+  the last directory sync landed or not, unsynced data truncated or junk), and the launcher must parse the old or the
+  new state and start the same release as without the cut. A build without the fsync before the rename fails it.
+- `tests/test_installer.py` — every 1a scenario adapted, plus: migration of a v6.20 `--persist --gesture` install
+  (release copy, trial, watchdog activation, commit, switcher restart, no-op re-install, revert), **installer power-cut
+  replay** (the mock snapshots `/new_customer` at every `sync`; each snapshot, with temp data synced or junk, must boot a
+  complete release — the launcher's host build decides — or the untouched old program), update by exec-reload (same
+  PID), deferral while busy and the reload once idle, collection of old releases, `--no-activate`.
+- UI self-test section *v6.21 OTA phase 1b* (release paths, healthy timing incl. a link gap, markers, the SYSTEM line
+  and toasts in EN + DA within their pixel budget, vendor traces, the idle gate).
+
+Deviations from the plan text above, all deliberate:
+
+- **No `merakiplus_upd`, no signed manifest yet** (phase 2): release names are `<version>-<sha8>` instead of
+  `<seq>-<version>`; the `MANIFEST` is written by the installer from its pinned SHA-256 table. No `max_seq`.
+- **Steady-state demotion is per boot**, not persistent: a release that crash-loops is tried again after the next power
+  cycle (a few seconds) — self-healing for transient causes, no flash wear. Only a failed trial is rolled back for good.
+- **No ROLL BACK button** in the UI yet (phase 3 UPDATES section); `./revert.sh` remains the manual way back.
+- **The installer commits** after its health check instead of waiting for the next launcher start; the launcher commits
+  a healthy trial itself when no installer is around.
+- **`ota/lock`** is taken by the launcher only (non-blocking, ≤ 2 s); the installer writes the state only before it
+  activates and after the health check, and uses its own temp name.
+
+Next hardware session (user present; §13 decision 5; together with phase 0 probes P1–P10):
+
+1. Ordinary update to v6.21 with `./install.sh` (idle machine): migration, launcher selftest on the display, watchdog
+   activation, healthy marker, commit; `./install.sh status`.
+2. **Clear the boot flag first** (user-approved write), so every power cycle returns to stock.
+3. Canary releases built for the test (not published): one that exits at once → 3 starts → rollback; one that crashes
+   before Wi-Fi with the flag set → stock fallback brings Wi-Fi back (telnet reachable).
+4. Power cuts **performed by the user** at announced points (during a trial start, right after a commit); any
+   injected long power-button press needs explicit approval per session.
+5. Restore the flag; revisit the vendor OTA block decision (§13 decision 6) before stock runs during these tests.
+
+### Phase 1b — launcher, release directories, auto-rollback (3–4 d) — the original plan
 
 - `src/merakiplus_boot.c` (launcher), state file library shared with the updater, UI changes (asset path,
   healthy commit, exec-reload, SYSTEM shows version/trial/ROLL BACK), switcher and installer compatibility (§5.6),

@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """End-to-end tests of tools/merakiplus.py (install / re-install / revert / dry-run / migration of
 a pre-rename install; phase 1a hardening: sync-before-rename, SHA-256, health check, vendor-update
-detection, leftovers, free space) against
-tests/mock_device.py. No hardware, no network beyond 127.0.0.1.
+detection, leftovers, free space; phase 1b: release directories + launcher, migration of a v6.20 layout,
+exec-reload, deferral while busy, switcher refresh, installer power-cut replay) against
+tests/mock_device.py. No hardware, no network beyond 127.0.0.1. The launcher's decisions come from its
+host build (build/merakiplus_boot_host, made by ./build.sh host).
 
     python3 tests/test_installer.py
 """
@@ -21,6 +23,12 @@ import merakiplus as mp          # noqa: E402
 import mock_device as md         # noqa: E402
 
 FAILS = []
+HOST_LAUNCHER = ROOT / "build" / "merakiplus_boot_host"
+if HOST_LAUNCHER.is_file():
+    import os
+    os.environ["MERAKIPLUS_TEST_LAUNCHER_HOST"] = str(HOST_LAUNCHER)
+else:
+    sys.exit("build/merakiplus_boot_host missing — run ./build.sh host first")
 
 
 def check(name, cond, detail=""):
@@ -75,6 +83,28 @@ def scenario(name, kind, steps):
 
 
 MERAKIPLUS = mp.BIN_MD5["merakiplus"]
+LAUNCHER = mp.BIN_MD5["merakiplus_boot"]
+REL = mp.rel_name(mp.VERSION, (ROOT / "bin/merakiplus").read_bytes())
+REL_EXE = f"{mp.REL_DIR}/{REL}/demo_v9"
+
+
+def ota(root):
+    p = root / mp.OTA_STATE.lstrip("/")
+    return mp.kv_text(p.read_text()) if p.exists() else {}
+
+
+def rel_ok(root, name=REL):
+    """the release directory is complete: every file listed in its MANIFEST has the listed size + sha256"""
+    d = root / mp.REL_DIR.lstrip("/") / name
+    if not (d / "MANIFEST").is_file():
+        return False
+    for ln in (d / "MANIFEST").read_text().splitlines():
+        if ln.startswith("file "):
+            _, n, size, h = ln.split()
+            f = d / n
+            if not f.is_file() or f.stat().st_size != int(size) or hashlib.sha256(f.read_bytes()).hexdigest() != h:
+                return False
+    return True
 
 
 def stock_a(srv, root):
@@ -89,19 +119,26 @@ def stock_a(srv, root):
 
     rc, out = run(srv, root, "install")
     check("install exits 0", rc == 0)
-    check("slot B now holds Meraki+", md5f(root / "new_customer/demo_v9") == MERAKIPLUS)
+    check("slot B now holds the launcher", md5f(root / "new_customer/demo_v9") == LAUNCHER)
+    check("the release directory is complete (MANIFEST: size + sha256 of every file)", rel_ok(root)
+          and md5f(root / REL_EXE.lstrip("/")) == MERAKIPLUS)
+    check("healthy -> committed: current = the new release, no trial, no previous (first install)",
+          ota(root).get("current") == REL and not ota(root).get("pending") and not ota(root).get("previous")
+          and ota(root).get("last") == "ok:" + REL, ota(root))
     check("vendor slot-B backup is byte-identical", md5f(root / "new_customer/merakiplus/boot/demo_v9.vendor") == orig_b)
     check("demo.sh backup is byte-identical", md5f(root / "new_customer/merakiplus/boot/demo.sh.bak") == orig_sh)
     check("demo.sh untouched without --gesture", md5f(root / "customer/demo.sh") == orig_sh)
     check("slot A untouched", md5f(root / "customer/demo_v9") == orig_a)
     check("boot flag NOT written without --persist", not (root / "customer/new").exists())
-    check("exactly one UI runs, from slot B", [e for _, e in ui(root)] == ["/new_customer/demo_v9"], ui(root))
+    check("exactly one UI runs: the release, started by the launcher", [e for _, e in ui(root)] == [REL_EXE], ui(root))
     check("old stock UI was stopped (SIGSTOP first, then killed)",
           "kill -STOP 600" in (root / "events").read_text() and not (root / "proc/600").exists())
     check("state records original flag=0", "orig_flag=0" in (root / "new_customer/merakiplus/boot/merakiplus.state").read_text())
-    snd = root / mp.SND_HELPER.lstrip("/")
-    aud = root / mp.AUDIO_DIR.lstrip("/")
-    check("v6.18: sound helper installed (md5-gated, executable)",
+    snd = root / mp.REL_DIR.lstrip("/") / REL / "merakiplus_snd"
+    aud = root / mp.REL_DIR.lstrip("/") / REL / "audio"
+    check("v6.21: no flat-layout files on a fresh install", not (root / mp.SND_HELPER.lstrip("/")).exists()
+          and not (root / mp.STAGE.lstrip("/")).exists())
+    check("v6.18: sound helper installed in the release (md5-gated, executable)",
           snd.is_file() and md5f(snd) == mp.BIN_MD5["merakiplus_snd"] and (snd.stat().st_mode & 0o111) != 0)
     check("v6.18: our three sounds installed, byte-identical to audio/",
           sorted(p.name for p in aud.iterdir()) == sorted(mp.AUDIO_MD5)
@@ -140,6 +177,9 @@ def stock_a(srv, root):
     check("switcher removed", not (root / "new_customer/merakiplus/boot/switcher").exists())
     check("v6.18: sound helper and sounds removed by revert",
           not (root / mp.SND_HELPER.lstrip("/")).exists() and not (root / mp.AUDIO_DIR.lstrip("/")).exists())
+    check("v6.21: release directories and the launcher state removed by revert, backups kept",
+          not (root / mp.REL_DIR.lstrip("/")).exists() and not (root / mp.OTA_DIR.lstrip("/")).exists()
+          and (root / mp.BAK_B.lstrip("/")).exists())
     check("stock UI running from slot A, nothing else", [e for _, e in ui(root)] == ["/customer/demo_v9"], ui(root))
     check("slot A still untouched", md5f(root / "customer/demo_v9") == orig_a)
 
@@ -152,8 +192,8 @@ def vendor_b(srv, root):
     rc, out = run(srv, root, "install")
     check("install on a B-booted device exits 0", rc == 0)
     check("activated through the watchdog exec-reload", "watchdog exec-reload" in out)
-    check("one UI, Meraki+ from slot B", [e for _, e in ui(root)] == ["/new_customer/demo_v9"]
-          and md5f(root / "new_customer/demo_v9") == MERAKIPLUS)
+    check("one UI, Meraki+ from slot B (launcher -> release)", [e for _, e in ui(root)] == [REL_EXE]
+          and md5f(root / "new_customer/demo_v9") == LAUNCHER)
     check("flag (set by the vendor) left alone", (root / "customer/new").exists())
     rc, out = run(srv, root, "revert")
     check("revert exits 0", rc == 0)
@@ -178,8 +218,11 @@ def make_legacy(root):
     a dev run.sh with the old env prefix, plus language / schedule / settings-backup files."""
     new, old = root / mp.OURDIR.lstrip("/"), root / mp.LEGACY_DIR.lstrip("/")
     new.rename(old)
-    (old / pathlib.PurePosixPath(mp.STAGE).name).rename(old / mp.LEGACY_ID)
+    import shutil
+    for d in ("rel", "ota"):                      # releases + launcher state did not exist before the rename
+        shutil.rmtree(old / d, ignore_errors=True)
     fake = b"\x7fELF FAKE PRE-RENAME UI " + mp.LEGACY_MARKS[0].encode() + b"V6.16\n" * 40
+    (old / mp.LEGACY_ID).write_bytes(fake)        # its staged copy
     (root / "new_customer/demo_v9").write_bytes(fake)
     for d in (root / "proc").iterdir():           # the running UI is that old build
         if (d / "exe_path").exists() and (d / "exe_path").read_text().endswith("/new_customer/demo_v9"):
@@ -226,16 +269,16 @@ def legacy_upgrade(srv, root):
           (new / "lang").read_text() == "da\n" and (new / "schedule").read_text().startswith("preheat=1")
           and (new / "cfgbak/config_writes.log").exists())
     check("switcher + shim moved", (new / "boot/switcher").exists() and (new / "boot/grab_shim.so").exists())
-    check("old staged binary removed, new one staged", not (new / mp.LEGACY_ID).exists()
-          and md5f(root / mp.STAGE.lstrip("/")) == MERAKIPLUS)
+    check("old staged binary removed, the release directory installed", not (new / mp.LEGACY_ID).exists()
+          and not (root / mp.STAGE.lstrip("/")).exists() and rel_ok(root))
     check("run.sh rewritten (new env prefix + binary name)",
           (new / "run.sh").read_text() == f"#!/bin/sh\n{mp.ENV_PREFIX}NOBOOTPUSH=1 ./merakiplus\n")
     sh = (root / "customer/demo.sh").read_text().splitlines()
     check("demo.sh: exactly one guard line, the current one", [l for l in sh if "/boot/switcher" in l] == [mp.GUARD_LINE])
     check("demo.sh otherwise unchanged", [l for l in sh if l != mp.GUARD_LINE] ==
           (new / "boot/demo.sh.bak").read_text().splitlines())
-    check("slot B upgraded to the current build, running", md5f(root / "new_customer/demo_v9") == MERAKIPLUS
-          and [e for _, e in ui(root)] == ["/new_customer/demo_v9"])
+    check("slot B upgraded to the launcher + current build, running", md5f(root / "new_customer/demo_v9") == LAUNCHER
+          and [e for _, e in ui(root)] == [REL_EXE])
     check("no pre-rename identifier left on the device", not no_legacy_left(root), no_legacy_left(root))
 
     rc, out = run(srv, root, "install")
@@ -285,7 +328,8 @@ def legacy_purge(srv, root):
 def renames_after_sync(root):
     """Every rename of a staged file (.part / .tmp) must come right after a sync (data on flash first)."""
     ev = [l for l in (root / "events").read_text().splitlines() if l.split(" ", 1)[0] in ("sync", "mv", "chmod", "cp")]
-    renames = [i for i, l in enumerate(ev) if l.startswith("mv ") and (".part " in l or ".tmp " in l)]
+    renames = [i for i, l in enumerate(ev) if l.startswith("mv ") and
+               any(k in l for k in (".part ", ".tmp ", ".tmp.I ", "/.stage-", "/.demo_v9.launcher "))]
     bad = [ev[i] for i in renames if i == 0 or ev[i - 1] != "sync"]
     return len(renames), bad
 
@@ -294,10 +338,11 @@ def hardening(srv, root):
     rc, out = run(srv, root, "install", "--gesture", "--persist")
     check("1a: install exits 0", rc == 0, out[-600:])
     n, bad = renames_after_sync(root)
-    check(f"1a: every staged file is synced before its rename ({n} renames)", n >= 8 and not bad, bad)
-    check("1a: files verified by sha256 on the computer", "sha256 42cd7b9d28ebf670" in out)
-    check("1a: health check ran: same process + live controller link",
-          "same process for 2 s" in out and "controller link live" in out and "healthy and running" in out, out[-500:])
+    check(f"1a/1b: every staged file, release directory, state file and the launcher is synced before its rename ({n} renames)",
+          n >= 12 and not bad, bad)
+    check("1a: files verified by sha256 on the computer", "sha256 " + mp.BIN_SHA256["merakiplus"][:16] in out)
+    check("1b: health check: the UI's own healthy marker (this boot, this pid) + live controller link",
+          "Meraki+ reports healthy" in out and "controller link live" in out and "healthy and running" in out, out[-500:])
     state = (root / mp.STATE.lstrip("/")).read_text()
     check("1a: state records the slot-A and demo.sh baselines",
           f"a_md5={md5f(root / 'customer/demo_v9')}" in state and "sh_md5=" in state, state)
@@ -344,7 +389,7 @@ def hardening(srv, root):
           and "run ./install.sh again" in out and tree_digest(root) == before, out[-1200:])
     rc, out = run(srv, root, "install", "--gesture", "--persist")
     check("1a: re-install repairs it (guard line, slot B, flag), exit 0", rc == 0
-          and md5f(root / "new_customer/demo_v9") == MERAKIPLUS and (root / "customer/new").exists()
+          and md5f(root / "new_customer/demo_v9") == LAUNCHER and (root / "customer/new").exists()
           and sum(mp.GUARD_KEY in l for l in (root / "customer/demo.sh").read_text().splitlines()) == 1, out[-600:])
     check("1a: the replaced vendor slot-B program got its own backup; the first backup is unchanged",
           any(p.name.startswith("demo_v9.vendor.") for p in (ours / "boot").iterdir())
@@ -369,8 +414,9 @@ def health_fail(flag, expect):
         rc, out = run(srv, root, "install", "--health-seconds", "12")
         check(f"health check ({flag}): install reports failure (exit 1)", rc == 1 and "HEALTH CHECK FAILED" in out
               and expect in out and "./revert.sh --ip" in out, out[-700:])
-        check(f"health check ({flag}): Meraki+ stays installed (no automatic rollback in 1a)",
-              md5f(root / "new_customer/demo_v9") == MERAKIPLUS)
+        check(f"health check ({flag}): the new release stays on TRIAL (the launcher rolls it back after 3 failed starts)",
+              md5f(root / "new_customer/demo_v9") == LAUNCHER and ota(root).get("pending") == REL
+              and "stays on TRIAL" in out, (ota(root), out[-300:]))
         rc, out = run(srv, root, "revert")
         check(f"health check ({flag}): revert.sh brings the stock UI back", rc == 0
               and [e for _, e in ui(root)] == ["/customer/demo_v9"], (out[-500:], ui(root)))
@@ -381,8 +427,8 @@ def degraded(srv, root):
     (root / "no_stat").write_text("1\n")
     (root / "no_sha256").write_text("1\n")
     rc, out = run(srv, root, "install")
-    check("no stat / no sha256sum on the display: install still succeeds (md5 gate, warning)",
-          rc == 0 and "could not be measured" in out and "healthy and running" in out, out[-600:])
+    check("no stat / no sha256sum on the display: install still succeeds (md5 gate; health from the UI's marker)",
+          rc == 0 and "Meraki+ reports healthy" in out and "healthy and running" in out, out[-600:])
     check("ls -e fallback parser: 7 s and a padded day",
           mp.ls_e_age("crw-rw----    1 root     root        4,  65 Sun Nov  2 10:00:00 2026 /dev/ttyS1",
                       "Sun Nov  2 10:00:07 2026") == 7 and mp.ls_e_age("crw 4, 65 Nov 2 10:00", "x") is None)
@@ -398,7 +444,7 @@ def tampered(srv, root):
     before = tree_digest(root)
     rc, out = run(srv, root, "install", "--bin-dir", str(bad))
     check("tampered binary: refused by the sha256 check, nothing changed",
-          rc == 1 and "sha256" in out and "expected 42cd7b9d" in out and tree_digest(root) == before, out[-400:])
+          rc == 1 and "sha256" in out and "expected " + mp.BIN_SHA256["merakiplus"][:8] in out and tree_digest(root) == before, out[-400:])
 
 
 def not_a_display(srv, root):
@@ -407,6 +453,203 @@ def not_a_display(srv, root):
     rc, out = run(srv, root, "install")
     check("unrecognised device: install refuses (exit 1)", rc == 1 and "does not look like" in out)
     check("unrecognised device: nothing changed", tree_digest(root) == before)
+
+# ============================================================ phase 1b (launcher, release directories)
+FAKE620 = b"\x7fELF FAKE MERAKI+ UI " + b"@(#)merakiplus V6.20 meraki-plus display-ui\n" * 40
+
+
+def make_v620(root, gesture=True):
+    """The layout a v6.20 install with --persist [--gesture] left behind: the UI itself is /new_customer/demo_v9 (running,
+    slot-B boot, flag set), a staged copy, the sound helper + WAVs next to it, backups, bookkeeping, an old switcher."""
+    import shutil
+    ours = root / mp.OURDIR.lstrip("/")
+    (ours / "boot").mkdir(parents=True)
+    orig_b, orig_sh = (root / "new_customer/demo_v9").read_bytes(), (root / "customer/demo.sh").read_text()
+    (ours / "boot/demo_v9.vendor").write_bytes(orig_b)
+    (ours / "boot/demo.sh.bak").write_text(orig_sh)
+    (root / "new_customer/demo_v9").write_bytes(FAKE620)
+    (root / "new_customer/demo_v9").chmod(0o755)
+    (ours / "merakiplus").write_bytes(FAKE620)
+    shutil.copy(ROOT / "bin/merakiplus_snd", ours / "merakiplus_snd")
+    (ours / "audio").mkdir()
+    for n in mp.AUDIO_MD5:
+        shutil.copy(ROOT / "audio" / n, ours / "audio" / n)
+    (ours / "lang").write_text("da\n")
+    (root / "customer/new").touch()
+    (root / "watchdog_slot").write_text("B\n")
+    (root / "proc/650/cmdline").write_bytes(b"/bin/sh\0/customer/test.sh\0new_customer\0")
+    (root / "proc/600/image").write_bytes(FAKE620)
+    (root / "proc/600/exe_path").write_text(str(root / "new_customer/demo_v9"))
+    state = {"orig_flag": "0", "orig_b": "vendor", "first_install": "2026-11-20T10:00:00Z",
+             "a_md5": md5f(root / "customer/demo_v9"), "sh_md5": hashlib.md5(orig_sh.encode()).hexdigest()}
+    if gesture:
+        (ours / "boot/switcher").write_bytes(b"\x7fELF old switcher (v6.20)\n" * 20)
+        shutil.copy(ROOT / "bin/grab_shim.so", ours / "boot/grab_shim.so")
+        lines = orig_sh.splitlines(keepends=True)
+        i = max(k for k, l in enumerate(lines) if l.rstrip("\n") == mp.ANCHOR)
+        lines.insert(i, mp.GUARD_LINE + "\n")
+        (root / "customer/demo.sh").write_text("".join(lines))
+        sw = root / "proc/660"
+        sw.mkdir()
+        (sw / "image").write_bytes((ours / "boot/switcher").read_bytes())
+        (sw / "exe_path").write_text(str(ours / "boot/switcher"))
+        import os
+        os.symlink(sw / "image", sw / "exe")
+        (sw / "cmdline").write_bytes(b"switcher\0")
+    (ours / "boot/merakiplus.state").write_text("".join(f"{k}={v}\n" for k, v in state.items()))
+    return orig_b, orig_sh
+
+
+def migrate_v620(srv, root):
+    orig_b, orig_sh = make_v620(root)
+    old_rel = mp.rel_name("6.20", FAKE620)
+    ours = root / mp.OURDIR.lstrip("/")
+    rc, out = run(srv, root, "status")
+    check("1b: status of a v6.20 layout: no launcher, no vendor traces", rc == 0 and "launcher" not in out.split("vendor update")[0]
+          and "vendor update      : no traces" in out, out[-600:])
+    before = tree_digest(root)
+    rc, out = run(srv, root, "install", "--dry-run", "--gesture", "--persist")
+    check("1b: dry-run of the migration changes nothing", rc == 0 and tree_digest(root) == before, out[-500:])
+    (root / "snap_on").touch()
+    (root.parent / "snaps").mkdir()
+    rc, out = run(srv, root, "install", "--gesture", "--persist")
+    (root / "snap_on").unlink()
+    check("1b: install over v6.20 exits 0", rc == 0, out[-800:])
+    check("1b: the running v6.20 build became a release directory (rollback target), complete",
+          rel_ok(root, old_rel) and (ours / "rel" / old_rel / "demo_v9").read_bytes() == FAKE620
+          and md5f(ours / "rel" / old_rel / "merakiplus_snd") == mp.BIN_MD5["merakiplus_snd"]
+          and sorted(p.name for p in (ours / "rel" / old_rel / "audio").iterdir()) == sorted(mp.AUDIO_MD5))
+    check("1b: activated through the vendor watchdog (the v6.20 UI cannot exec-reload)", "watchdog exec-reload" in out)
+    check("1b: committed after healthy: current = new, previous = v6.20", ota(root).get("current") == REL
+          and ota(root).get("previous") == old_rel and not ota(root).get("pending"), ota(root))
+    check("1b: slot B = launcher, the new release runs", md5f(root / "new_customer/demo_v9") == LAUNCHER
+          and [e for _, e in ui(root)] == [REL_EXE], ui(root))
+    check("1b: backups untouched (the first backup is never overwritten), settings kept",
+          (ours / "boot/demo_v9.vendor").read_bytes() == orig_b and (ours / "boot/demo.sh.bak").read_text() == orig_sh
+          and (ours / "lang").read_text() == "da\n")
+    check("1b: the flat staged copy is gone; the flat sound files stay (the v6.20 release uses them)",
+          not (ours / "merakiplus").exists() and (ours / "merakiplus_snd").exists() and (ours / "audio").is_dir())
+    sw = [d for d in (root / "proc").iterdir() if (d / "exe_path").exists() and (d / "exe_path").read_text().endswith("/switcher")]
+    check("1b: switcher updated (release paths) and the running one restarted with the new build",
+          md5f(ours / "boot/switcher") == mp.BIN_MD5["switcher"] and len(sw) == 1 and sw[0].name != "660"
+          and md5f(sw[0] / "image") == mp.BIN_MD5["switcher"], [d.name for d in sw])
+    check("1b: demo.sh still has exactly one guard line", sum(mp.GUARD_KEY in l for l in (root / "customer/demo.sh").read_text().splitlines()) == 1)
+    rc, out = run(srv, root, "status")
+    check("1b: status reports launcher, releases and the healthy marker", "launcher           : installed in slot B" in out
+          and f"current {REL}, previous {old_rel}" in out and "healthy marker     : healthy" in out, out[-900:])
+    replay_install(root, old_rel)
+    rc, out = run(srv, root, "install", "--gesture", "--persist")
+    check("1b: a second install is a no-op (committed, running, nothing re-uploaded)", rc == 0 and "already the committed release" in out
+          and "already the running UI" in out and "uploaded" not in out, out[-600:])
+    rc, out = run(srv, root, "revert")
+    check("1b: revert after the migration exits 0", rc == 0, out[-600:])
+    check("1b: revert: vendor slot B back, releases + state + flat files gone, flag as before Meraki+, stock running",
+          md5f(root / "new_customer/demo_v9") == hashlib.md5(orig_b).hexdigest() and not (ours / "rel").exists()
+          and not (ours / "ota").exists() and not (ours / "merakiplus_snd").exists() and not (root / "customer/new").exists()
+          and [e for _, e in ui(root)] == ["/customer/demo_v9"] and (root / "customer/demo.sh").read_text() == orig_sh, ui(root))
+
+
+def replay_install(root, old_rel):
+    """Power-cut replay of the installer: every `sync` during the install left a snapshot of /new_customer. A cut
+    between two syncs leaves the state of the earlier one (+ unsynced temp files, which are junk). On every snapshot
+    the next boot must start a complete Meraki+ release (the old or the new one) — or, before the launcher was
+    renamed into place, the untouched old program."""
+    import shutil
+    import subprocess
+    snaps = sorted((root.parent / "snaps").iterdir())
+    bad, kinds = [], {}
+    for sn in snaps:
+        for junk in (False, True):
+            r = root.parent / "replay"
+            if r.exists():
+                shutil.rmtree(r)
+            for d in ("customer", "tmp", "proc/sys/kernel/random"):
+                (r / d).mkdir(parents=True)
+            shutil.copytree(sn, r / "new_customer", symlinks=True)
+            (r / "customer/demo_v9").write_text("#!/bin/sh\n")
+            (r / "customer/demo_v9").chmod(0o755)
+            (r / "proc/sys/kernel/random/boot_id").write_text(f"cut-{sn.name}\n")
+            if junk:               # data written after the snapshot's sync never reached flash: temp files are garbage
+                for f in (r / "new_customer").rglob("*"):
+                    if f.is_file() and any(k in str(f) for k in (".part", ".tmp", "/.stage-", ".launcher")):
+                        f.write_bytes(b"\0" * 7)
+            b = (r / "new_customer/demo_v9").read_bytes()
+            if mp.LAUNCHER_MARK.encode() in b:
+                p = subprocess.run([str(HOST_LAUNCHER), "--dry"], capture_output=True, text=True,
+                                   env={"MERAKIPLUS_BOOT_ROOT": str(r), "PATH": "/usr/bin:/bin"})
+                ex = [l.split()[1] for l in p.stdout.splitlines() if l.startswith("exec ")]
+                got = ex[-1] if ex else "?"
+                okrel = got.split("/")[-2] if got.startswith(mp.REL_DIR) else None
+                if okrel not in (old_rel, REL) or not rel_ok(r, okrel):
+                    bad.append(f"{sn.name} junk={junk}: the launcher starts {got}")
+                kinds["launcher -> " + str(okrel)] = kinds.get("launcher -> " + str(okrel), 0) + 1
+            elif b == FAKE620:
+                kinds["old v6.20 program"] = kinds.get("old v6.20 program", 0) + 1
+            else:
+                bad.append(f"{sn.name} junk={junk}: /new_customer/demo_v9 is neither the old program nor the launcher")
+    check(f"1b: installer power-cut replay: {len(snaps)} sync points x 2 (temp data synced / junk) -> always a complete "
+          f"release or the old program ({', '.join(f'{k}: {v}' for k, v in sorted(kinds.items()))})",
+          not bad and len(snaps) >= 20 and kinds.get("launcher -> " + REL, 0) > 0 and kinds.get("old v6.20 program", 0) > 0,
+          "\n".join(bad[:5]))
+
+
+def variant(tag):
+    """A different UI build in a temporary bin dir (+ pinned tables patched in-process), as a 'newer release'."""
+    import shutil
+    d = pathlib.Path(tempfile.mkdtemp(prefix="merakiplus-v-"))
+    for n in list(mp.BIN_MD5):
+        shutil.copy(ROOT / "bin" / n, d / n)
+    b = (ROOT / "bin/merakiplus").read_bytes() + b"\0variant " + tag.encode()
+    (d / "merakiplus").write_bytes(b)
+    return d, b
+
+
+def update_reload(srv, root):
+    rc, out = run(srv, root, "install")
+    check("1b: setup: v6.21 installed and running", rc == 0 and [e for _, e in ui(root)] == [REL_EXE])
+    pid0 = ui(root)[0][0]
+    keep = (mp.VERSION, dict(mp.BIN_MD5), dict(mp.BIN_SHA256))
+    try:
+        d, b = variant("6.22")
+        mp.VERSION, mp.BIN_MD5["merakiplus"], mp.BIN_SHA256["merakiplus"] = "6.22", hashlib.md5(b).hexdigest(), hashlib.sha256(b).hexdigest()
+        r22 = mp.rel_name("6.22", b)
+        rc, out = run(srv, root, "install", "--bin-dir", str(d))
+        check("1b: update 6.21 -> 6.22: exec-reload by the running UI (same PID, no signal), healthy, committed",
+              rc == 0 and "exec-reload: the running Meraki+" in out and ui(root) == [(pid0, f"{mp.REL_DIR}/{r22}/demo_v9")]
+              and ota(root).get("current") == r22 and ota(root).get("previous") == REL
+              and "kill -TERM" not in (root / "events").read_text().split("reload")[-1], (out[-700:], ui(root)))
+        d, b = variant("6.23")
+        mp.VERSION, mp.BIN_MD5["merakiplus"], mp.BIN_SHA256["merakiplus"] = "6.23", hashlib.md5(b).hexdigest(), hashlib.sha256(b).hexdigest()
+        r23 = mp.rel_name("6.23", b)
+        (root / "ui_busy").touch()
+        rc, out = run(srv, root, "install", "--bin-dir", str(d), "--reload-wait", "3")
+        check("1b: machine busy: never restarted during an activity — 6.23 stays a trial that starts when idle",
+              rc == 0 and "starts by itself" in out and ui(root) == [(pid0, f"{mp.REL_DIR}/{r22}/demo_v9")]
+              and ota(root).get("pending") == r23 and ota(root).get("current") == r22, (out[-600:], ui(root), ota(root)))
+        check("1b: older releases are removed after a commit (only current + previous kept)",
+              sorted(p.name for p in (root / mp.REL_DIR.lstrip("/")).iterdir()) == sorted([REL, r22, r23]))
+        (root / "ui_busy").unlink()
+        import time
+        for _ in range(20):
+            if ui(root) == [(pid0, f"{mp.REL_DIR}/{r23}/demo_v9")]:
+                break
+            time.sleep(0.5)
+        check("1b: ... and once idle it reloads itself into the trial (same PID)", ui(root) == [(pid0, f"{mp.REL_DIR}/{r23}/demo_v9")], ui(root))
+    finally:
+        mp.VERSION = keep[0]
+        mp.BIN_MD5.clear(); mp.BIN_MD5.update(keep[1]); mp.BIN_SHA256.clear(); mp.BIN_SHA256.update(keep[2])
+    rc, out = run(srv, root, "revert")
+    check("1b: revert from a trial state", rc == 0 and [e for _, e in ui(root)] == ["/customer/demo_v9"]
+          and not (root / mp.REL_DIR.lstrip("/")).exists())
+
+
+def no_activate(srv, root):
+    rc, out = run(srv, root, "install", "--no-activate")
+    check("1b: --no-activate: installed as a trial, stock keeps running, starts at the next start of the launcher",
+          rc == 0 and ota(root).get("pending") == REL and [e for _, e in ui(root)] == ["/customer/demo_v9"]
+          and md5f(root / "new_customer/demo_v9") == LAUNCHER, out[-500:])
+    rc, out = run(srv, root, "status")
+    check("1b: status shows the trial", f"TRIAL {REL}" in out, out[-600:])
 
 
 if __name__ == "__main__":
@@ -423,5 +666,8 @@ if __name__ == "__main__":
     scenario("1a health check: the UI does not open the link", "vendor_b", health_fail("no_uart_fd", "does not hold"))
     scenario("1a: display without stat / sha256sum", "stock_a", degraded)
     scenario("1a: tampered local binary", "stock_a", tampered)
+    scenario("1b: migration of a v6.20 install (--persist --gesture) + installer power-cut replay + revert", "stock_a", migrate_v620)
+    scenario("1b: update by exec-reload, deferral while busy, older releases collected", "stock_a", update_reload)
+    scenario("1b: --no-activate leaves a trial for the next start", "stock_a", no_activate)
     print(f"\nINSTALLER TESTS: {'ALL PASS' if not FAILS else str(len(FAILS)) + ' FAIL: ' + ', '.join(FAILS)}")
     sys.exit(1 if FAILS else 0)

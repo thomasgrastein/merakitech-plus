@@ -17,6 +17,12 @@ sandbox cannot do for real are emulated with shell functions:
     (stat unavailable). <root>/no_uart_fd: new UIs do not open the link. <root>/crash_new_ui: a UI
     started from slot B dies 5 s after it started (the watchdog emulation then restarts a UI). <root>/no_sha256: no sha256sum on the display.
     <root>/df_kb: `df` reports that many free KB.
+  * v6.21 launcher: spawning /new_customer/demo_v9 when it is the launcher starts what the launcher would start —
+    asked from the real host build (MERAKIPLUS_TEST_LAUNCHER_HOST, `--dry`), else pending > current > stock. A UI from a
+    release directory writes the healthy marker (/tmp/merakiplus_healthy) after 1 s (not with crash_new_ui / uart_dead /
+    no_uart_fd / no_healthy) and, when its binary supports it, exec-reloads (same pid) on /tmp/merakiplus_reload
+    unless <root>/ui_busy exists. nohup <path>/switcher starts a fake switcher process.
+  * <root>/snap_on: every `sync` copies /new_customer into <root>/../snaps/NNNN (power-cut replay of the installer).
 
 Everything here is synthetic — no vendor files are used. demo.sh below only reproduces the
 lines the installer anchors on.
@@ -69,13 +75,42 @@ uname() { [ "$1" = "-m" ] && echo armv7l || command uname "$@"; }
 command -v md5sum >/dev/null 2>&1 || md5sum() {
   rc=0; for f in "$@"; do if [ -e "$f" ]; then echo "$(md5 -q "$f")  $f"; else echo "md5sum: $f: No such file" >&2; rc=1; fi; done; return $rc; }
 mock_next_pid() { n=$(cat "$R/pidcounter"); n=$((n+1)); echo $n > "$R/pidcounter"; echo $n; }
+mock_launcher_target() {  # what the launcher (/new_customer/demo_v9) would exec right now
+  if [ -n "${MERAKIPLUS_TEST_LAUNCHER_HOST:-}" ]; then
+    t=$(MERAKIPLUS_BOOT_ROOT="$R" "$MERAKIPLUS_TEST_LAUNCHER_HOST" --dry 2>/dev/null | /usr/bin/sed -n 's/^exec \([^ ]*\) .*/\1/p')
+    [ -n "$t" ] && { echo "$R$t"; return 0; }
+  fi
+  st="$R/new_customer/merakiplus/ota/state"
+  for k in pending current; do c=$(/usr/bin/grep "^$k=" "$st" 2>/dev/null | /usr/bin/cut -d= -f2-)
+    [ -n "$c" ] && [ -f "$R/new_customer/merakiplus/rel/$c/demo_v9" ] && { echo "$R/new_customer/merakiplus/rel/$c/demo_v9"; return 0; }; done
+  echo "$R/customer/demo_v9"; }
+mock_mark() {  # $1 pid, $2 exe: a release writes its healthy marker after 1 s
+  [ -f "$R/crash_new_ui" ] || [ -f "$R/uart_dead" ] || [ -f "$R/no_uart_fd" ] || [ -f "$R/no_healthy" ] && return 0
+  rn=${2%/demo_v9}; rn=${rn##*/}
+  ( /bin/sleep 1; [ -d "$R/proc/$1" ] && printf 'boot=%s\npid=%s\nrel=%s\nup=61\nstate=healthy\n' "$(/bin/cat "$R/proc/sys/kernel/random/boot_id")" "$1" "$rn" > "$R/tmp/merakiplus_healthy" ) >/dev/null 2>&1 &
+  return 0; }
+mock_reload() {  # $1 pid: the UI execs the launcher (same pid)
+  t=$(mock_launcher_target); /bin/cp "$t" "$R/proc/$1/image"; printf '%s' "$t" > "$R/proc/$1/exe_path"
+  echo "reload $1 $t" >> "$R/events"; case "$t" in "$R/new_customer/merakiplus/rel/"*) mock_mark "$1" "$t";; esac; }
 mock_spawn() {  # $1 = absolute exe path, $2 = argv0
-  p=$(mock_next_pid); mkdir -p "$R/proc/$p/fd"; /bin/cp "$1" "$R/proc/$p/image"
-  printf '%s' "$1" > "$R/proc/$p/exe_path"; ln -s "$R/proc/$p/image" "$R/proc/$p/exe"
+  x="$1"
+  if [ "$x" = "$R/new_customer/demo_v9" ] && /usr/bin/grep -q -F '@(#)merakiplus-launcher ' "$x" 2>/dev/null; then x=$(mock_launcher_target); fi
+  p=$(mock_next_pid); mkdir -p "$R/proc/$p/fd"; /bin/cp "$x" "$R/proc/$p/image"
+  printf '%s' "$x" > "$R/proc/$p/exe_path"; ln -s "$R/proc/$p/image" "$R/proc/$p/exe"
   [ -f "$R/no_uart_fd" ] || ln -s "$R/dev/ttyS1" "$R/proc/$p/fd/3"
-  printf '%s\000' "$2" > "$R/proc/$p/cmdline"; echo "spawn $p $1" >> "$R/events"
-  case "$1" in "$R/new_customer/"*) [ -f "$R/crash_new_ui" ] && { (sleep 5; kill -9 $p) >/dev/null 2>&1 & };; esac; return 0; }
-sync() { echo "sync" >> "$R/events"; command sync; }
+  printf '%s\000' "$2" > "$R/proc/$p/cmdline"; echo "spawn $p $x" >> "$R/events"
+  case "$x" in "$R/new_customer/"*) [ -f "$R/crash_new_ui" ] && { (sleep 5; kill -9 $p) >/dev/null 2>&1 & };; esac
+  case "$x" in "$R/new_customer/merakiplus/rel/"*) mock_mark $p "$x"
+    if /usr/bin/grep -q -F /tmp/merakiplus_reload "$x"; then
+      ( i=0; while [ -d "$R/proc/$p" ] && [ $i -lt 400 ]; do i=$((i+1))
+          if [ -f "$R/tmp/merakiplus_reload" ] && [ ! -f "$R/ui_busy" ]; then /bin/rm -f "$R/tmp/merakiplus_reload"; mock_reload $p; fi
+          /bin/sleep 0.5; done ) >/dev/null 2>&1 &
+    fi;; esac; return 0; }
+mock_spawn_daemon() {  # $1 = absolute exe path (e.g. the switcher)
+  p=$(mock_next_pid); mkdir -p "$R/proc/$p/fd"; /bin/cp "$1" "$R/proc/$p/image"; printf '%s' "$1" > "$R/proc/$p/exe_path"
+  ln -s "$R/proc/$p/image" "$R/proc/$p/exe"; printf '%s\000' "${1##*/}" > "$R/proc/$p/cmdline"; echo "spawn $p $1" >> "$R/events"; return 0; }
+sync() { echo "sync" >> "$R/events"; command sync
+  if [ -f "$R/snap_on" ]; then n=$(/bin/ls "$R/../snaps" | /usr/bin/wc -l | /usr/bin/tr -d ' '); /bin/cp -Rp "$R/new_customer" "$R/../snaps/$(printf %04d $n)"; fi; }
 mv() { echo "mv $*" >> "$R/events"; command mv "$@"; }
 chmod() { echo "chmod $*" >> "$R/events"; command chmod "$@"; }
 cp() { echo "cp $*" >> "$R/events"; command cp "$@"; }
@@ -126,6 +161,7 @@ nohup() {
   case "$1" in
     ./demo_v9) mock_spawn "$PWD/demo_v9" ./demo_v9;;
     nc) shift; nc "$@";;
+    */switcher) mock_spawn_daemon "$1";;
     *) command nohup "$@";;
   esac; }
 '''
@@ -141,6 +177,8 @@ def make_root(root, scenario="stock_a"):
     for d in ("customer/libs", "new_customer/libs", "tmp", "proc", "config/wifi", "dev"):
         (root / d).mkdir(parents=True)
     (root / "dev/ttyS1").write_bytes(b"")
+    (root / "proc/sys/kernel/random").mkdir(parents=True)
+    (root / "proc/sys/kernel/random/boot_id").write_text("5d1e1f0a-0000-4000-8000-00000000b001\n")
     (root / "customer/demo.sh").write_text(DEMO_SH)
     (root / "customer/demo_v9").write_bytes(b"\x7fELF MOCK VENDOR UI slot A\n" * 50)
     (root / "customer/test.sh").write_text("#!/bin/sh\n# synthetic watchdog stand-in\n")

@@ -311,7 +311,7 @@ static int  sim_net_on=1;
 #define KBD_NAME "k62091"
 #define BL_SYSFS "/sys/class/pwm/pwmchip0/pwm2/duty_cycle"
 #define BL_EN_SYSFS "/sys/class/pwm/pwmchip0/pwm2/enable"   /* v6.14: stock uikit_os_back_light_off/on 0xC2278 = blpwm_set_enable(2,0/1) */
-#define MERAKIPLUS_VERSION "V6.20"
+#define MERAKIPLUS_VERSION "V6.21"
 
 /* ---- v6.10: pressure estimate (UI_v6.md §16) ----
  * Word 51 (SPI2 ADC channel 0xA, REGISTERMAP: pressure OR pump-drive candidate) -> bar with ONE linear anchor:
@@ -1586,6 +1586,12 @@ enum { K0=0, KT, KSUB, KLAB, KCHIP, KBTN, KBTNS, KTITLE, KPSUB, KSPL, KDL, KDV, 
  X(TX_DV_MAINS, K0, "%u V · %u HZ", "%u V · %u HZ") \
  X(TX_DV_VERSION, K0, PRODUCT " " MERAKIPLUS_VERSION, PRODUCT " " MERAKIPLUS_VERSION) \
  X(TX_DV_VERSION_RO, K0, PRODUCT " " MERAKIPLUS_VERSION " RO", PRODUCT " " MERAKIPLUS_VERSION " RO") \
+ X(TX_OTA_TRIAL, K0, "TRIAL", "PRØVE") \
+ X(TX_OTA_FALLBACK, K0, "FALLBACK", "RESERVE") \
+ X(TX_OTA_FAILED, K0, "%s FAILED", "%s FEJLET") \
+ X(TX_OTA_VENDOR, K0, "VENDOR UPDATE · RUN INSTALL", "PRODUCENT-OPD. · KØR INSTALL") \
+ X(TX_T_UPD_VENDOR, KT, "VENDOR UPDATE FOUND · RUN INSTALL", "PRODUCENT-OPD. · KØR INSTALL") \
+ X(TX_T_UPD_ROLLED, KT, "%s FAILED · BACK ON %s", "%s FEJLEDE · TILBAGE PÅ %s") \
  X(TX_DV_MISSING, KDV, "MISSING", "MANGLER") \
  X(TX_DV_FLAG_YES, KDV, "EXISTS", "FINDES") \
  X(TX_DV_FLAG_NO, KDV, "NOT PRESENT", "FINDES IKKE") \
@@ -1920,6 +1926,79 @@ static void swlog_scan(void){
     utf8_trim(bs.sw_evt);                                  /* snprintf may have cut in the middle of a character */
     bs.sw_log=2;
 }
+/* ================= v6.21: OTA phase 1b (docs/ota-plan.md §5) =================
+ * The launcher (src/merakiplus_boot.c, installed as /new_customer/demo_v9) exec()s this UI from a release directory
+ * /new_customer/merakiplus/rel/<name>/ (same PID) and passes MERAKIPLUS_REL (that directory), MERAKIPLUS_RELNAME,
+ * MERAKIPLUS_TRIAL=1 (on trial), MERAKIPLUS_FALLBACK=1 (an older level runs this boot) and MERAKIPLUS_NOTE=<release> (a release
+ * that failed right before this start). This block: where the UI's own files are, the healthy marker the launcher and the
+ * installer read, the exec-reload into a newly installed release (ota_reload_step), and the vendor-update notice. */
+#define OTA_DIR       "/new_customer/merakiplus"
+#define OTA_STATE     OTA_DIR "/ota/state"
+#define OTA_HEALTHY   OTA_DIR "/ota/healthy"         /* on trial only (flash): the launcher commits the release */
+#define OTA_HMARK     "/tmp/merakiplus_healthy"      /* every start (tmpfs): "the start with this boot_id + PID was fine" */
+#define OTA_RELOAD    "/tmp/merakiplus_reload"       /* written by the installer: exec the launcher when idle */
+#define OTA_REL_PFX   OTA_DIR "/rel/"
+#define OTA_LMARK     "@(#)merakiplus-launcher "
+#define OTA_GUARD_KEY OTA_DIR "/boot/switcher"       /* the demo.sh guard line (tools/merakiplus.py GUARD_KEY) */
+#define HEALTHY_RUN_MS  60000                        /* healthy = running >= 60 s ... */
+#define HEALTHY_LINK_MS 30000                        /* ... with the controller answering for the last >= 30 s without a gap */
+static struct {
+    char dir[320], name[64], note[64], cur[64], last[96];
+    int trial, fallback, vendor, st_ok, marked, toasted;
+    ms_t t0, link0, t_reload;
+} ota={.link0=-1};
+/* /new_customer/merakiplus/rel/<name>/demo_v9 (also "... (deleted)" after a release directory was replaced) */
+static int ota_rel_exe(const char*e){
+    size_t pl=strlen(OTA_REL_PFX); if(strncmp(e,OTA_REL_PFX,pl)||e[pl]=='.'||e[pl]=='/'||!e[pl]) return 0;
+    const char*s=strchr(e+pl,'/'); return s&&(!strcmp(s,"/demo_v9")||!strcmp(s,"/demo_v9 (deleted)"));
+}
+/* "6.22-42cd7b9d" -> "V6.22" */
+static void ota_ver(const char*rel,char*o,size_t n){ size_t l=strcspn(rel,"-"); if(l>12) l=12; snprintf(o,n,"V%.*s",(int)l,rel); }
+static int ota_file_has(const char*path,const char*needle){
+    static char b[65536]; int fd=open(path,O_RDONLY); if(fd<0) return 0; int n=(int)read(fd,b,sizeof b-1); close(fd); if(n<0) n=0; b[n]=0;
+    return memmem(b,(size_t)n,needle,strlen(needle))!=NULL;
+}
+static void ota_read_state(void){
+    char b[2048]; ota.st_ok=0; ota.cur[0]=ota.last[0]=0;
+    int fd=open(rp(OTA_STATE),O_RDONLY); if(fd<0) return; int n=(int)read(fd,b,sizeof b-1); close(fd); if(n<=0) return; b[n]=0;
+    if(!strstr(b,"format=1\n")) return;
+    for(char*l=b;l&&*l;){ char*e=strchr(l,'\n'); if(e)*e=0;
+        if(!strncmp(l,"current=",8)) snprintf(ota.cur,sizeof ota.cur,"%s",l+8);
+        else if(!strncmp(l,"last=",5)) snprintf(ota.last,sizeof ota.last,"%s",l+5);
+        l=e?e+1:NULL; }
+    ota.st_ok=1;
+}
+/* docs/ota-plan.md §7 layer 3: a vendor update is waiting for the next boot, or replaced demo.sh (our guard line is gone) */
+static void ota_vendor_scan(void){
+    ota.vendor=access(rp("/customer/temp.tar.gz"),F_OK)==0||access(rp("/customer/demo_temp"),F_OK)==0||
+               (access(rp(OTA_GUARD_KEY),F_OK)==0&&!ota_file_has(rp("/customer/demo.sh"),OTA_GUARD_KEY));
+}
+static void ota_init(ms_t now){
+    const char*e; memset(&ota,0,sizeof ota); ota.t0=now; ota.link0=-1; ota.t_reload=now;
+    if((e=getenv("MERAKIPLUS_RELNAME"))) snprintf(ota.name,sizeof ota.name,"%s",e);
+    if((e=getenv("MERAKIPLUS_NOTE"))) snprintf(ota.note,sizeof ota.note,"%s",e);
+    ota.trial=(e=getenv("MERAKIPLUS_TRIAL"))&&!strcmp(e,"1");
+    ota.fallback=(e=getenv("MERAKIPLUS_FALLBACK"))&&!strcmp(e,"1");
+    if((e=getenv("MERAKIPLUS_REL"))&&*e) snprintf(ota.dir,sizeof ota.dir,"%s",e);
+    else {                                          /* started without the launcher: our own directory, if it holds the sound helper */
+        char x[300]; ssize_t r=readlink(rp("/proc/self/exe"),x,sizeof x-1);
+        if(r>0){ x[r]=0; char*s=strrchr(x,'/'); if(s){ *s=0; char h[340]; snprintf(h,sizeof h,"%s/merakiplus_snd",x); if(access(h,X_OK)==0) snprintf(ota.dir,sizeof ota.dir,"%s",x); } }
+    }
+    if(!ota.dir[0]) snprintf(ota.dir,sizeof ota.dir,"%s",OTA_DIR);   /* the v6.18..v6.20 layout (sound files in the install dir) */
+    ota_read_state(); ota_vendor_scan();
+}
+/* the marker: boot_id + PID + release. clean=1: a deliberate exit (SWITCH TO ORIGINAL, reload, SIGTERM) — not a failed start */
+static int ota_mark_write(int clean){
+    char b[240],bid[64],t[420]; boot_id_read(bid,sizeof bid);
+    int n=snprintf(b,sizeof b,"boot=%s\npid=%d\nrel=%s\nup=%lld\nstate=%s\n",bid[0]?bid:"?",(int)getpid(),ota.name,(long long)mono_s(),clean?"exit":"healthy");
+    const char*p=rp(OTA_HMARK); snprintf(t,sizeof t,"%s.tmp",p);
+    int ok=write_all(t,b,n,0)&&rename(t,p)==0;
+    if(ota.trial&&ota.name[0]&&!clean){             /* flash: tmp + fsync (write_all) + rename + fsync(dir) */
+        p=rp(OTA_HEALTHY); snprintf(t,sizeof t,"%s.tmp",p);
+        if(write_all(t,b,n,0)&&rename(t,p)==0) fsync_dir(p); else ok=0;
+    }
+    return ok;
+}
 static void boot_refresh(void){
     struct stat st;
     if(!bs.self_pid) bs.self_pid=(int)getpid();
@@ -1930,7 +2009,7 @@ static void boot_refresh(void){
     bs.lock=!bs.b_mnt?BL_NOMOUNT:(!bs.b_bin?BL_NOBIN:(!bs.b_ours?BL_VENDOR:BL_OK));
     bs.a_bin=access(rp(SLOT_A_EXE),X_OK)==0;
     ssize_t r=readlink(rp("/proc/self/exe"),bs.self_exe,sizeof bs.self_exe-1); bs.self_exe[r>0?r:0]=0;
-    bs.self_slot=!strcmp(bs.self_exe,SLOT_B_EXE)?SLOT_B:(!strcmp(bs.self_exe,SLOT_A_EXE)?SLOT_A:SLOT_OTHER);
+    bs.self_slot=(!strcmp(bs.self_exe,SLOT_B_EXE)||ota_rel_exe(bs.self_exe))?SLOT_B:(!strcmp(bs.self_exe,SLOT_A_EXE)?SLOT_A:SLOT_OTHER);   /* v6.21: a release started by the launcher is slot B */
     proc_scan(); swlog_scan();
 }
 static void boot_log(const char*fmt,...){
@@ -4355,9 +4434,12 @@ enum { SE_JINGLE=0, SE_READY_E, SE_READY_S, SE_PREVIEW, NSE };
 static const char*const SE_KEY[NSE]={"start_jingle","boiler_ready_extract","boiler_ready_steam","preview"};
 enum { SO_PLAYED=0, SO_OFF, SO_MUTED, SO_SUPPRESSED, SO_NOPLAYER, SO_DROPPED, NSO };
 static const char*const SO_KEY[NSO]={"played","off","muted","suppressed","noplayer","dropped"};
-#define SND_DIR   "/new_customer/merakiplus"
-#define SND_HELPER SND_DIR "/merakiplus_snd"
-static const char*const SND_OURS[NSE]={SND_DIR "/audio/start.wav",SND_DIR "/audio/ready_extract.wav",SND_DIR "/audio/ready_steam.wav",SND_DIR "/audio/ready_extract.wav"};
+/* v6.21: the helper and the WAVs live in the UI's own release directory (ota.dir; legacy: /new_customer/merakiplus) */
+static const char*const SND_WAV[NSE]={"start.wav","ready_extract.wav","ready_steam.wav","ready_extract.wav"};
+static const char* snd_path_of(int ev){ static char b[NSE][360]; snprintf(b[ev],sizeof b[ev],"%s/audio/%s",ota.dir[0]?ota.dir:OTA_DIR,SND_WAV[ev]); return b[ev]; }
+static const char* snd_helper(void){ static char b[360]; snprintf(b,sizeof b,"%s/merakiplus_snd",ota.dir[0]?ota.dir:OTA_DIR); return b; }
+#define SND_HELPER snd_helper()
+#define SND_OURS_(ev) snd_path_of(ev)
 static const char*const SND_STOCK[NSE]={"/customer/audio/power.mp3","/customer/audio/preheatCompele.mp3","/customer/audio/preheatCompele.mp3","/customer/audio/keyboard.mp3"};
 static struct {
     int init, st, seen_off, cold_boot, settle, armed[2], ready[2];
@@ -4365,7 +4447,7 @@ static struct {
     ms_t t_on;
     struct { ms_t t; signed char ev, out; } log[SND_LOGN]; int log_n;
     int q[SND_QMAX], qn; int pid; ms_t t_start; int cur, last_rc, n_spawn, stuck, n_stuck;
-    char last_file[64];
+    char last_file[360];
 } snd;
 static int snd_steam_thr(void){   /* MCU boiler_heat 0x36F6..0x3714 (target by gear) + 0x37F4 (ready = target - 10.0 °C) */
     int g=reg[14], t=g==1?1200:(g==2?1250:(g==3?1300:1350)); return t-100;
@@ -4399,7 +4481,7 @@ static int snd_cold_boot(void){
 }
 static const char* snd_file(int ev){
     if(SET[S_SOUND].val==2&&access(rp(SND_STOCK[ev]),R_OK)==0) return SND_STOCK[ev];   /* the stock UI's own files (never shipped) */
-    return SND_OURS[ev];
+    return SND_OURS_(ev);
 }
 #ifdef DEVICE_RT
 static int snd_spawn(int ev){
@@ -5116,10 +5198,21 @@ static void draw_pback(void){
 /* v6.17: the line under a page's title (shared w/ the selftest). Feature pages: WHY start is not possible (the guard's text, amber) —
  * otherwise the live values that matter before starting: what is on the scale, how hot the boiler / group / milk is.
  * (TX_G_WAIT is transient — a write is on its way — and is not shown: the line would flicker after every SAVE.) SYSTEM: product + version. */
+/* SYSTEM's line under the title: the version + the OTA state that matters (vendor update > fallback > failed trial > trial) */
+static uint32_t ota_line(char*o,size_t n,int ro){
+    const char*base=TR(ro?TX_DV_VERSION_RO:TX_DV_VERSION); char v[24],x[64];
+    if(ota.vendor){ snprintf(o,n,"%s",TR(TX_OTA_VENDOR)); return C_WARN; }
+    if(ota.fallback){ snprintf(o,n,"%s · %s",base,TR(TX_OTA_FALLBACK)); return C_WARN; }
+    if(ota.st_ok&&!strncmp(ota.last,"rolled_back:",12)&&(!ota.name[0]||!strcmp(ota.cur,ota.name))){
+        char r[64]; snprintf(r,sizeof r,"%s",ota.last+12); r[strcspn(r,":")]=0; ota_ver(r,v,sizeof v);
+        snprintf(x,sizeof x,TR(TX_OTA_FAILED),v); snprintf(o,n,"%s · %s",base,x); return C_WARN; }
+    if(ota.trial&&!ota.marked){ snprintf(o,n,"%s · %s",base,TR(TX_OTA_TRIAL)); return C_TXT3; }
+    snprintf(o,n,"%s",base); return C_TXT3;
+}
 #define LIVE_W 296
 static uint32_t page_live_text(int pg,char*o,size_t n,ms_t now){
     char a[16],b[16]; o[0]=0;
-    if(pg==PG_SYS){ snprintf(o,n,"%s",TR(ro_mode?TX_DV_VERSION_RO:TX_DV_VERSION)); return C_TXT3; }
+    if(pg==PG_SYS) return ota_line(o,n,ro_mode);                                   /* v6.21: + TRIAL / FALLBACK / FAILED / vendor update */
     if(!pg_feat(pg)) return C_TXT3;
     int k=pg-PG_GRIND, up=link_up(now); const char*g=act_guard(k,now);
     if(g&&g!=TR(TX_G_WAIT)){ snprintf(o,n,"%s",g); return C_WARN; }
@@ -5838,6 +5931,48 @@ static void loop_rendered(ms_t now,float ft){
 /* ====================================================================== */
 /* ================= main: device / SIM / preview ======================= */
 /* ====================================================================== */
+/* ---- v6.21 OTA (docs/ota-plan.md §5.4/5.5): the healthy marker, the one-time notices, the exec-reload ---- */
+static void ota_step(ms_t now){
+    if(!ota.marked){                                /* healthy: >= 60 s running AND the controller answering for >= 30 s in a row */
+        if(link_up(now)){ if(ota.link0<0) ota.link0=now; } else ota.link0=-1;
+        if(now-ota.t0>=HEALTHY_RUN_MS&&ota.link0>=0&&now-ota.link0>=HEALTHY_LINK_MS){ ota.marked=1; ota_mark_write(0); static_dirty=1; }
+    }
+    if(!ota.toasted&&view==V_MAIN&&now-ota.t0>=4000){  /* once per start, after the splash */
+        ota.toasted=1;
+        if(ota.vendor) toast_show(TR(TX_T_UPD_VENDOR),C_WARN,now);
+        else if(ota.note[0]){ char a[24],b[24],m[96]; ota_ver(ota.note,a,sizeof a); snprintf(b,sizeof b,"%s",MERAKIPLUS_VERSION);
+            snprintf(m,sizeof m,TR(TX_T_UPD_ROLLED),a,b); toast_show(m,C_WARN,now); }
+    }
+}
+/* idle = nothing running or about to be sent, no dialog, HOME (or the OFF screen), no sound playing */
+static int ota_idle(ms_t now){
+    return !switch_guard(now)&&((view==V_MAIN&&page==PG_HOME&&sel<0)||view==V_OFF)&&!tr.type&&!tch.down&&snd.pid<=0;
+}
+#ifdef DEVICE_RT
+/* exec-reload (§5.5): the installer put a new release in place and wrote /tmp/merakiplus_reload. When idle, this process
+ * becomes the launcher again — execv() keeps the PID, so the vendor watchdog never sees a gap, and no signal is sent.
+ * Every descriptor is close-on-exec, so the UART, the frame buffer and the touch grab are released by the exec itself. */
+static void ota_reload_step(ms_t now){
+    if(now-ota.t_reload<2000) return; ota.t_reload=now;
+    if(access(OTA_RELOAD,F_OK)!=0) return;
+    boot_refresh();
+    if(bs.self_slot!=SLOT_B||bs.n_stock>0||!ota_file_has(SLOT_B_EXE,OTA_LMARK)){
+        unlink(OTA_RELOAD); boot_log("RELOAD ignored: %s",bs.n_stock>0?"a stock UI is paused (run.sh mode)":(bs.self_slot!=SLOT_B?"not started from slot B":"no launcher in slot B")); return; }
+    if(!ota_idle(now)) return;                      /* busy: ask again in 2 s (never during an activity) */
+    unlink(OTA_RELOAD);
+    boot_log("RELOAD: exec %s (installer request, machine idle) — same PID %d",SLOT_B_EXE,(int)getpid());
+    ota_mark_write(1);
+    if(bl_is_off) bl_power(1);
+    fflush(stdout); fflush(stderr);
+    for(int fd=3;fd<1024;fd++){ int fl=fcntl(fd,F_GETFD); if(fl>=0) fcntl(fd,F_SETFD,fl|FD_CLOEXEC); }
+    setenv("MERAKIPLUS_LAUNCH","reload",1);
+    if(chdir(SLOT_B_MNT)!=0){}
+    char*const av[]={"./demo_v9",NULL};
+    execv(SLOT_B_EXE,av);
+    boot_log("RELOAD FAILED: %s — this build keeps running",strerror(errno));
+    unsetenv("MERAKIPLUS_LAUNCH");
+}
+#endif
 static void onsig(int s){ (void)s; SIM_SIG(s) run=0; }
 
 #ifndef MERAKIPLUS_PREVIEW
@@ -6662,6 +6797,7 @@ int main(int argc,char**argv){
     SIM_ENV
     bs.self_pid=(int)getpid();
     lang_load();                           /* v6.3: UI language BEFORE the first frame (splash); missing/unreadable/unknown -> English */
+    ota_init(now_ms());                    /* v6.21: release directory, launcher environment, OTA state, vendor-update traces */
     gfx_init(); settings_load();
     boot_refresh();                        /* warm up (binary marker scan of slot B) during splash, not on the first tap */
     uart_open(); fb_open(); inp_open();
@@ -6693,6 +6829,10 @@ int main(int argc,char**argv){
         pw_step(now);                      /* v6.14: hold -> off frames / OFF / TURNING ON… */
         sched_step(now);                   /* v6.16: pre-arm the pre-heat alarm, one-shot use, auto off */
         snd_tick(now);                     /* v6.18: start jingle + per-boiler ready tones (display/audio only, no frames) */
+        ota_step(now);                     /* v6.21: healthy marker + one-time notices */
+#ifdef DEVICE_RT
+        ota_reload_step(now);              /* v6.21: exec-reload into a newly installed release, when idle */
+#endif
         net_step(now);                     /* v6.7: non-blocking; does nothing between two probes */
 #ifdef DEVICE_RT
         boot_push_step(now);
@@ -6726,6 +6866,9 @@ int main(int argc,char**argv){
     if(kfd>=0) close(kfd);
 #endif
     if(bl_is_off) bl_power(1);             /* v6.14: never leave the screen dark (run.sh -> the stock UI continues) */
+#ifdef DEVICE_RT
+    if(!ota.marked) ota_mark_write(1);     /* v6.21: an orderly exit is not a failed start (the launcher's crash count) */
+#endif
     if(fbmem) munmap(fbmem,fblen);
     if(ffd>=0) close(ffd);
     return MAIN_RC;
@@ -8176,14 +8319,14 @@ static void st_v618(const char*dir){
     sim_reset(); snd_uptime_ovr=25; reg[62]=30; reg[63]=0; reg[40]=520; reg[47]=310; tx0=txq_len; sq0=(int)wq.seq;
     sim_run(1500);
     st_check("cold boot of the display (uptime 25 s < 120 s): the START JINGLE plays once on the first \"on\"; cold boilers (stage 30 / 0) -> no ready tone",
-             st_sn(SE_JINGLE)==1&&st_sp(SE_JINGLE)==1&&st_sn(SE_READY_E)==0&&st_sn(SE_READY_S)==0&&snd.armed[0]&&snd.armed[1]&&!strcmp(snd.last_file,SND_OURS[SE_JINGLE]));
+             st_sn(SE_JINGLE)==1&&st_sp(SE_JINGLE)==1&&st_sn(SE_READY_E)==0&&st_sn(SE_READY_S)==0&&snd.armed[0]&&snd.armed[1]&&!strcmp(snd.last_file,SND_OURS_(SE_JINGLE)));
     reg[62]=60; reg[40]=850; sim_run(600); int e60=st_sn(SE_READY_E)==0;
     reg[62]=100; reg[40]=871; sim_run(300);
     st_check("EXTRACT boiler: stage 60 (60 °C .. set temp) -> nothing; stage 100 (MCU: e boiler >= word 11) -> its OWN tone once, the steam boiler still heating",
-             e60&&st_sp(SE_READY_E)==1&&st_sn(SE_READY_S)==0&&st_slast(SE_READY_E,SO_PLAYED)&&!strcmp(snd.last_file,SND_OURS[SE_READY_E]));
+             e60&&st_sp(SE_READY_E)==1&&st_sn(SE_READY_S)==0&&st_slast(SE_READY_E,SO_PLAYED)&&!strcmp(snd.last_file,SND_OURS_(SE_READY_E)));
     reg[63]=60; sim_run(600); int s60=st_sn(SE_READY_S)==0; reg[63]=100; reg[47]=1255; sim_run(300);
     st_check("STEAM boiler: stage 100 (MCU: s boiler >= steam target - 10 °C) -> a DIFFERENT tone (ready_steam.wav vs ready_extract.wav), once",
-             s60&&st_sp(SE_READY_S)==1&&st_slast(SE_READY_S,SO_PLAYED)&&!strcmp(snd.last_file,SND_OURS[SE_READY_S])&&strcmp(SND_OURS[SE_READY_S],SND_OURS[SE_READY_E])&&strcmp(SND_OURS[SE_JINGLE],SND_OURS[SE_READY_S]));
+             s60&&st_sp(SE_READY_S)==1&&st_slast(SE_READY_S,SO_PLAYED)&&!strcmp(snd.last_file,SND_OURS_(SE_READY_S))&&strcmp(SND_OURS_(SE_READY_S),SND_OURS_(SE_READY_E))&&strcmp(SND_OURS_(SE_JINGLE),SND_OURS_(SE_READY_S)));
     /* ---- (3) no spam: brew/steam dips, link glitches ---- */
     for(int k=0;k<6;k++){ reg[62]=60; reg[40]=835; reg[63]=60; reg[47]=1215; sim_run(400); reg[62]=100; reg[40]=872; reg[63]=100; reg[47]=1262; sim_run(400); }
     st_check("no spam: six dips to stage 60 (3.5 °C below the brew set temp, 4 °C below the steam threshold — a shot, a steam session) re-trigger nothing",
@@ -8245,7 +8388,7 @@ static void st_v618(const char*dir){
     st_check("READY TONE per boiler: BREW BOILER -> only the extract tone; STEAM BOILER -> only the steam tone; the jingle is independent",pb&&st_sp(SE_READY_E)==0&&st_sp(SE_READY_S)==1&&st_sp(SE_JINGLE)==1);
     sim_reset(); SET[S_VOL].val=100; int c1=snd_vol()==SND_VOL_CAP; SET[S_VOL].val=40; int c2=snd_vol()==40; SET[S_VOL].loaded=0; int c3=snd_vol()==SET[S_VOL].def;
     st_check("volume = config \"volume\" capped at 70 like stock deal_play (100 -> 70, 40 -> 40; no config -> the default 40)",c1&&c2&&c3);
-    sim_reset(); SET[S_SOUND].val=2; int s1=!strcmp(snd_file(SE_JINGLE),SND_OURS[SE_JINGLE]);
+    sim_reset(); SET[S_SOUND].val=2; int s1=!strcmp(snd_file(SE_JINGLE),SND_OURS_(SE_JINGLE));
     { char d1[400],d2[400]; snprintf(d1,sizeof d1,"%s/customer",sysroot); mkdir(d1,0755); snprintf(d2,sizeof d2,"%s/customer/audio",sysroot); mkdir(d2,0755);
       put_bytes(rp(SND_STOCK[SE_JINGLE]),"ID3",3); int s2=!strcmp(snd_file(SE_JINGLE),SND_STOCK[SE_JINGLE]); unlink(rp(SND_STOCK[SE_JINGLE]));
       st_check("STOCK SOUNDS: the stock UI's own /customer/audio/*.mp3 when present (never shipped), else Meraki+'s tones",s1&&s2&&!strcmp(SND_STOCK[SE_READY_E],"/customer/audio/preheatCompele.mp3")); }
@@ -8865,6 +9008,80 @@ static void st_v620(void){
                n2==1&&s2[0]==ACT_BREW&&!steam_hold_shown(u)&&hit_test(240,372,u)==T_STOP&&hit_test(320,372,u)==T_STOP); }
     sim_reset();
 }
+/* ============================ v6.21: OTA phase 1b (launcher environment, healthy marker, SYSTEM line, vendor notice) ============================ */
+static void st_v621(const char*dir){
+    printf("== selftest: v6.21 OTA phase 1b (release directory, healthy marker, SYSTEM line, vendor notice, idle gate) ==\n");
+    char root[360],ksr[sizeof sysroot],p[600],b[400]; strcpy(ksr,sysroot); ms_t klr=last_rx_ms; snprintf(root,sizeof root,"%s/root",dir); snprintf(sysroot,sizeof sysroot,"%s",root);
+    mock_reset(root); mk_p(root,"/new_customer/merakiplus/ota"); mk_p(root,"/new_customer/merakiplus/rel/6.21-y");
+    st_check("release exe = slot B: rel/<name>/demo_v9 (also '(deleted)'); not a stage dir, a nested path, another name or the install dir",
+             ota_rel_exe("/new_customer/merakiplus/rel/6.21-42cd7b9d/demo_v9")&&ota_rel_exe("/new_customer/merakiplus/rel/6.21-x/demo_v9 (deleted)")&&
+             !ota_rel_exe("/new_customer/merakiplus/rel/.stage-6.21/demo_v9")&&!ota_rel_exe("/new_customer/merakiplus/rel/a/b/demo_v9")&&
+             !ota_rel_exe("/new_customer/merakiplus/rel/6.21/demo_v9x")&&!ota_rel_exe("/new_customer/merakiplus/rel//demo_v9")&&!ota_rel_exe("/new_customer/merakiplus/merakiplus"));
+    mock_slot_b(root,1,MB_OURS); mock_self(root,"/new_customer/merakiplus/rel/6.21-x/demo_v9"); boot_refresh();
+    st_check("a UI started by the launcher counts as slot B (DIAGNOSTICS, BOOT UI)",bs.self_slot==SLOT_B);
+    /* where the UI's own files are */
+    setenv("MERAKIPLUS_REL","/new_customer/merakiplus/rel/6.21-test",1); setenv("MERAKIPLUS_RELNAME","6.21-test",1); setenv("MERAKIPLUS_TRIAL","1",1);
+    ota_init(sim_now);
+    st_check("launcher environment: release dir + name + trial; the sound helper and the WAVs come from the release dir",
+             !strcmp(ota.dir,"/new_customer/merakiplus/rel/6.21-test")&&!strcmp(ota.name,"6.21-test")&&ota.trial&&!ota.fallback&&
+             !strcmp(SND_HELPER,"/new_customer/merakiplus/rel/6.21-test/merakiplus_snd")&&!strcmp(snd_path_of(SE_READY_S),"/new_customer/merakiplus/rel/6.21-test/audio/ready_steam.wav")&&
+             sizeof snd.last_file>strlen(snd_path_of(SE_READY_E))+40);
+    unsetenv("MERAKIPLUS_REL"); unsetenv("MERAKIPLUS_RELNAME"); unsetenv("MERAKIPLUS_TRIAL");
+    snprintf(p,sizeof p,"%s/new_customer/merakiplus/rel/6.21-y/demo_v9",root); mock_self(root,p); ota_init(sim_now); int legacy=!strcmp(ota.dir,OTA_DIR)&&!ota.name[0]&&!ota.trial;
+    snprintf(p,sizeof p,"%s/new_customer/merakiplus/rel/6.21-y/merakiplus_snd",root); put_bytes(p,"#!",2); chmod(p,0755); ota_init(sim_now);
+    snprintf(p,sizeof p,"%s/new_customer/merakiplus/rel/6.21-y",root);
+    st_check("without the launcher: the own exe dir when it holds the sound helper, else the v6.18..v6.20 install dir",legacy&&!strcmp(ota.dir,p));
+    /* the healthy marker: >= 60 s running AND >= 30 s of continuous controller link */
+    setenv("MERAKIPLUS_RELNAME","6.21-test",1); setenv("MERAKIPLUS_TRIAL","1",1); ms_t t0=sim_now; ota_init(t0); unsetenv("MERAKIPLUS_RELNAME"); unsetenv("MERAKIPLUS_TRIAL");
+    char hm[440],hp[440]; snprintf(hm,sizeof hm,"%s" OTA_HMARK,root); snprintf(hp,sizeof hp,"%s" OTA_HEALTHY,root); unlink(hm); unlink(hp);
+    ms_t at=-1; for(ms_t t=t0;t<=t0+70000;t+=100){ last_rx_ms=t; ota_step(t); if(at<0&&ota.marked) at=t; }
+    snprintf(b,sizeof b,"pid=%d\nrel=6.21-test\n",(int)getpid());
+    st_check("healthy after exactly 60 s with a live link — marker in /tmp with boot_id + PID + release, and on flash (trial)",
+             at==t0+60000&&file_has(hm,"boot=0f6c1b1e-52a7-4f0b-9a3d-7e1c5a9b2d44\n")&&file_has(hm,b)&&file_has(hm,"state=healthy")&&file_has(hp,b));
+    ota_init(t0); unlink(hm); unlink(hp); at=-1;
+    for(ms_t t=t0;t<=t0+90000;t+=100){ if(t<t0+50000||t>t0+52000) last_rx_ms=t; ota_step(t); if(at<0&&ota.marked) at=t; }
+    st_check("a link gap (50..52 s) restarts the 30 s: healthy 30 s after the link is back (82.1 s); not a trial -> no flash marker",at==t0+82100&&access(hm,F_OK)==0&&access(hp,F_OK)!=0);
+    ota_init(t0); unlink(hm); at=-1; for(ms_t t=t0;t<=t0+120000;t+=100){ last_rx_ms=t0-5000; ota_step(t); if(ota.marked) at=t; }
+    st_check("no controller link: never healthy",at<0&&access(hm,F_OK)!=0);
+    ota_init(t0); st_check("a deliberate exit writes the marker with state=exit (not a failed start)",ota_mark_write(1)&&file_has(hm,"state=exit")&&access(hp,F_OK)!=0);
+    /* SYSTEM's line, both languages */
+    for(int lg=0;lg<NLANG;lg++){ lang_set(lg); char o[160],x[64]; uint32_t c; int ok=1,fit=1;
+        memset(&ota,0,sizeof ota); c=ota_line(o,sizeof o,0); ok&=!strcmp(o,TR(TX_DV_VERSION))&&c==C_TXT3;
+        ota.trial=1; c=ota_line(o,sizeof o,0); snprintf(b,sizeof b,"%s · %s",TR(TX_DV_VERSION),TR(TX_OTA_TRIAL)); ok&=!strcmp(o,b)&&c==C_TXT3; if(text_wf(o,F_XS)>LIVE_W){ fit=0; printf("     too wide: '%s' %d px\n",o,(int)text_wf(o,F_XS)); }
+        c=ota_line(o,sizeof o,1); if(text_wf(o,F_XS)>LIVE_W){ fit=0; printf("     too wide: '%s' %d px\n",o,(int)text_wf(o,F_XS)); }
+        ota.marked=1; c=ota_line(o,sizeof o,0); ok&=!strcmp(o,TR(TX_DV_VERSION));
+        ota.st_ok=1; snprintf(ota.cur,sizeof ota.cur,"6.21-a"); snprintf(ota.name,sizeof ota.name,"6.21-a"); snprintf(ota.last,sizeof ota.last,"rolled_back:6.22.1-abcdef12:crashloop");
+        c=ota_line(o,sizeof o,1); snprintf(x,sizeof x,TR(TX_OTA_FAILED),"V6.22.1"); snprintf(b,sizeof b,"%s · %s",TR(TX_DV_VERSION_RO),x); ok&=!strcmp(o,b)&&c==C_WARN; if(text_wf(o,F_XS)>LIVE_W){ fit=0; printf("     too wide: '%s' %d px\n",o,(int)text_wf(o,F_XS)); }
+        snprintf(ota.cur,sizeof ota.cur,"6.20-b"); c=ota_line(o,sizeof o,0); ok&=!strcmp(o,TR(TX_DV_VERSION));     /* the failure note belongs to the current release only */
+        ota.fallback=1; c=ota_line(o,sizeof o,1); snprintf(b,sizeof b,"%s · %s",TR(TX_DV_VERSION_RO),TR(TX_OTA_FALLBACK)); ok&=!strcmp(o,b)&&c==C_WARN; if(text_wf(o,F_XS)>LIVE_W){ fit=0; printf("     too wide: '%s' %d px\n",o,(int)text_wf(o,F_XS)); }
+        ota.vendor=1; c=ota_line(o,sizeof o,0); ok&=!strcmp(o,TR(TX_OTA_VENDOR))&&c==C_WARN; if(text_wf(o,F_XS)>LIVE_W){ fit=0; printf("     too wide: '%s' %d px\n",o,(int)text_wf(o,F_XS)); }
+        char nm[200]; snprintf(nm,sizeof nm,"[%s] SYSTEM line: VERSION · TRIAL until healthy, · V6.22 FAILED (amber), · FALLBACK (amber), the vendor notice first — each fits %d px untruncated",LANG_CODE[lg],LIVE_W);
+        st_check(nm,ok&&fit);
+        memset(&ota,0,sizeof ota); ota.t0=sim_now-5000; ota.vendor=1; view=V_MAIN; toast.dur=0; ota_step(sim_now); int v1=toast.dur&&!strcmp(toast.msg,TR(TX_T_UPD_VENDOR)); toast.dur=0; ota_step(sim_now+100);
+        memset(&ota,0,sizeof ota); ota.t0=sim_now-5000; snprintf(ota.note,sizeof ota.note,"6.22-abcdef12"); ota_step(sim_now); snprintf(x,sizeof x,TR(TX_T_UPD_ROLLED),"V6.22",MERAKIPLUS_VERSION);
+        int v2=toast.dur&&!strcmp(toast.msg,x)&&text_wf(x,F_XS)<=TOAST_TW;
+        snprintf(nm,sizeof nm,"[%s] notices once per start, after the splash: vendor update / 'V6.22 FAILED · BACK ON " MERAKIPLUS_VERSION "'",LANG_CODE[lg]); st_check(nm,v1&&v2); toast.dur=0; }
+    lang_set(LANG_EN);
+    /* vendor-update traces (docs/ota-plan.md §7 layer 3) */
+    { char sh[440],tt[440],dt[440],sw[440]; snprintf(sh,sizeof sh,"%s/customer/demo.sh",root); snprintf(tt,sizeof tt,"%s/customer/temp.tar.gz",root); snprintf(dt,sizeof dt,"%s/customer/demo_temp",root);
+      snprintf(sw,sizeof sw,"%s" OTA_GUARD_KEY,root); mk_p(root,"/new_customer/merakiplus/boot");
+      put_bytes(sh,"#!/bin/sh\n# kernel_mod_list\n",28); ota_vendor_scan(); int n0=!ota.vendor;
+      put_bytes(tt,"x",1); ota_vendor_scan(); int a=ota.vendor; unlink(tt); put_bytes(dt,"x",1); ota_vendor_scan(); int c=ota.vendor; unlink(dt);
+      put_bytes(sw,"x",1); ota_vendor_scan(); int g=ota.vendor;
+      put_bytes(sh,"#!/bin/sh\n[ -x " OTA_GUARD_KEY " ] && " OTA_GUARD_KEY " &\n",(int)strlen("#!/bin/sh\n[ -x " OTA_GUARD_KEY " ] && " OTA_GUARD_KEY " &\n")); ota_vendor_scan(); int g2=!ota.vendor; unlink(sw);
+      st_check("vendor traces: temp.tar.gz / demo_temp waiting for the next boot, or the gesture installed but demo.sh lost its guard line — nothing otherwise",n0&&a&&c&&g&&g2); }
+    /* the exec-reload's idle gate */
+    { int kv=view,kp=page,ks=sel,kt=tr.type; uint16_t k33=reg[33]; ms_t t=sim_now; last_rx_ms=t;
+      view=V_MAIN; page=PG_HOME; sel=-1; tr.type=0; tch.down=0; snd.pid=0; memset(&wq,0,sizeof wq); act.pending=ACT_NONE; sav.active=0; reg[33]=0x0101;
+      int i0=ota_idle(t); page=PG_SYS; int i1=!ota_idle(t); page=PG_HOME;
+      reg[33]=0x1307; int i2=!ota_idle(t); reg[33]=0x0101;
+      uint16_t w1[1]={(uint16_t)sv(S_BREWW)}; wq_push(23,w1,1); int i3=!ota_idle(t); memset(&wq,0,sizeof wq); txq_len=0; int i4=ota_idle(t);
+      view=kv; page=kp; sel=ks; tr.type=kt; reg[33]=k33;
+      if(!(i0&&i1&&i2&&i3&&i4)) printf("     idle %d %d %d %d %d guard=%s view=%d page=%d sel=%d tr=%d snd=%d\n",i0,i1,i2,i3,i4,switch_guard(sim_now)?switch_guard(sim_now):"-",view,page,sel,tr.type,snd.pid);
+      st_check("reload only when idle: HOME + nothing running; not on another page, not during a brew, not with a write pending",i0&&i1&&i2&&i3&&i4); }
+    memset(&ota,0,sizeof ota); ota.link0=-1; snprintf(ota.dir,sizeof ota.dir,"%s",OTA_DIR); toast.dur=0;
+    strcpy(sysroot,ksr); bs.m_valid=0; last_rx_ms=klr;
+}
 static int selftest(const char*cfgsrc){
     int base_lang=ui_lang;
     printf("== selftest (UI language during the test: %s) ==\n",LANG_CODE[ui_lang]);
@@ -9329,6 +9546,7 @@ static int selftest(const char*cfgsrc){
       st_check("locked BOOT UI: no −/+/SAVE in the hit test (BACK only) — and a direct SAVE call is refused by the guard",lk2&&access(fl,F_OK)!=0);
       view=V_MAIN; xsel=-1; tr.type=0; page=PG_HOME; run=1; toast.dur=0; sw_sim=0; }
 
+    st_v621(dir);
     printf("== selftest: layout (all states, both languages: text within ring/circle/field) ==\n");
     for(int lg=0;lg<NLANG;lg++){ int ok=1; SysT t; view=V_SYS; lang_set(lg);
       for(int x=X_BOOTUI;x<=X_EXIT;x++) for(int lock=0;lock<4;lock++) for(int f=0;f<2;f++) for(int e=0;e<2;e++) for(int m=0;m<4;m++){

@@ -3,10 +3,46 @@
 All notable changes to Meraki+. Details (with evidence, frames and test figures) are in
 [docs/dev/UI_v6.md](docs/dev/UI_v6.md) under *CHANGES-v6.x*. All dates are 2026.
 
-## [Unreleased] — installer hardening (OTA plan phase 1a)
-Installer, CI and docs only; no binary changed (the device UI is still v6.20). Details:
-[docs/ota-plan.md, phase 1a](docs/ota-plan.md#phase-1a--implemented-2026-11-22).
+## [6.21] — 2026-11-22
+**Automatic rollback (OTA plan phase 1b) + the installer hardening of phase 1a.** Every Meraki+ version now lives
+complete in its own release directory, and a small **launcher** decides at every start which one runs — falling back on
+its own, without a network or a computer, when a version does not work. Details:
+[docs/ota-plan.md, phase 1b](docs/ota-plan.md#phase-1b--implemented-2026-11-22). Meraki+ still contacts no servers.
+### Added
+- **Launcher** (`src/merakiplus_boot.c`, static ARMv7, ~60 KB, no UI/network/UART, never sends a signal) installed as
+  `/new_customer/demo_v9` — the program the manufacturer's watchdog restarts. It starts the release named by
+  `/new_customer/merakiplus/ota/state` and verifies its size + SHA-256 against the release's `MANIFEST` first.
+- **Release directories** `/new_customer/merakiplus/rel/<version>-<sha8>/` (UI, sound helper, sounds, `MANIFEST`),
+  staged under `.stage-<name>` and renamed into place in one step after a sync; never rewritten afterwards.
+- **Automatic rollback:** a newly installed version runs as a **trial**. If it does not become *healthy* within 3
+  starts it is rolled back; a crash storm (3 failed starts in a row, or a 7th start within 10 min) falls back for the
+  rest of the boot: **new → previous version → the stock UI from slot A** (read-only; the boot flag is never touched).
+  The stock UI brings Wi-Fi up, so a build that crashes before its own Wi-Fi start can no longer lock you out (the
+  `--persist` soft-brick case of docs/ota-plan.md §2.4).
+- **Healthy marker** written by the UI itself: running 60 s with the controller answering for the last 30 s
+  (`/tmp/merakiplus_healthy` with boot id + PID; on a trial also on flash so the launcher commits it). The
+  installer's health check now waits for it (the 1a tty-atime measurement remains as the explanation on failure).
+- **Exec-reload:** an installed update starts when the machine is **idle on HOME** — the running UI execs the
+  launcher itself (same PID: no watchdog race, no signal, no reboot); never during an activity. Older UIs are
+  activated through the watchdog as before. `--no-activate` leaves the trial for the next power-on.
+- **SYSTEM line** under the title: *MERAKI+ V6.21* · *TRIAL* until healthy, · *V6.22 FAILED* after a rollback,
+  · *FALLBACK* when an older version runs this boot, or *VENDOR UPDATE · RUN INSTALL* (EN/DA). One-time toasts after
+  the splash: *VENDOR UPDATE FOUND · RUN INSTALL* and *V6.22 FAILED · BACK ON V6.21*.
+- **Manufacturer-update notice in Meraki+** (deferred from 1a): a downloaded vendor update waiting for the next boot,
+  or `demo.sh` that lost the gesture line.
+- `./install.sh status` shows the launcher, current / previous / trial release, the last rollback, this boot's
+  fallback level and the healthy marker.
 ### Changed
+- **Migration:** the first v6.21 install copies the running v6.17–v6.20 build into a release directory (the rollback
+  target), installs the new version as a trial, writes the state file, and only then renames the launcher over
+  `/new_customer/demo_v9` (after an on-display launcher selftest). Backups are untouched; `./revert.sh` restores the
+  vendor program in slot B and removes `rel/` + `ota/`.
+- **Gesture switcher:** recognises a release started by the launcher as Meraki+ (`rel/<name>/demo_v9`) and asks
+  the launcher to try Meraki+ again even after this boot's stock fallback. An installed switcher is refreshed and the
+  running one restarted by every install (also without `--gesture`).
+- The UI finds its sound helper and sounds in its own release directory.
+### Installer hardening (phase 1a, first released with this version)
+#### Changed
 - **Power-cut safe uploads:** every uploaded file is synced to flash **before** it is renamed into place (before, the
   sound helper, the WAVs, the switcher and `demo.sh` were renamed first and synced after).
 - **SHA-256:** the installer pins SHA-256 next to md5 for every file it installs and checks both on the computer;
@@ -16,9 +52,19 @@ Installer, CI and docs only; no binary changed (the device UI is still v6.20). D
   controller must be talking to it; otherwise the installer says `HEALTH CHECK FAILED` and points to `./revert.sh`.
 - Free space is checked for updates too; temp files of an interrupted run are removed; old development builds are
   listed (and offered for removal interactively).
-### Added
+#### Added
 - **Manufacturer-update detection** in `status` and `install`: a vendor update waiting for the next boot, slot B or
   `demo.sh` replaced, slot A changed, boot flag cleared. Re-running `install.sh` repairs it.
+
+### Notes
+- Tests: launcher watchdog model 32/32 (host + ARMv7 container), launcher power-cut replay 96 cut states, installer
+  140/140 (16 scenarios) (incl. a power-cut replay of a whole migration at every sync point), UI self-test 569/569 checks EN + DA (also as a
+  32-bit ARM binary), switcher self-test 55/55.
+- `bin/`: new `merakiplus_boot`; `merakiplus`, `switcher`, `merakiplus_sim_arm` and the host SIM builds rebuilt (official
+  zig 0.17.1); `merakiplus_snd`, `tinj_hold`, `keyinj`, `grab_shim.so` and `audio/` unchanged. Release assets now include
+  the launcher, switcher, `grab_shim.so`, the WAVs, `SHA256SUMS` and `MD5SUMS`.
+- Not yet verified on a machine: the rollback and power-cut tests on hardware need the boot flag cleared and
+  user-performed power cuts (next hardware session, docs/ota-plan.md phase 1b).
 
 ## [6.20] — 2026-11-22
 **Steam while you brew.** The controller has always been able to run a latched steam session during a brew (verified on

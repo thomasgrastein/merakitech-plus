@@ -1,7 +1,7 @@
 # Meraki+ — a community UI for the round display of MerakiTech espresso machines
 
 [![CI](https://github.com/thomasgrastein/merakitech-plus/actions/workflows/ci.yml/badge.svg)](https://github.com/thomasgrastein/merakitech-plus/actions/workflows/ci.yml)
-![version](https://img.shields.io/badge/Meraki%2B-v6.20-c9955c)
+![version](https://img.shields.io/badge/Meraki%2B-v6.21-c9955c)
 ![license](https://img.shields.io/badge/license-MIT-blue)
 ![status](https://img.shields.io/badge/status-unofficial%20%C2%B7%20experimental-red)
 
@@ -181,20 +181,27 @@ steaming, grinding or hot water — while you install. The installer asks before
    checked against the expected SHA-256 and md5. Anything else is rejected.
 3. **Takes a backup once** — slot B's existing program and `/customer/demo.sh` are copied and
    md5-verified. Backups are never overwritten by later runs.
-4. **Installs into slot B** — upload to a temp file, md5 check (plus SHA-256 when the display has
-   `sha256sum`), `sync`, then an atomic rename on the same file system: the data is on flash before
-   the name changes, so a power cut leaves the complete old or the complete new file, never a
-   half-written one. Temp files left by an interrupted run are removed.
+4. **Installs into slot B** — the new version goes complete into its own release directory
+   (`/new_customer/merakiplus/rel/<version>-<sha>/`: the UI, the sound player, the sounds and a
+   `MANIFEST`): every file is uploaded to a temp file, md5-checked (plus SHA-256 when the display has
+   `sha256sum`) and synced to flash, and only then is the directory renamed into place in one step — a
+   power cut leaves the complete old or the complete new version, never a mix. A small **launcher**
+   (checked by its own selftest on the display first) becomes `/new_customer/demo_v9`; it starts the
+   version named by a state file. Updating from v6.20 or older keeps the running version as the
+   rollback target. Temp files left by an interrupted run are removed.
 5. **Optional** — `--gesture` (the gesture switcher; adds **one** line to `demo.sh`) and
    `--persist` (sets the boot flag). Without these, neither `demo.sh` nor the flag is touched.
-6. **Activates without a reboot** — either via the manufacturer's own watchdog (exec reload), or by a
-   "stop-first" switch: the original UI is paused, Meraki+ is started and verified, and only then is
-   the original stopped. If anything goes wrong, the original UI is resumed automatically.
-7. **Verifies and health-checks** — the running program is slot B's binary with the correct md5 and
-   slot A is unchanged; then for **60 s** the same Meraki+ process must keep running (no crash, no
-   watchdog restart) and must be receiving data from the coffee machine's controller. If not, it
-   says so and tells you to run `./revert.sh` (there is no automatic rollback yet). Finally it prints
-   the revert command.
+6. **Activates without a reboot** — a running Meraki+ (v6.21 or newer) restarts itself into the new
+   version as soon as the machine is idle on HOME (never during a brew, steam, grind or hot water);
+   older versions are switched via the manufacturer's own watchdog (exec reload) or by a "stop-first"
+   switch: the original UI is paused, Meraki+ is started and verified, and only then is the original
+   stopped. If anything goes wrong, the original UI is resumed automatically.
+7. **Verifies and health-checks** — the right version runs with the correct md5 and slot A is
+   unchanged; then Meraki+ itself must report **healthy** (running 60 s, the coffee machine's
+   controller answering). Then the new version is committed. Until then it is a **trial**: if it
+   does not become healthy within 3 starts, the launcher goes back by itself — to the previous Meraki+
+   version, and if that fails too, to the original UI (which brings Wi-Fi back, so you can always
+   reach the display). Finally it prints the revert command.
 
 **Options:**
 
@@ -336,8 +343,12 @@ Without `--persist` the machine starts the original UI. With `--persist`: see th
   update — a downloaded update waiting for the next boot, slot B or `demo.sh` replaced, slot A
   changed, the boot flag cleared — and say so. After an OTA: run `./install.sh` again with the options
   you used before (optionally `./revert.sh` first).
-- **Planned:** signed Meraki+ updates with automatic rollback — see [docs/ota-plan.md](docs/ota-plan.md)
-  (phase 1a, the hardened installer, is done; the rest is not implemented yet).
+- **Rollback:** since v6.21 a crashing or unhealthy new version is rolled back automatically on the
+  display (previous version → original UI), without a computer or network.
+  Meraki+ also shows a notice on screen (SYSTEM and a toast) when it finds a manufacturer update.
+- **Planned:** signed Meraki+ updates and an opt-in update check — see [docs/ota-plan.md](docs/ota-plan.md)
+  (phases 1a + 1b, the hardened installer and the launcher with rollback, are done; signing and
+  on-device download are not implemented yet).
 - **Meraki+ itself** opens no new network ports and contacts no servers. Its only network function
   is bringing up the display's Wi-Fi at boot from slot B (the same configuration the stock UI uses;
   the password is never logged).
@@ -395,15 +406,19 @@ Please share the result in an issue.
 
 ```
  /customer/          slot A — original UI (demo_v9), NEVER touched by Meraki+
- /new_customer/      slot B — Meraki+ is installed here as demo_v9
-   merakiplus/boot/  backups (demo_v9.vendor, demo.sh.bak), state, gesture switcher
-   merakiplus/       merakiplus_snd + audio/ (sounds), own settings (lang, schedule, sound)
+ /new_customer/      slot B — Meraki+'s launcher is installed here as demo_v9
+   merakiplus/rel/   one directory per version (UI, sound player, sounds, MANIFEST): current + previous
+   merakiplus/ota/   the launcher's state (current / previous / trial) and its log
+   merakiplus/boot/  backups (demo_v9.vendor, demo.sh.bak), install state, gesture switcher
+   merakiplus/       own settings (lang, schedule, sound)
  /customer/new       boot flag: if present, slot B starts at boot (only with --persist)
  /customer/test.sh   the manufacturer's watchdog: restarts "demo_v9" if it disappears
 ```
 
-The manufacturer's watchdog only checks that a process named `demo_v9` is running. Meraki+ is
-therefore called `demo_v9` in slot B, and a new program can be activated without a reboot. The full
+The manufacturer's watchdog only checks that a process named `demo_v9` is running. Meraki+'s launcher
+is therefore called `demo_v9` in slot B; it starts (exec, same process) the chosen version, which is
+also called `demo_v9`, so a new version can be activated without a reboot and a failing one is rolled
+back at the next start ([docs/ota-plan.md](docs/ota-plan.md) phase 1b). The full
 description (including the gesture, the watchdog race and the OTA table) is in
 [docs/boot.md](docs/boot.md).
 
