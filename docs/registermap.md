@@ -165,9 +165,9 @@ Defaults from init `0x9966` (non-zero only): word 0=1, 2=1, 4=180, 5=60, 11=920,
 ### 2.8 Identity / serial number & others (76..128)
 | n | Name | Direction | Evidence | Conf. |
 |---|---|---|---|---|
-| 76..79 | *(reserved)* | internal | no MCU write/read found (between the gears config and the UID block) | low |
-| 80..87 | **UID block A** (16 bytes) | internal | init `0x99B0` `memcpy(table+0xA0, 0x20000000, 16)` | high |
-| 88..95 | **UID block B** (16 bytes, copy) | internal | init `0x99BC` `memcpy(table+0xB0, 0x20000000, 16)` | high |
+| 76..79 | *(reserved)* | internal | no MCU write/read found (between the gears config and the firmware version block) | low |
+| 80..87 | **controller firmware version** (16 bytes ASCII, e.g. `"V5.1.4"`; earlier read as a UID) | status (read via `sub56 len56`) | init `0x99B0` `memcpy(table+0xA0, 0x20000000, 16)`; `0x20000000` is the version the OTA compare `0xB51C` uses; live `56 35 2E 31 2E 34` at word 80; stock reads it as "MCU Version" (`app+0x1088`) and gates hot water weighing on it — [water-dosing-compat.md](water-dosing-compat.md) | high |
+| 88..95 | **controller firmware version, copy** (16 bytes) | status | init `0x99BC` `memcpy(table+0xB0, 0x20000000, 16)`; live identical to 80..87 | high |
 | 96..111 | **serial number/product block** (32 bytes ASCII) | internal | config load `0x9F4` `memcpy(table+0xC0, config+0x1C, 32)`; default "B000000-0000-0000" (`0xCC8`); chip info `0x8B6` prints "\nSerial:%s" from table+0xC0; the cmd9/OTA version parser reads words 96/98 (`0x9E2A`, `0xB490`) | high |
 | 97,99..111 | *(part of the 32-byte serial number block)* | internal | only bulk-copied (see 96..111); no individual access | high |
 | 112 | **pro_sw** (product switch; high byte used) | setup | debug `0x9936` "pro_sw=%d" `ldrb [r4,#0xe1]`; NFC recipe `0x1E14` reads the high byte, `0x1E36` reads the low byte (variant 3/4) | high |
@@ -261,7 +261,7 @@ AA BB CMD LEN PAYLOAD(LEN bytes) CRClo CRChi      (total LEN+7)
 **Commands (TBB @ `0x44FC`, 22 cases):**
 | CMD | Handler | Function |
 |---|---|---|
-| 1 | `0x4516` | **identity/echo**: write a byte to the sub-device, reply via `0x4398`; identity report `0x3C50` (UID `0x20000000`, display version `0x20000F82`, MCU UID `0x20000288`, serial number word96) |
+| 1 | `0x4516` | **identity/echo**: write a byte to the sub-device, reply via `0x4398`; identity report `0x3C50` (firmware version `0x20000000`, display version `0x20000F82`, MCU UID `0x20000288`, serial number word96) |
 | 2 | `0x4540` | **calibration/status report** `0x3CD8`: reads words 37,38,39,49,53,54,55,56,59,60,64,65,69,74,75 + set_voltage |
 | 3 | `0x45AC` | set grind parameter: BE word payload → `[0x200000BC+0x14]` (becomes word 27 via the product task) |
 | 4 | `0x45BA` | set byte param → `0x3E02` |

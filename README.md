@@ -437,6 +437,7 @@ description (including the gesture, the watchdog race and the OTA table) is in
 | [docs/nfc-plan.md](docs/nfc-plan.md) | *Planned:* the NFC reader reversed (bus, chip, stock tag format and flow) and the phased NFC plan |
 | [docs/concurrent-brew-steam.md](docs/concurrent-brew-steam.md) | *Feasibility:* brewing and steaming at the same time — MCU/stock/Meraki+ evidence, sim result, hardware runbook |
 | [docs/ota-plan.md](docs/ota-plan.md) | *Planned:* secure updates — storage/tooling/vendor-OTA inventory, signed manifests, boot launcher with automatic rollback, phases and tests |
+| [docs/water-dosing-compat.md](docs/water-dosing-compat.md) | *Design:* hot water by weight needs controller firmware > 5.1.2 — how the stock UI detects it (words 80..87) and how Meraki+ should gate it |
 | [docs/dev/](docs/dev/) | Developer notes (full UI spec with changelog, parity analysis) |
 | [sim/README.md](sim/README.md) | The simulator and the E2E tests |
 
