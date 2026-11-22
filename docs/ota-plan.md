@@ -604,3 +604,31 @@ that the stock UI's check fails cleanly while pinned.
 7. **Pre-releases:** should owners be able to opt into a beta channel, or stable only?
 8. **Gen 2:** untested hardware; should the updater refuse to run when the board fingerprint differs (recommended), as
    the installer already does?
+
+---
+
+## 13. Decisions (resolved by the maintainer)
+
+All eight open questions above are answered. This section is the binding record; where a decision differs from the
+recommendation in the plan, the decision wins.
+
+1. **On-device network access: YES, opt-in.** The display may contact GitHub over HTTPS to check and fetch updates,
+   default-off. The README's "contacts no servers" promise must be updated to describe the opt-in updater (phase 3).
+2. **Key custody: passphrase-protected file.** The primary Ed25519 signing key lives as a passphrase-protected file on
+   the maintainer's own computer; a cold backup key is kept offline by the maintainer. No hardware token required.
+3. **Activation: automatic at next power-on / when idle.** Downloading requires an explicit consent tap; once a version
+   is downloaded and verified, activation happens automatically at the next power-on or when the machine is idle and
+   confirmed — no extra tap per install. Never during an activity.
+4. **Stock fallback: YES.** When both Meraki+ releases fail their health checks, the launcher automatically starts the
+   stock UI from slot A (read-only; boot flag untouched). This restores Wi-Fi and the recovery path.
+5. **Hardware sessions: YES.** The boot flag may be cleared for phase 1b power-cut/rollback tests and restored
+   afterwards, so any power cycle returns to stock. The user performs all physical power cuts; long-press injection
+   needs explicit approval per session.
+6. **Vendor OTA block: NOT YET.** No router (UniFi) block and no on-device hosts pin for now. Risk accepted: while
+   Meraki+ runs, the vendor update code does not run. Revisit before phase 1b hardware tests, since a stock boot during
+   testing is exposed to vendor OTA; the detect-and-repair layer still applies.
+7. **Channel: stable only.** No beta channel.
+8. **Board guard in the updater: NO.** The updater does not refuse non-Gen1 board fingerprints (maintainer's choice,
+   deviating from the recommendation). The installer's existing board check is unchanged. Consequence: Gen2 or other
+   boards are not blocked by the updater itself; hardware verification on non-Gen1 remains out of scope and at the
+   owner's risk.
