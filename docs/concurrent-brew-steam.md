@@ -2,8 +2,8 @@
 
 **Date:** 2026-11-22 · **Method:** static analysis of the MCU firmware (`MEM03_V514_260923.bin`, Nuvoton M451) and the
 stock display UI (`demo_v9`), a re-analysis of the existing live UART capture (the STEAMLIVE session, 2026-11-17), and a new
-sim scenario. **No device access:** the machine was offline (no ping, telnet port closed). The hardware part is a runbook (§8).
-This round changed no code; the only additions are this document and one sim scenario.
+sim scenario. The static/sim round had no device access; the hardware runbook (§8) was **executed on the real machine later
+the same day — see §11 (PASS)**. This round changed no code; the only additions are this document and one sim scenario.
 
 ## 1. Verdict
 
@@ -12,10 +12,10 @@ This round changed no code; the only additions are this document and one sim sce
 | Can the MCU run a full latched steam session (word 24 = 1, milk auto-stop) while a brew runs? | **Yes. There is no brew↔steam lock in the MCU**, and the heater task has a branch written for exactly this case (§3.4). |
 | Does the hardware share anything critical? | **The pump is shared, but steam does not use it.** Steam = boiler pressure + the wand solenoid (PE.6). Brew = pump + inlet valve + group valve. They use different outputs (§2). |
 | Power / thermal? | **Handled by the MCU.** Its heater task never runs both heaters at once, and it switches the brew-boiler heater off while a brew runs. During brew + steam the only heater allowed on is the steam heater, and only once the steam boiler has fallen 10 °C below its target (§3.4). Peak load ≈ steam heater + pump (§4). |
-| Does the stock UI allow it? | **The stock UI is built to show it:** `dealBrewAndSteam` / `brewAndSteamRuningPlay` play a combined brew+steam animation. Its start handlers don't check the other activity. Whether the stock touch flow lets you *reach* the steam start during a brew is unproven (§5). |
+| Does the stock UI allow it? | **Yes — proven on hardware (§11).** The brew screen's back button reaches HOME, the steam start latches during a brew, and `dealBrewAndSteam` / `brewAndSteamRuningPlay` show a combined view with live brew weight + milk temperature. |
 | Does Meraki+ allow it? | **No.** `act_guard()` refuses every start while any activity runs (toast *ACTIVITY IN PROGRESS*). It sends nothing (§6). If both run anyway, Meraki+ already shows them correctly: EXTRACTION + STEAM·AUTO and two STOP buttons (sim, §7). |
 | Sim | **Allows it:** 26/26 PASS (EN and DA). Each activity stops on its own (§7). |
-| Easy to enable? | **Yes: small UI change, nothing to change in the MCU.** Relax one guard and add a "start steam" button to the brew screen (§9). Do one hardware session first (§8). |
+| Easy to enable? | **Yes, and hardware-confirmed (§11): small UI change, nothing to change in the MCU.** Relax one guard and add a "start steam" button to the brew screen (§9). The hardware session is done. |
 
 **What actually blocks it today: only Meraki+'s own activity guard.** The MCU's real locks are elsewhere: the grinder blocks
 brew and steam, and the cleaning program blocks both (§3.2).
@@ -117,8 +117,8 @@ stop. Neither stop touches the other's bits.
   * Steam page start/stop `0x10987C..0x109900`: toggles mirror word 24, `usart_send(6,24,8)`. It does not check brew.
   * Brew button `0x109478..`: one branch *stops steam* (word 24 = 1, word 22 = 0, bit 12 set). The brew start/stop toggle `0x109550..0x109700`
     does not check steam.
-* **Unproven statically:** stock jumps to the brew page when a brew starts. Whether the user can then get back to the steam page during
-  the brew is the first thing the hardware test answers (§8).
+* **Proven on hardware (§11):** stock jumps to the brew page when a brew starts, but the brew page's back button returns to
+  HOME, from which the steam start latches during the brew. The combined view is shown. There is no stock UI guard against it.
 
 ## 6. Meraki+ today (`src/merakiplus.c`)
 
@@ -155,10 +155,11 @@ How the sim compares with the MCU:
 * **Simplification 2:** the steam-boiler/heater model has no heater-gating rule. During the overlap the sim uses the steam-only curve (≈ 124.7 °C).
   The real machine runs the steam boiler **unheated until target − 10 °C** (§3.4), so its pressure will sag more (§10).
 
-## 8. Hardware test runbook (to run when the machine is on; user present)
+## 8. Hardware test runbook (executed 2026-11-22 — result in §11)
 
 Purpose: confirm on the real machine that a latched steam session runs alongside a brew, and measure the load and the steam-boiler sag.
 Meraki+ cannot start it today, so **use the stock UI**. Its frames are the stock frames, and Meraki+ sends nothing.
+**This runbook was run on the real machine; every pass criterion met — see §11.**
 
 **Preparation**
 1. Machine on and fully hot (both boilers ready, no E-code). Portafilter dosed, cup on the scale, jug with ~200 ml **cold** milk, probe in the
@@ -190,7 +191,7 @@ unusual noise or smell · steam runs past its 60 s cap without stopping.
 
 ## 9. Recommendation
 
-**Enable "steam during a brew" in Meraki+, behind one hardware confirmation run (§8).** The MCU supports it, protects the
+**Enable "steam during a brew" in Meraki+. The hardware confirmation run (§8) is done and PASSED (§11).** The MCU supports it, protects the
 power budget itself, and stops each activity on its own. Proposed change (not implemented):
 
 1. `act_guard(ACT_STEAM)`: allow it when the **only** running activity is a brew (`phase_main` ∈ {PRE, EXT}). Steam bits must be clear
@@ -214,10 +215,45 @@ unchanged (the same `sub24 len8` stock sends).
 ## 10. Risks and open points
 
 * **Steam quality during the overlap:** the steam heater is off until the boiler is 10 °C below target (130 → 120 °C at gear 3; roughly
-  1.7 → 1 bar gauge, from the steam table). The first part of the milk heats more slowly; after the brew ends the normal regulation returns. Rough
-  estimate (not measured): up to ~25 s at lower pressure. The test in §8 measures it.
+  1.7 → 1 bar gauge, from the steam table). The first part of the milk heats more slowly; after the brew ends the normal regulation returns.
+  **Measured (§11):** the boiler sagged 129.8 → 117.3 °C and the steam heater only fired below 120 °C; the milk still reached 65 °C in ~29 s.
 * **Steam-boiler water:** refill is deferred while steam or a brew runs (§3.3), as in normal steaming. A long overlap uses only the stored water.
-* **The 60 s steam cap** (word 15) can end a slow session that starts cold during a brew. That is safe; the user can start it again.
-* **Pre-infusion window:** a steam start during phase-controlled pre-infusion gets no steam heat until the window ends (§3.4).
-* **Electrical:** the projected peak (≈ steam heater + pump) is an inference. cur1's units are unverified, so §8 should confirm the real peak and the mains dip.
-* **Stock navigation** during a brew is unproven (§5).
+* **The 60 s steam cap** (word 15) can end a slow session that starts cold during a brew. That is safe; the user can start it again. (Not hit in §11: milk reached target first.)
+* **Pre-infusion window:** a steam start during phase-controlled pre-infusion gets no steam heat until the window ends (§3.4). **Exercised in §11** (steam latched 3 s into the brew).
+* **Electrical:** **confirmed in §11** — peak cur1 ≈ 8.0 k (steam heater + pump), mains dip 238 → 234 V, and the two heaters were never on at once (0 frames). cur1's absolute units remain unverified, but the load is one heater + pump as projected.
+* **Stock navigation** during a brew: **proven in §11** — the brew page's back button reaches HOME and steam latches; no stock guard.
+
+## 11. Hardware verification (2026-11-22) — PASS
+
+The §8 runbook was executed on a real Gen1 machine with the user present. The stock UI sent every command (a passive strace tap on its
+UART plus periodic framebuffer grabs); Meraki+ was switched out via its own "switch to original now" action and sent nothing. No register
+writes, no touch injection, no config change, no OTA, no reboot. The capture held 5770 frames, all CRC-OK, with exactly two writes — the
+brew start (`cmd6 sub5 len18`) and the latched steam start (`cmd6 sub24 len8`, word 24 = 1, word 25 = 650) — and no stop writes.
+
+**Result: a full latched steam session runs concurrently with a brew.** Every §8 pass criterion was met:
+
+| Criterion | Measured |
+|---|---|
+| Combined state, latched (not a flush) | `work_sta = 0x5327` **with word 24 = 1** for **20.7 s** (78 frames); zero flush frames (word 24 = 0). Steam-heater pulses superimpose as `0x7327`. |
+| Brew stops by weight on its own | weight 0 → 34.8 g (predictive stop) → 36.4 g after drip (target 36.0 g); word 22 → 0. |
+| Steam auto-stops at milk target | word 24 → 0 (MCU-clear) at milk **65.0 °C = word 25**; steam ran ~29 s; no stop write; the 60 s cap was not reached. |
+| Independent stops | **brew stopped first** (by weight), steam continued ~5 s and stopped at milk temperature. |
+| Heater rule (§3.4) | steam boiler 129.8 → **117.3 °C**; steam-heater bit 13 first fired at **119.7 °C** (just below target − 10 = 120 °C). Before that, cur1 ≈ 1.05 k (pump only); after, ≈ 7.95 k. |
+| Never both heaters | **0 frames** with brew-heater bit 10 and steam-heater bit 13 both set. |
+| Peak load / mains dip | peak cur1 ≈ **8.0 k**; mains 238–239 V idle → **234 V** at peak. |
+| Errors | E1/E2/E3 (words 34/35/36) = **0** throughout. |
+| Milk overshoot | +2.4 °C after stop (peak 67.4 °C), consistent with the steam-only session. |
+
+**Stock UI stance (the open question from §5): it allows it.** The brew screen has a back button to HOME; from HOME the steam start
+latches while the brew runs. When both run, stock shows its combined brew+steam view (the brown theme) with the **live brew weight in the
+Brew circle and the live milk temperature in the steam circle** at the same time — `dealBrewAndSteam` / `brewAndSteamRuningPlay` in action.
+
+**Deviation from the runbook:** steam was latched ~3 s after the brew start (during pre-infusion) rather than ~7 s in at extraction. This
+exercised the pre-infusion gating branch (no steam heat for the first ~6 s) as well as the brew+steam branch; it did not affect any pass
+criterion. The 20.7 s overlap is the extraction portion.
+
+**Conclusion / green light:** the only thing blocking concurrent brew+steam today is Meraki+'s own `act_guard()`. The MCU accepts the
+combined state, time-slices the heaters so only one is ever on, and stops each activity autonomously. The §9 change (relax the guard for
+steam during a brew, add a HOLD·STEAM button on the brew screen) is now hardware-validated and can be implemented. No extra power or
+thermal guard is needed in the UI. The end state was restored exactly (Meraki+ live again, boot flag and config unchanged, temp files
+removed); the switch back used the gesture switcher with no reboot.
