@@ -27,6 +27,9 @@ only Meraki+'s own start guard prevented it. No frame, limit or timing changed: 
   `concurrent_brew_steam_stops` (35) and `concurrent_steam_blocked` (23), new; all fail against v6.19.
 - `bin/`: `merakiplus` `6c0b4cd1…`, `merakiplus_sim_arm` `70bf2555…` and the host SIM builds rebuilt (official zig
   0.17.1); `merakiplus_snd`, `switcher`, `tinj_hold`, `keyinj`, `grab_shim.so` and `audio/` unchanged.
+- **Verified on a machine** (after the release): HOLD·STEAM during a brew → both ran, the shot stopped by weight and
+  the steam at 65 °C; STOP STEAM mid-brew → the shot carried on
+  ([docs/concurrent-brew-steam.md §12](docs/concurrent-brew-steam.md#12-implementation-v620)).
 
 ## [6.19] — 2026-11-21
 Two sound changes from user feedback. Display and audio only — no UART frame, guard, limit, timing, setting or helper

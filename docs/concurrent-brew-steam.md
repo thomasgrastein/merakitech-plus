@@ -297,3 +297,10 @@ Scenarios (all `ui_only`): `concurrent_brew_steam` (now a real UI start during p
 `sub24` write, `0x5327`, the heater slots `0x7327`, brew stops by weight, steam by milk, the button states), `concurrent_brew_steam_stops`
 (STOP STEAM mid-brew, a second steam via the direct word 24 write, STOP BREW while steaming, STOP STEAM) and `concurrent_steam_blocked`
 (steam refused during grind, hot water and an E2 during a brew; no word 24 write). All three fail against the v6.19 build.
+
+**On a real machine (2026-11-22, v6.20 installed with `./install.sh`, Danish UI, passive UART capture, the user pressed every button):**
+
+| Run | What happened |
+|---|---|
+| 1 — HOLD·STEAM during the brew, then hands off | Meraki+ sent the steam start 1.5 s into the brew (pre-infusion); the steam bits rose 42 ms later. Brew + latched steam ran together for 7.8 s. The brew stopped by weight (34.5 g, 37.9 g after drip; target 36.0 g) while the steam ran on; the steam stopped at milk 65.1 °C (word 24 cleared by the MCU, no stop write) after 27.4 s. During the overlap the steam boiler fell 130.2 → 121.9 °C and the steam heater stayed off (it never reached target − 10); 0 frames with both heaters on; E1/E2/E3 = 0. |
+| 2 — STOP STEAM right after it latched | Steam started 1.4 s into the brew; one STOP STEAM tap sent only word 24 = 0; the steam bits cleared 75 ms later; the brew went on from pre-infusion into extraction and stopped by weight (34.9 g). The screen showed PRE-INFUSION + STEAM·AUTO with STOP BREW + STOP STEAM, then HOLD·STEAM again next to STOP BREW. |

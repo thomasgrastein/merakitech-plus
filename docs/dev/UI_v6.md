@@ -2448,7 +2448,7 @@ only one heater on and stops each activity on its own; the only blocker was `act
 | Full E2E (`run_e2e.py --all --parallel 4`) | EN **48 / 48** scenarios · 1269 / 1269 checks; DA **48 / 48** · 1269 / 1269 (no flakes this run) |
 | New scenarios EN and DA | `concurrent_brew_steam` 37/37, `concurrent_brew_steam_stops` 35/35, `concurrent_steam_blocked` 23/23; all three fail against the v6.19 build |
 | `tests/hygiene.py`, `tests/check_bins.py`, `tests/test_installer.py`, `boot/test_switcher.py` | green |
-| On-device | see the v6.20 install notes (dev workspace) |
+| On-device (2026-11-22) | installed (`./install.sh`, watchdog reload, no reboot); live: HOLD·STEAM during a brew → both ran, brew stopped by weight, steam by milk temperature; STOP STEAM mid-brew → the brew continued ([concurrent-brew-steam.md §12](../concurrent-brew-steam.md#12-implementation-v620)) |
 
 6. **Files:** `src/merakiplus.c`, `sim/mcu_sim.py`, `sim/selftest.py`, `sim/scenarios/concurrent_*.json`, `sim/CONTRACT.md`, `sim/README.md`,
    `bin/` (`merakiplus`, `merakiplus_sim_arm`, host SIM builds), `bin/MD5SUMS`, `tools/merakiplus.py` (VERSION 6.20, `BIN_MD5`),

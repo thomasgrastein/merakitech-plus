@@ -20,7 +20,8 @@
 from the v6.20 source with the official zig 0.17.1. The change is the steam start guard (a latched steam start is allowed
 while a brew is the only activity) and the HOLD·STEAM button on the brew screen; the frames are the existing stock ones.
 `merakiplus_snd`, `switcher`, `tinj_hold`, `keyinj` and `grab_shim.so` are byte-identical to v6.19; `audio/` is unchanged.
-Concurrent brew + steam itself was verified on a real machine with the stock UI (docs/concurrent-brew-steam.md §11).
+**Verified on a machine** (2026-11-22): `merakiplus` `6c0b4cd1…` installed with `./install.sh`; steam during a brew,
+the independent auto-stops and STOP STEAM mid-brew checked live (docs/concurrent-brew-steam.md §12).
 
 **v6.19 (2026-11-21, no ready tones at a power-on with hot boilers + nicer sounds):** `merakiplus`,
 `merakiplus_sim_arm` and the two host SIM builds were rebuilt from the v6.19 source with the official zig 0.17.1. The
