@@ -17,8 +17,10 @@ name: Release
 # before anything is published. The macOS SIM asset is the committed build made on
 # macOS: Mach-O is not bit-reproducible, so CI does not rebuild it (no macOS runner
 # needed); tests/hygiene.py md5-gates it against bin/MD5SUMS. grab_shim.so is likewise
-# the committed on-device-verified build and is not a release asset (installer fetches
-# it from raw bin/, md5-gated by BIN_MD5).
+# the committed on-device-verified build. Since OTA phase 1a every installed file is a
+# release asset (UI, sound helper, switcher, grab_shim.so, the three WAVs), listed in both
+# MD5SUMS (kept for older scripts) and SHA256SUMS; tests/hygiene.py checks that the
+# installer's pinned tables (BIN_MD5/BIN_SHA256/AUDIO_MD5/AUDIO_SHA256) match the files.
 #
 # Auth: GITHUB_TOKEN only (contents: write below). No other credentials anywhere.
 
@@ -155,10 +157,11 @@ jobs:
           VERSION: ${{ needs.check.outputs.version }}
         run: |
           mkdir -p dist
-          cp bin/merakiplus bin/merakiplus_snd bin/merakiplus_sim_arm bin/merakiplus_sim-linux-x86_64 bin/merakiplus_sim-macos-arm64 dist/
-          (cd dist && md5sum merakiplus merakiplus_snd merakiplus_sim_arm merakiplus_sim-linux-x86_64 merakiplus_sim-macos-arm64 > MD5SUMS)
+          files="merakiplus merakiplus_snd switcher grab_shim.so start.wav ready_extract.wav ready_steam.wav merakiplus_sim_arm merakiplus_sim-linux-x86_64 merakiplus_sim-macos-arm64"
+          cp bin/merakiplus bin/merakiplus_snd bin/switcher bin/grab_shim.so audio/*.wav bin/merakiplus_sim_arm bin/merakiplus_sim-linux-x86_64 bin/merakiplus_sim-macos-arm64 dist/
+          (cd dist && md5sum $files > MD5SUMS && sha256sum $files > SHA256SUMS)
           python3 tools/release_notes.py "$VERSION" > dist/notes.md
-          cat dist/MD5SUMS
+          cat dist/MD5SUMS dist/SHA256SUMS
       - name: Upload release assets
         uses: actions/upload-artifact@v4
         with:
@@ -198,7 +201,7 @@ jobs:
           set -eu
           title="Meraki+ ${TAG}"
           if [ "$PRERELEASE" = "true" ]; then flag="--prerelease"; else flag="--latest"; fi
-          assets="dist/merakiplus dist/merakiplus_snd dist/merakiplus_sim_arm dist/merakiplus_sim-linux-x86_64 dist/merakiplus_sim-macos-arm64 dist/MD5SUMS"
+          assets="dist/merakiplus dist/merakiplus_snd dist/switcher dist/grab_shim.so dist/start.wav dist/ready_extract.wav dist/ready_steam.wav dist/merakiplus_sim_arm dist/merakiplus_sim-linux-x86_64 dist/merakiplus_sim-macos-arm64 dist/MD5SUMS dist/SHA256SUMS"
           if gh release view "$TAG" --json tagName >/dev/null 2>&1; then
             echo "== release $TAG exists -> edit notes + replace assets (no duplicate)"
             gh release edit "$TAG" --title "$title" --notes-file dist/notes.md "$flag"

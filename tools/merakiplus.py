@@ -10,19 +10,27 @@ Normally used through ./install.sh and ./revert.sh. Python 3.8+, standard librar
 
 How it talks to the display: the vendor firmware runs an unauthenticated root telnet
 server on port 23. Commands are sent over that; files are pushed with the display's own
-busybox `nc -l` (raw TCP), and every file is md5-verified after transfer and after install.
+busybox `nc -l` (raw TCP), and every file is md5-verified after transfer and after install
+(plus SHA-256 when the display's busybox has sha256sum). On the computer every file is checked
+against the pinned SHA-256 and md5 tables below before anything is sent.
 
 Safety model (see README "Security and OTA" and the disclaimer):
   * Slot A (/customer/demo_v9, libs, test.sh) is never written. config.json is never written.
   * Slot B's existing binary and /customer/demo.sh are backed up (md5-verified) before anything
     is changed; backups are never overwritten by later runs.
-  * Replacements are atomic: copy to a temp file on the SAME filesystem, md5-gate, then rename.
-    (A rename over a running executable is fine; a cross-fs copy over it fails with ETXTBSY.)
+  * Replacements are atomic: copy to a temp file on the SAME filesystem, md5-gate, `sync`, then
+    rename, then `sync` again. The data reaches flash BEFORE the name changes, so a power cut leaves
+    either the complete old file or the complete new one (plus, at worst, a stale temp file that the
+    next install removes). A rename over a running executable is fine; a cross-fs copy over it
+    fails with ETXTBSY.
   * The boot flag (/customer/new) is only written with --persist. /customer/demo.sh is only
     written with --gesture (one guard line, reversible).
   * No reboot is ever sent. Activation uses the vendor watchdog (exec-reload) or a
     stop-first runtime switch (SIGSTOP old UI, start new, verify, then kill old; on failure
     the old UI is resumed with SIGCONT).
+  * After activation a 60 s health check: the same Meraki+ process must keep running (no crash,
+    no watchdog restart) and must be receiving data from the controller. On failure the installer
+    says so and points to ./revert.sh (no automatic rollback yet — docs/ota-plan.md phase 1b).
 """
 import argparse
 import base64
@@ -59,6 +67,19 @@ AUDIO_MD5 = {
     "ready_extract.wav": "4e7e24f18a80ee2f237e2f5ed220afbe",
     "ready_steam.wav": "483d57ef122dc9929b004441fe01bc44",
 }
+# SHA-256 of the same files (docs/ota-plan.md phase 1a). Checked on the computer before upload, and on the display
+# when its busybox has sha256sum. md5 stays as well (the display always has md5sum; older docs/scripts quote it).
+BIN_SHA256 = {
+    "merakiplus": "42cd7b9d28ebf670bf5bedaa44beb81bfb501a7832d871b1a4e364caa105b595",
+    "switcher": "96377054939bc5f734a632c1c87d1ac584f52dfe482abc8e07e07094bed3f8b7",
+    "grab_shim.so": "c02f61b53ec4613f04950966bcfab7e7aa2ad53dfe1035eae22a542861d268d7",
+    "merakiplus_snd": "84c06c507a04d0c06ae9250a60405f10bcf05b105e481144869180fd30d479cb",
+}
+AUDIO_SHA256 = {
+    "start.wav": "4633a9ecd800119732886e5255f404d76eb9743dda3ebdd2c270d5106650ff01",
+    "ready_extract.wav": "f8dbf35ce5789480cfe183bc2002a01984b219719cef0f0f0b08ddc0ef537499",
+    "ready_steam.wav": "85bd297c597f9239829cb5db1dc67fc6ce6dbef910a7972555ad0826377f91f1",
+}
 MERAKIPLUS_MARK = "@(#)merakiplus "        # embedded in every Meraki+ binary (src/merakiplus.c MERAKIPLUS_MARK)
 
 # ---- device layout (vendor A/B scheme, see docs/boot.md) ----
@@ -83,6 +104,15 @@ ENV_PREFIX = "MERAKIPLUS_"                              # prefix of the UI's env
 ANCHOR = 'if [ "$MOUNT_SUCCESS" -eq 1 ] && [ -f /customer/new ]; then'
 INSMOD_MARKER = "# kernel_mod_list"
 B_LDP, A_LDP = "/new_customer/libs:/config/wifi", "/customer/libs:/config/wifi"
+UART_DEV = "/dev/ttyS1"                                 # the UI's serial link to the coffee machine's controller
+HEALTH_S = 60                                           # post-install health check (docs/ota-plan.md "healthy")
+LINK_FRESH_S = 20                                       # controller data must be younger than this (atime: 8 s steps)
+# vendor OTA leftovers: a downloaded vendor update waiting for the next boot (docs/ota-plan.md §2.3)
+VENDOR_PENDING = (A_DIR + "/temp.tar.gz", A_DIR + "/demo_temp")
+# temp files our own atomic steps create; a power cut can leave them behind (never the final names)
+LEFTOVER_GLOBS = (OURDIR + "/*.part", OURDIR + "/.*.tmp", AUDIO_DIR + "/*.part", BOOTDIR + "/*.part",
+                  BOOTDIR + "/.*.tmp", BOOTDIR + "/*.tmp", B_DIR + "/.demo_v9.tmp", DEMO_SH + ".part",
+                  A_DIR + "/.demo.sh.tmp")
 
 # ============================================================ legacy migration only
 # BEGIN legacy-compat (legacy migration only)
@@ -178,6 +208,10 @@ def md5b(b):
     return hashlib.md5(b).hexdigest()
 
 
+def sha256b(b):
+    return hashlib.sha256(b).hexdigest()
+
+
 # ============================================================ console helpers
 class Out:
     def __init__(self, logfile=None, verbose=False):
@@ -231,6 +265,7 @@ class Device:
         self.p = prefix                 # test hook: path prefix for the mock device (tests/)
         self.sock = None
         self.changed = False            # set once anything on the display was modified
+        self._sha = None                # does the display's busybox have sha256sum? (probed once)
 
     # -- low level --
     def _strip_iac(self, chunk):
@@ -346,6 +381,19 @@ class Device:
         m = re.search(r"\b([0-9a-f]{32})\b", out)
         return m.group(1) if (rc == 0 and m) else None
 
+    def has_sha256(self):
+        """busybox 1.20 usually has sha256sum, but it is not proven on this firmware (ota-plan probe P2)."""
+        if self._sha is None:
+            _, out = self.sh("printf abc | sha256sum 2>/dev/null; true", check=False)
+            self._sha = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad" in out
+            self.o.debug(f"sha256sum on the display: {self._sha}")
+        return self._sha
+
+    def sha256(self, path):
+        rc, out = self.sh(f"sha256sum {self.d(path)} 2>/dev/null", check=False)
+        m = re.search(r"\b([0-9a-f]{64})\b", out)
+        return m.group(1) if (rc == 0 and m) else None
+
     def is_ours(self, path):
         pats = " ".join(f"-e '{m}'" for m in (MERAKIPLUS_MARK,) + LEGACY_MARKS)
         return self.sh(f"grep -q -F {pats} {self.d(path)} 2>/dev/null && echo Y || echo N",
@@ -398,8 +446,16 @@ class Device:
 
     def push(self, local_bytes, dest, mode="755"):
         """Raw upload via the display's busybox `nc -l`, written to dest.part on dest's own
-        filesystem, md5-verified, then renamed over dest (atomic)."""
+        filesystem, md5-verified (+ SHA-256 when available), synced, then renamed over dest.
+
+        Power-cut safety, step by step (UBIFS: a rename is atomic, but it may reach flash before
+        data that was not synced — hence the sync BEFORE the rename):
+          upload / verify .part  -> dest untouched; a stale .part (removed by the next install)
+          chmod + sync           -> same; the .part is now complete on flash
+          mv .part dest + sync   -> dest is the complete old OR the complete new file, never a mix
+        """
         want = md5b(local_bytes)
+        want256 = sha256b(local_bytes)
         dpath = self.d(dest)
         part = dpath + ".part"
         if self.dry:
@@ -437,10 +493,13 @@ class Device:
                 time.sleep(0.5)
             if ncpid:
                 self.sh(f"kill {ncpid} 2>/dev/null; true", check=False)
+            if got == want and self.has_sha256() and self.sha256(dest + ".part") != want256:
+                got = "sha256 mismatch"
             if got == want:
-                self.sh(f"chmod {mode} {part} && mv -f {part} {dpath} && sync")
-                if self.md5(dest) != want:
-                    raise Abort(f"md5 mismatch after rename: {dest}")
+                self.sh(f"chmod {mode} {part} && sync")              # data + mode on flash first ...
+                self.sh(f"mv -f {part} {dpath} && sync")             # ... then the atomic rename
+                if self.md5(dest) != want or (self.has_sha256() and self.sha256(dest) != want256):
+                    raise Abort(f"checksum mismatch after rename: {dest}")
                 self.o.debug(f"push ok {dest} {want}")
                 return want
             self.sh(f"rm -f {part}", check=False)
@@ -475,6 +534,7 @@ def get_binary(name, args, out, sub="bin"):
     """Local bin/<name> (git clone) or download from GitHub raw; md5-verified either way.
     sub="audio": the same for audio/<name> (v6.18), gated by AUDIO_MD5."""
     want = (AUDIO_MD5 if sub == "audio" else BIN_MD5)[name]
+    want256 = (AUDIO_SHA256 if sub == "audio" else BIN_SHA256)[name]
     cands = []
     if getattr(args, "bin_dir", None) and sub == "bin":
         cands.append(pathlib.Path(args.bin_dir) / name)
@@ -482,10 +542,10 @@ def get_binary(name, args, out, sub="bin"):
     for p in cands:
         if p.is_file():
             data = p.read_bytes()
-            if md5b(data) != want:
-                raise Abort(f"{p} has md5 {md5b(data)}, expected {want}. Corrupt or modified file — "
+            if sha256b(data) != want256 or md5b(data) != want:
+                raise Abort(f"{p} has sha256 {sha256b(data)}, expected {want256}. Corrupt or modified file — "
                             f"re-download the repo (or pass --bin-dir to a verified copy).")
-            out.ok(f"{name}: local {p} (md5 {want})")
+            out.ok(f"{name}: local {p} (sha256 {want256[:16]}…, md5 {want})")
             return data
     url = (RAW_AUDIO if sub == "audio" else RAW_BASE).format(ref=args.ref, name=name)
     out.say(f"  downloading {url}")
@@ -494,9 +554,9 @@ def get_binary(name, args, out, sub="bin"):
             data = r.read()
     except Exception as e:
         raise Abort(f"Download failed ({e}). Clone the repo instead: git clone https://github.com/{REPO}")
-    if md5b(data) != want:
-        raise Abort(f"Downloaded {name} has md5 {md5b(data)}, expected {want} — refusing to use it.")
-    out.ok(f"{name}: downloaded, md5 {want} verified")
+    if sha256b(data) != want256 or md5b(data) != want:
+        raise Abort(f"Downloaded {name} has sha256 {sha256b(data)}, expected {want256} — refusing to use it.")
+    out.ok(f"{name}: downloaded, sha256 {want256[:16]}… and md5 {want} verified")
     return data
 
 
@@ -547,7 +607,43 @@ def inspect(dev):
         st["b_free_kb"] = int(df.split()[3])
     except (IndexError, ValueError):
         st["b_free_kb"] = None
+    _, lo = dev.sh("for f in " + " ".join(dev.d(g) for g in LEFTOVER_GLOBS) +
+                   "; do [ -f \"$f\" ] && echo \"L $f\"; done; true", check=False)
+    st["leftovers"] = [l[2:][len(dev.p):] for l in lo.splitlines() if l.startswith("L ")]
+    pats = " ".join(f"-e '{m}'" for m in (MERAKIPLUS_MARK,) + LEGACY_MARKS)
+    _, sb = dev.sh(f"for f in {dev.d(OURDIR)}/*; do [ -f \"$f\" ] && grep -q -F {pats} \"$f\" && echo \"S $f\"; done; true",
+                   check=False)
+    running = {e for _, e in st["procs"]}
+    st["stray"] = [f for f in (l[2:][len(dev.p):] for l in sb.splitlines() if l.startswith("S "))
+                   if f != STAGE and f not in running]
+    st["vendor"] = vendor_traces(dev, st)
     return st
+
+
+def demo_sh_base_md5(dev):
+    """md5 of /customer/demo.sh without our guard line(s): the vendor part, which only a vendor update changes."""
+    return md5b(b"".join(l for l in dev.read(DEMO_SH).splitlines(keepends=True)
+                         if GUARD_KEY.encode() not in l and LEGACY_GUARD_KEY.encode() not in l))
+
+
+def vendor_traces(dev, st):
+    """Signs that a vendor (manufacturer) update ran or is about to run (docs/ota-plan.md §7 layer 3).
+    Read-only. Only meaningful once Meraki+ was installed (our state file exists)."""
+    tr = [f"{p} exists: a downloaded vendor update will be applied at the next boot "
+          f"(it can overwrite slot B, demo.sh and the boot flag)" for p in VENDOR_PENDING if dev.exists(p)]
+    if not st["state"]:
+        return tr
+    if st["b_exists"] and not st["b_ours"]:
+        tr.append(f"{B_EXE} is no longer Meraki+ (replaced, md5 {st['b_md5']})")
+    if dev.exists(SWITCHER) and not st["guard_lines"]:
+        tr.append("the gesture is installed but /customer/demo.sh has no guard line any more (demo.sh was replaced)")
+    elif st["state"].get("sh_md5") and demo_sh_base_md5(dev) != st["state"]["sh_md5"]:
+        tr.append("/customer/demo.sh changed since Meraki+ was installed (vendor update?)")
+    a0 = st["state"].get("a_md5")
+    if a0 and st["a_md5"] and a0 != st["a_md5"]:
+        tr.append("slot A (stock UI) changed since Meraki+ was installed: a vendor update was applied" +
+                  ("" if st["flag"] else "; the boot flag is not set (a vendor update into slot A clears it)"))
+    return tr
 
 
 def slot_of(exe):
@@ -568,6 +664,20 @@ def print_status(o, st):
           f", demo.sh {'yes' if st['bak_sh'] else 'no'}")
     if st["legacy"]["dir"] or st["legacy"]["guard"]:
         o.say("  older install      : found in the pre-rename layout — migrated by install / revert")
+    if st["vendor"]:
+        o.say("  vendor update      : DETECTED")
+        for t in st["vendor"]:
+            o.say("    - " + t)
+        o.say("    -> run ./install.sh again with the options you used before (--persist / --gesture);")
+        o.say("       backups and settings are kept. Block the vendor update server in your router to avoid repeats.")
+    else:
+        o.say("  vendor update      : no traces")
+    if st["leftovers"]:
+        o.say(f"  interrupted copies : {len(st['leftovers'])} temp file(s) — removed by the next install")
+    if st["stray"]:
+        o.say(f"  old builds         : {len(st['stray'])} stray Meraki+ build(s) in {OURDIR} (install offers to remove them)")
+        for f in st["stray"]:
+            o.say("    - " + f)
 
 
 def require_device(st):
@@ -647,19 +757,79 @@ def activate_meraki(dev, o, st, want_md5):
     return pid
 
 
-def verify_running(dev, o, pid, want_md5):
+def health_fail(why, ip):
+    raise Abort(f"HEALTH CHECK FAILED: {why}\n"
+                f"  Meraki+ is installed but not healthy. Go back to the stock UI now:\n"
+                f"      ./revert.sh --ip {ip}\n"
+                f"  and please open an issue with the log file.")
+
+
+def verify_running(dev, o, pid, want_md5, ip):
     exe = dev.sh(f"readlink {dev.d('/proc')}/{pid}/exe", check=False)[1].strip()
+    if not exe:
+        health_fail(f"Meraki+ (pid {pid}) stopped right after it was started", ip)
     if exe != dev.d(B_EXE):
         raise Abort(f"pid {pid} runs {exe}, not {B_EXE}")
     live = dev.md5(f"/proc/{pid}/exe")
     if live != want_md5:
         raise Abort(f"The running binary has md5 {live}, expected {want_md5}")
     o.ok(f"running UI pid {pid}: exe {B_EXE}, live md5 {live}")
-    time.sleep(5)
-    if not dev.exists(f"/proc/{pid}/exe"):
-        raise Abort(f"Meraki+ (pid {pid}) exited within 5 s. The vendor watchdog will restart a UI; "
-                    "run ./revert.sh to go back to stock and please open an issue.")
-    o.ok("still running after 5 s (no crash loop)")
+
+
+def ls_e_age(line, now_line):
+    """Age in seconds from busybox `ls -lue` (atime, ctime(3) format) and `date` in the same local format."""
+    pat = r"\w{3} (\w{3}) +(\d{1,2}) (\d\d:\d\d:\d\d) (\d{4})"
+    a, b = re.search(pat, line), re.search(pat, now_line)
+    if not (a and b):
+        return None
+    t = [datetime.datetime.strptime(" ".join(m.groups()), "%b %d %H:%M:%S %Y") for m in (a, b)]
+    return int((t[1] - t[0]).total_seconds())
+
+
+def controller_link(dev, pid):
+    """(holds UART_DEV open, seconds since the last byte from the controller or None if not measurable).
+    The kernel's tty layer sets the device node's access time on every successful read (8 s granularity),
+    so the age of that atime tells whether the controller is talking — without touching the UI or the link."""
+    u = dev.d(UART_DEV)
+    _, out = dev.sh(f"echo FD=$(for f in {dev.d('/proc')}/{pid}/fd/*; do readlink $f; done 2>/dev/null | grep -c ttyS1); "
+                    f"echo NOW=$(date +%s); echo AT=$(stat -c %X {u} 2>/dev/null); "
+                    f"echo \"LS $(ls -lue {u} 2>/dev/null)\"; echo \"DT $(date '+%a %b %e %H:%M:%S %Y')\"", check=False)
+    kv = {l.split("=", 1)[0]: l.split("=", 1)[1].strip() for l in out.splitlines() if re.match(r"^(FD|NOW|AT)=", l)}
+    fd_open = kv.get("FD", "0").isdigit() and int(kv.get("FD", "0")) > 0
+    if kv.get("NOW", "").isdigit() and kv.get("AT", "").isdigit():
+        return fd_open, int(kv["NOW"]) - int(kv["AT"])
+    ls = next((l[3:] for l in out.splitlines() if l.startswith("LS ")), "")
+    dt = next((l[3:] for l in out.splitlines() if l.startswith("DT ")), "")
+    return fd_open, ls_e_age(ls, dt)
+
+
+def health_check(dev, o, pid, seconds, ip):
+    """Phase 1a 'healthy' (docs/ota-plan.md): the same Meraki+ process runs for `seconds` (no crash, no
+    watchdog restart) and receives data from the controller. Read-only; no automatic rollback (phase 1b)."""
+    def fail(why):
+        health_fail(why, ip)
+    o.say(f"  health check: watching pid {pid} for {seconds} s (crash, restart, controller link) …")
+    t0, step = time.time(), (5 if seconds >= 20 else 1)
+    while True:
+        el = time.time() - t0
+        procs = dev.ui_procs()
+        if pid not in [p for p, _ in procs]:
+            fail(f"Meraki+ (pid {pid}) stopped after {int(el)} s" +
+                 (f"; now running: {', '.join(f'pid {p} = {slot_of(e)}' for p, e in procs)}" if procs else ""))
+        if el >= seconds:
+            break
+        time.sleep(min(step, max(0.2, seconds - el)))
+    o.ok(f"same process for {seconds} s (no crash, no restart)")
+    fd_open, age = controller_link(dev, pid)
+    if not fd_open:
+        fail(f"Meraki+ does not hold the controller link ({UART_DEV}) open")
+    if age is None:
+        o.warn(f"controller traffic could not be measured on this firmware (no stat / ls -e); check that HOME "
+               f"shows live temperatures. {UART_DEV} is open.")
+    elif age > LINK_FRESH_S:
+        fail(f"no data from the coffee machine's controller for {age} s (link {UART_DEV} is open but silent)")
+    else:
+        o.ok(f"controller link live: last data from the controller {max(age, 0)} s ago")
     _, lg = dev.sh(f"grep 'net-vagt startet' {dev.d('/tmp/merakiplus_net.log')} 2>/dev/null | tail -n 1", check=False)
     if ("V" + VERSION) in lg:
         o.ok(f"Meraki+ log confirms version V{VERSION}")
@@ -671,8 +841,6 @@ def cmd_install(dev, o, args):
     st = inspect(dev)
     print_status(o, st)
     require_device(st)
-    if st["b_free_kb"] is not None and st["b_free_kb"] < 1200 and not st["b_ours"]:
-        raise Abort(f"Only {st['b_free_kb']} KB free on /new_customer — need about 1.2 MB.")
     if not st["procs"]:
         o.warn("no UI process running right now (the watchdog usually restarts one within a second)")
 
@@ -689,6 +857,10 @@ def cmd_install(dev, o, args):
         check_arm_elf(extra["switcher"], "switcher")
         extra["grab_shim.so"] = get_binary("grab_shim.so", args, o)
         check_arm_elf(extra["grab_shim.so"], "grab_shim.so", shared=True)
+    # free space for updates too: every upload (.part) + the slot-B copy + margin (the old inodes stay until renamed)
+    need_kb = (len(merakiplus) * 2 + len(snd) + sum(map(len, sounds.values())) + sum(map(len, extra.values()))) // 1024 + 512
+    if st["b_free_kb"] is not None and st["b_free_kb"] < need_kb:
+        raise Abort(f"Only {st['b_free_kb']} KB free on /new_customer — need about {need_kb} KB. Nothing was changed.")
 
     o.say("")
     o.say("  Meraki+ will replace the display's touch UI. The coffee machine's own controller is not")
@@ -698,6 +870,16 @@ def cmd_install(dev, o, args):
 
     if legacy_migrate(dev, o, st, rewrite_guard=True) and not dev.dry:
         st = inspect(dev)
+    if st["leftovers"]:
+        dev.w("rm -f " + " ".join(dev.d(f) for f in st["leftovers"]) + "; sync")
+        o.ok(f"removed {len(st['leftovers'])} temp file(s) left by an interrupted earlier run")
+    if st["stray"]:
+        if not args.yes and not dev.dry and sys.stdin.isatty() and \
+                confirm(f"  Remove {len(st['stray'])} old Meraki+ build(s) from {OURDIR} (not used by anything)?", False):
+            dev.w("rm -f " + " ".join(dev.d(f) for f in st["stray"]) + "; sync")
+            o.ok("old builds removed")
+        else:
+            o.say(f"  {len(st['stray'])} old Meraki+ build(s) in {OURDIR} kept (see status; safe to delete by hand)")
     o.step("3/7 Backups (only taken once; never overwritten)")
     dev.w(f"mkdir -p {dev.d(BOOTDIR)}")
     if st["bak_b"] or st["bak_b_absent"]:
@@ -711,6 +893,11 @@ def cmd_install(dev, o, args):
     else:
         dev.atomic_copy(B_EXE, BAK_B, st["b_md5"])
         o.ok(f"slot-B vendor binary -> {BAK_B} (md5 {st['b_md5']})")
+    if st["bak_b"] and st["b_exists"] and not st["b_ours"] and dev.exists(BAK_B) and dev.md5(BAK_B) != st["b_md5"]:
+        newer = f"{BAK_B}.{st['b_md5'][:8]}"              # a vendor update replaced slot B: keep that one too
+        if not dev.exists(newer):
+            dev.atomic_copy(B_EXE, newer, st["b_md5"])
+            o.ok(f"slot B held a different vendor program (vendor update) -> extra backup {newer}")
     if st["bak_sh"]:
         o.ok("demo.sh backup already exists — kept as is")
     elif st["guard_lines"]:
@@ -718,12 +905,17 @@ def cmd_install(dev, o, args):
     else:
         dev.atomic_copy(DEMO_SH, BAK_SH, dev.md5(DEMO_SH), mode="644")
         o.ok(f"/customer/demo.sh -> {BAK_SH}")
-    if not st["state"]:
-        orig_b = "absent" if not st["b_exists"] else ("ours" if st["b_ours"] else "vendor")
-        lines = (f"orig_flag={1 if st['flag'] else 0}\\norig_b={orig_b}\\n"
-                 f"first_install={datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}\\n")
-        dev.w(f"printf '{lines}' > {dev.d(STATE)}.tmp && mv -f {dev.d(STATE)}.tmp {dev.d(STATE)} && sync")
-        o.ok("original boot state recorded (used by revert)")
+    state = dict(st["state"])
+    if not state:
+        state["orig_flag"] = "1" if st["flag"] else "0"
+        state["orig_b"] = "absent" if not st["b_exists"] else ("ours" if st["b_ours"] else "vendor")
+        state["first_install"] = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+    state["a_md5"] = st["a_md5"] or ""                   # baselines for vendor-update detection (status):
+    state["sh_md5"] = demo_sh_base_md5(dev)              # slot A and demo.sh as they are now
+    if state != st["state"]:
+        lines = "".join(f"{k}={v}\\n" for k, v in state.items())
+        dev.w(f"printf '{lines}' > {dev.d(STATE)}.tmp && sync && mv -f {dev.d(STATE)}.tmp {dev.d(STATE)} && sync")
+        o.ok("boot state recorded (used by revert and by vendor-update detection)")
 
     o.step(f"4/7 Installing Meraki+ {VERSION} into slot B")
     if dev.md5(STAGE) == want:
@@ -769,15 +961,18 @@ def cmd_install(dev, o, args):
 
     o.step("7/7 Verifying")
     if pid and not dev.dry:
-        verify_running(dev, o, pid, want)
+        verify_running(dev, o, pid, want, args.ip)
     if not dev.dry:
         if dev.md5(B_EXE) != want:
             raise Abort("slot B binary md5 changed unexpectedly")
         if dev.md5(A_EXE) != st["a_md5"]:
             raise Abort("slot A binary changed — this must never happen; please open an issue")
         o.ok("slot A untouched, slot B verified")
+    if pid and not dev.dry:
+        health_check(dev, o, pid, args.health_seconds, args.ip)
     o.say("")
-    o.say(f"Done. Meraki+ {VERSION} is {'installed (dry-run: nothing was changed)' if dev.dry else 'running'}.")
+    o.say(f"Done. Meraki+ {VERSION} is " + ("installed (dry-run: nothing was changed)" if dev.dry else
+          "healthy and running" if pid else "installed (not started: --no-activate)") + ".")
     o.say("  Check on the screen: the gear on HOME -> SYSTEM shows 'MERAKI+ V" + VERSION + "' under its title.")
     o.say(f"  Undo everything:     ./revert.sh --ip {args.ip}")
 
@@ -1002,7 +1197,8 @@ def main(argv=None):
                    help="also install the center-hold gesture switcher (adds ONE line to /customer/demo.sh)")
     p.add_argument("--no-activate", action="store_true", help="install only; do not start Meraki+ now")
     p.add_argument("--ref", default=os.environ.get("MERAKIPLUS_REF", "main"), help="git ref to download bin/ from")
-    p.add_argument("--bin-dir", help="use binaries from this directory (md5-checked)")
+    p.add_argument("--bin-dir", help="use binaries from this directory (sha256 + md5 checked)")
+    p.add_argument("--health-seconds", type=int, default=HEALTH_S, help=argparse.SUPPRESS)   # tests
     p = sub.add_parser("revert", help="restore the stock UI and remove Meraki+")
     common(p)
     p.add_argument("--purge", action="store_true", help="also delete /new_customer/merakiplus (backups, language, settings backups)")

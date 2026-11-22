@@ -1,6 +1,7 @@
-# Secure updates (OTA) for Meraki+ — inventory and plan (planning, not implemented)
+# Secure updates (OTA) for Meraki+ — inventory and plan
 
-Status: **plan for review**. Nothing here is implemented. It builds on the vendor A/B mechanism described in
+Status: **phase 1a implemented** (hardened companion installer, see [Phase 1a — implemented](#phase-1a--implemented-2026-11-22));
+phases 1b–4 are a plan, not implemented. It builds on the vendor A/B mechanism described in
 [boot.md](boot.md) and refines its §7 (vendor OTA interaction).
 Confidence: **H** = proven from code or an on-device observation; **M** = strong inference; **L** = guess.
 
@@ -105,7 +106,7 @@ the backups, restore the original flag).
 | Failure | Today | Severity |
 |---|---|---|
 | Power cut during an upload | `.part` file left over; destination untouched. | low |
-| Power cut right after `mv` in `push()` | `push()` renames **before** any `sync` of the new data (the MD5 check reads the page cache, not flash). On UBIFS a rename can reach flash before the data → a truncated/zeroed file at the final name is possible. `atomic_copy()` already syncs before its rename, so `/new_customer/demo_v9` is safe; the sound helper and WAVs (pushed directly) are not. | medium (fix in 1a) |
+| Power cut right after `mv` in `push()` | `push()` renamed **before** any `sync` of the new data (the MD5 check reads the page cache, not flash). On UBIFS a rename can reach flash before the data → a truncated/zeroed file at the final name was possible. `atomic_copy()` already synced before its rename, so `/new_customer/demo_v9` was safe; the sound helper and WAVs (pushed directly) were not. | medium — **fixed in 1a** (sync before every rename) |
 | Interrupted multi-file update | Files are replaced one by one → mixed versions possible (e.g. new WAVs with the old UI). Switcher and shim are only refreshed with `--gesture`, so installed copies can lag behind `bin/` (observed on the author's machine; harmless today). | low–medium |
 | New build crashes at start | The vendor watchdog restarts it every ~1–2.5 s forever. The installer notices (5 s check) and tells the user to revert — **if the computer is still connected**. | high |
 | **Crash before Wi-Fi is up, with `--persist`** | In a slot-B boot **Meraki+ itself brings up Wi-Fi** (the stock UI normally does it). A build that crashes before its network guard runs (~4–5 s after start) leaves the display **without Wi-Fi → no telnet → no `revert.sh`**, at every power-on (the flag persists). The gesture switcher only switches A→B. Recovery would need the serial console. | **critical (soft brick)** — closed by the launcher in 1b |
@@ -495,6 +496,7 @@ All read-only; no writes, no reboots. Stream long output off the device, never i
 | P7 | `cat /proc/<ui pid>/status | grep -i vm` and the start-up timeline from `/tmp/merakiplus_net.log` | UI memory, when Wi-Fi is up after start (defines "crash before Wi-Fi") |
 | P8 | Only if the user happens to run the stock UI: `ls -l /customer/demo_temp /customer/temp.tar.gz /tmp/getlatestversion 2>&1; cat /tmp/getlatestversion` | confirms "check automatic, apply manual" |
 | P9 | DIAGNOSTICS screen / UI log: does Meraki+ see the controller firmware version? | basis for `mcu_fw_tested` |
+| P10 | `stat -c %X /dev/ttyS1; date +%s` twice, a few seconds apart, while Meraki+ runs; `ls -lue /dev/ttyS1` | confirms the 1a health check's controller-link signal (tty atime) and which applet measures it |
 
 ### Phase 1a — hardened companion install (1–1.5 d)
 
@@ -505,6 +507,34 @@ All read-only; no writes, no reboots. Stream long output off the device, never i
 - Tests: `tests/test_installer.py` (mock device) for sync ordering, space errors and OTA-trace detection.
 - Hardware: one ordinary update on the user's machine, observed, idle.
 - Risk: low.
+
+### Phase 1a — implemented (2026-11-22)
+
+Installer, CI and docs only — **no shipped binary changed** (no version bump; `bin/` and the device UI are
+the v6.20 builds). What `tools/merakiplus.py` does now:
+
+| Item | Implementation |
+|---|---|
+| Sync before rename | `push()`: upload to `<dest>.part` → md5 (+ SHA-256) → `chmod` + `sync` → `mv` + `sync` → re-verify. `atomic_copy()` already did cp + `sync` → md5 → `mv` + `sync`; the state file is now written tmp → `sync` → `mv` → `sync` as well. Power cut before the rename: destination untouched, a stale temp file; after it: the complete new file. |
+| Stale temp files | `status` counts `*.part` / `.*.tmp` left by interrupted runs (only our own temp names); `install` removes them. |
+| Stray old builds | `status` lists files in `/new_customer/merakiplus/` that carry the Meraki+ marker and are neither the staged copy nor running. `install` offers to remove them interactively; with `--yes` they are kept (never deleted unasked). |
+| Free space | checked for updates too: all uploads + the slot-B copy + 512 KB. |
+| SHA-256 | `BIN_SHA256` / `AUDIO_SHA256` pinned next to `BIN_MD5` / `AUDIO_MD5`; every file is checked against both on the computer before upload. On the display SHA-256 is checked in addition to md5 **only when its busybox has `sha256sum`** (detected once per run; not yet proven on this firmware, probe P2), otherwise md5 stays the gate. `tests/hygiene.py` keeps both tables in sync with `bin/` and `audio/`. |
+| Release assets | CI publishes `SHA256SUMS` next to `MD5SUMS` (kept for compatibility) and adds `switcher`, `grab_shim.so` and the three WAVs as assets. |
+| 60 s health check | after activation: the same PID must stay alive for 60 s (no crash, no watchdog restart), must hold the controller link `/dev/ttyS1` open, and the controller must be talking — measured read-only through the tty layer, which updates the device node's access time on every successful read (8 s granularity): last data ≤ 20 s old. Failure → `HEALTH CHECK FAILED: …` + `./revert.sh --ip …`, exit 1, no automatic rollback (1b). If neither `stat -c %X` nor `ls -e` is available, the link activity is reported as not measurable (a warning, not a failure). |
+| Vendor OTA detection (§7 layer 3) | `status` and `install` report: `/customer/temp.tar.gz` or `/customer/demo_temp` (an update waiting for the next boot), slot B no longer Meraki+, gesture installed but the guard line missing, `demo.sh` (without our line) or slot A changed since install (baselines `sh_md5` / `a_md5` in `merakiplus.state`, refreshed by every install), boot flag cleared together with a changed slot A. The advice is to re-run `install.sh` with the previous options; a re-install repairs everything and keeps a newly found vendor slot-B program as an extra backup (`demo_v9.vendor.<md5>`; the first backup is never overwritten). The vendor tarball itself is never touched. No router or hosts blocking (§13 decision 6). |
+| Tests | `tests/test_installer.py` against the mock display: sync-before-rename for every staged rename, SHA-256 rejection of a tampered binary, display without `stat`/`sha256sum`, health check success and its three failure paths (crash, silent link, link not open) followed by a working revert, free space on update, temp-file and stray-build handling, every vendor trace and the repair. |
+
+Deviations from the plan text above, all deliberate:
+
+- **No UI-side indicator yet.** §7 layer 3 also mentions a one-time notice in Meraki+; that needs a UI change
+  and lands with phase 1b (together with the UI's own *healthy* marker). The installer is the detector in 1a.
+- **"Controller talking" is measured from outside** (tty access time) instead of a UI-written marker, so no
+  binary had to change. Phase 1b replaces it with the UI's own healthy commit (frames ≥ 30 s, run ≥ 60 s).
+- **Probe P10 (new, read-only)** for the next hardware session: `stat -c %X /dev/ttyS1; date +%s` twice a few
+  seconds apart while Meraki+ runs (confirms the atime signal and the `stat` applet), and `printf abc | sha256sum`
+  (P2). Until then the installer degrades to warnings, never to a false success.
+- Hardware: the "one ordinary update on the user's machine" is pending (the machine was offline).
 
 ### Phase 1b — launcher, release directories, auto-rollback (3–4 d)
 

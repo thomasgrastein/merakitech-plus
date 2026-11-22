@@ -3,6 +3,23 @@
 All notable changes to Meraki+. Details (with evidence, frames and test figures) are in
 [docs/dev/UI_v6.md](docs/dev/UI_v6.md) under *CHANGES-v6.x*. All dates are 2026.
 
+## [Unreleased] — installer hardening (OTA plan phase 1a)
+Installer, CI and docs only; no binary changed (the device UI is still v6.20). Details:
+[docs/ota-plan.md, phase 1a](docs/ota-plan.md#phase-1a--implemented-2026-11-22).
+### Changed
+- **Power-cut safe uploads:** every uploaded file is synced to flash **before** it is renamed into place (before, the
+  sound helper, the WAVs, the switcher and `demo.sh` were renamed first and synced after).
+- **SHA-256:** the installer pins SHA-256 next to md5 for every file it installs and checks both on the computer;
+  on the display SHA-256 is checked too when its busybox has `sha256sum`. Releases carry `SHA256SUMS` (and still
+  `MD5SUMS`) and now also `switcher`, `grab_shim.so` and the three WAVs.
+- **60 s health check** instead of 5 s: the same Meraki+ process must keep running and the coffee machine's
+  controller must be talking to it; otherwise the installer says `HEALTH CHECK FAILED` and points to `./revert.sh`.
+- Free space is checked for updates too; temp files of an interrupted run are removed; old development builds are
+  listed (and offered for removal interactively).
+### Added
+- **Manufacturer-update detection** in `status` and `install`: a vendor update waiting for the next boot, slot B or
+  `demo.sh` replaced, slot A changed, boot flag cleared. Re-running `install.sh` repairs it.
+
 ## [6.20] — 2026-11-22
 **Steam while you brew.** The controller has always been able to run a latched steam session during a brew (verified on
 a real machine with the stock UI, [docs/concurrent-brew-steam.md §11](docs/concurrent-brew-steam.md#11-hardware-verification-2026-11-22--pass));

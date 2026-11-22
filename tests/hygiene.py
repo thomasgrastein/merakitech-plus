@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """hygiene.py — repository checks that must hold for a public repo (run in CI):
 
-  * bin/MD5SUMS matches the files in bin/, and tools/merakiplus.py BIN_MD5 matches bin/MD5SUMS
+  * bin/MD5SUMS matches the files in bin/, and tools/merakiplus.py BIN_MD5 matches bin/MD5SUMS;
+    BIN_SHA256 / AUDIO_SHA256 cover the same files as BIN_MD5 / AUDIO_MD5 and match them
   * no vendor firmware/binaries: the only ELF/Mach-O files tracked are our builds in bin/
   * no personal paths, private IP addresses (other than documented placeholders), MAC addresses
   * sim/fixtures/config.json carries placeholder Wi-Fi credentials only
@@ -62,6 +63,15 @@ for p in (ROOT / "bin").iterdir():
 for name, h in merakiplus.BIN_MD5.items():
     if sums.get(name) != h:
         fail(f"tools/merakiplus.py BIN_MD5[{name}] != bin/MD5SUMS")
+# OTA phase 1a: the installer pins SHA-256 for exactly the files it pins md5 for, and both match the files
+for tab, ref, sub in ((merakiplus.BIN_SHA256, merakiplus.BIN_MD5, "bin"), (merakiplus.AUDIO_SHA256, merakiplus.AUDIO_MD5, "audio")):
+    if set(tab) != set(ref):
+        fail(f"tools/merakiplus.py SHA-256 table for {sub}/ lists {sorted(tab)}, md5 table {sorted(ref)}")
+    for name, h in tab.items():
+        p = ROOT / sub / name
+        got = hashlib.sha256(p.read_bytes()).hexdigest() if p.is_file() else None
+        if got != h:
+            fail(f"tools/merakiplus.py SHA-256 of {sub}/{name} is {h}, the file has {got}")
 
 # 1b. v6.18: audio/ = exactly AUDIO_MD5 (our own sounds); no other audio/video file anywhere in the repository
 adir = ROOT / "audio"

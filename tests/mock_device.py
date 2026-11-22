@@ -11,6 +11,12 @@ sandbox cannot do for real are emulated with shell functions:
     emulated (it restarts the slot recorded in <root>/watchdog_slot).
   * nohup ./demo_v9 spawns a fake UI process; nc -l -p PORT is a tiny Python listener.
   * uname -m says armv7l.
+  * sync / mv / chmod / cp are logged to <root>/events in order (sync-before-rename tests).
+  * every spawned UI holds <root>/dev/ttyS1 open (fd/3); `stat -c %X` on it reports "now" (a live
+    controller link) unless <root>/uart_dead exists (silent link, 5 min old) or <root>/no_stat exists
+    (stat unavailable). <root>/no_uart_fd: new UIs do not open the link. <root>/crash_new_ui: a UI
+    started from slot B dies 5 s after it started (the watchdog emulation then restarts a UI). <root>/no_sha256: no sha256sum on the display.
+    <root>/df_kb: `df` reports that many free KB.
 
 Everything here is synthetic — no vendor files are used. demo.sh below only reproduces the
 lines the installer anchors on.
@@ -64,9 +70,24 @@ command -v md5sum >/dev/null 2>&1 || md5sum() {
   rc=0; for f in "$@"; do if [ -e "$f" ]; then echo "$(md5 -q "$f")  $f"; else echo "md5sum: $f: No such file" >&2; rc=1; fi; done; return $rc; }
 mock_next_pid() { n=$(cat "$R/pidcounter"); n=$((n+1)); echo $n > "$R/pidcounter"; echo $n; }
 mock_spawn() {  # $1 = absolute exe path, $2 = argv0
-  p=$(mock_next_pid); mkdir -p "$R/proc/$p"; cp "$1" "$R/proc/$p/image"
+  p=$(mock_next_pid); mkdir -p "$R/proc/$p/fd"; /bin/cp "$1" "$R/proc/$p/image"
   printf '%s' "$1" > "$R/proc/$p/exe_path"; ln -s "$R/proc/$p/image" "$R/proc/$p/exe"
-  printf '%s\000' "$2" > "$R/proc/$p/cmdline"; echo "spawn $p $1" >> "$R/events"; }
+  [ -f "$R/no_uart_fd" ] || ln -s "$R/dev/ttyS1" "$R/proc/$p/fd/3"
+  printf '%s\000' "$2" > "$R/proc/$p/cmdline"; echo "spawn $p $1" >> "$R/events"
+  case "$1" in "$R/new_customer/"*) [ -f "$R/crash_new_ui" ] && { (sleep 5; kill -9 $p) >/dev/null 2>&1 & };; esac; return 0; }
+sync() { echo "sync" >> "$R/events"; command sync; }
+mv() { echo "mv $*" >> "$R/events"; command mv "$@"; }
+chmod() { echo "chmod $*" >> "$R/events"; command chmod "$@"; }
+cp() { echo "cp $*" >> "$R/events"; command cp "$@"; }
+stat() {
+  if [ "$1" = "-c" ] && [ "$2" = "%X" ]; then
+    [ -f "$R/no_stat" ] && return 1
+    case "$3" in */dev/ttyS1) if [ -f "$R/uart_dead" ]; then echo $(( $(date +%s) - 300 )); else date +%s; fi; return 0;; esac
+  fi
+  command stat "$@"; }
+df() { if [ -f "$R/df_kb" ]; then echo "Filesystem 1K-blocks Used Available Use% Mounted on"
+  echo "ubi0:new_customer 111704 1 $(cat "$R/df_kb") 99% /new_customer"; else command df "$@"; fi; }
+sha256sum() { [ -f "$R/no_sha256" ] && { echo "sha256sum: applet not found" >&2; return 127; }; command sha256sum "$@" 2>/dev/null || shasum -a 256 "$@"; }
 mock_ui_left() { for d in "$R"/proc/[0-9]*; do [ -f "$d/exe_path" ] && case "$(cat $d/exe_path)" in */demo_v9) return 0;; esac; done; return 1; }
 readlink() {
   case "$1" in
@@ -117,8 +138,9 @@ def make_root(root, scenario="stock_a"):
     root = pathlib.Path(root)
     if root.exists():
         shutil.rmtree(root)
-    for d in ("customer/libs", "new_customer/libs", "tmp", "proc", "config/wifi"):
+    for d in ("customer/libs", "new_customer/libs", "tmp", "proc", "config/wifi", "dev"):
         (root / d).mkdir(parents=True)
+    (root / "dev/ttyS1").write_bytes(b"")
     (root / "customer/demo.sh").write_text(DEMO_SH)
     (root / "customer/demo_v9").write_bytes(b"\x7fELF MOCK VENDOR UI slot A\n" * 50)
     (root / "customer/test.sh").write_text("#!/bin/sh\n# synthetic watchdog stand-in\n")

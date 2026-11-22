@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """End-to-end tests of tools/merakiplus.py (install / re-install / revert / dry-run / migration of
-a pre-rename install) against
+a pre-rename install; phase 1a hardening: sync-before-rename, SHA-256, health check, vendor-update
+detection, leftovers, free space) against
 tests/mock_device.py. No hardware, no network beyond 127.0.0.1.
 
     python3 tests/test_installer.py
@@ -45,7 +46,8 @@ def run(srv, root, *args):
     with contextlib.redirect_stdout(buf):
         rc = mp.main([args[0], "--ip", "127.0.0.1", "--port", str(srv.port), "--test-prefix", str(root),
                       "--yes", "--log", str(root.parent / "test.log")] +
-                     (["--bin-dir", str(ROOT / "bin")] if args[0] == "install" else []) + list(args[1:]))
+                     (["--bin-dir", str(ROOT / "bin"), "--health-seconds", "2"] if args[0] == "install" else []) +
+                     list(args[1:]))
     out = buf.getvalue()
     if rc != 0:
         print(out)
@@ -280,6 +282,125 @@ def legacy_purge(srv, root):
     check("stock UI running", [e for _, e in ui(root)] == ["/customer/demo_v9"])
 
 
+def renames_after_sync(root):
+    """Every rename of a staged file (.part / .tmp) must come right after a sync (data on flash first)."""
+    ev = [l for l in (root / "events").read_text().splitlines() if l.split(" ", 1)[0] in ("sync", "mv", "chmod", "cp")]
+    renames = [i for i, l in enumerate(ev) if l.startswith("mv ") and (".part " in l or ".tmp " in l)]
+    bad = [ev[i] for i in renames if i == 0 or ev[i - 1] != "sync"]
+    return len(renames), bad
+
+
+def hardening(srv, root):
+    rc, out = run(srv, root, "install", "--gesture", "--persist")
+    check("1a: install exits 0", rc == 0, out[-600:])
+    n, bad = renames_after_sync(root)
+    check(f"1a: every staged file is synced before its rename ({n} renames)", n >= 8 and not bad, bad)
+    check("1a: files verified by sha256 on the computer", "sha256 42cd7b9d28ebf670" in out)
+    check("1a: health check ran: same process + live controller link",
+          "same process for 2 s" in out and "controller link live" in out and "healthy and running" in out, out[-500:])
+    state = (root / mp.STATE.lstrip("/")).read_text()
+    check("1a: state records the slot-A and demo.sh baselines",
+          f"a_md5={md5f(root / 'customer/demo_v9')}" in state and "sh_md5=" in state, state)
+    rc, out = run(srv, root, "status")
+    check("1a: status after install: no vendor traces", rc == 0 and "vendor update      : no traces" in out, out[-500:])
+
+    # leftovers of an interrupted run + an old development build
+    ours = root / mp.OURDIR.lstrip("/")
+    (ours / "merakiplus_snd.part").write_bytes(b"half")
+    (ours / "boot/.demo_v9.vendor.tmp").write_bytes(b"half")
+    (ours / "merakiplus_v6_17").write_bytes(b"\x7fELF old build " + mp.MERAKIPLUS_MARK.encode() + b"V6.17\n")
+    (ours / "notes.txt").write_text("user file, not ours\n")
+    before = tree_digest(root)
+    rc, out = run(srv, root, "status")
+    check("1a: status reports 2 interrupted copies and 1 old build, read-only",
+          "interrupted copies : 2" in out and "merakiplus_v6_17" in out and "notes.txt" not in out
+          and tree_digest(root) == before, out[-600:])
+    rc, out = run(srv, root, "install", "--gesture", "--persist")
+    check("1a: install removes the temp files, keeps the old build with --yes, never touches other files",
+          rc == 0 and not (ours / "merakiplus_snd.part").exists() and not (ours / "boot/.demo_v9.vendor.tmp").exists()
+          and (ours / "merakiplus_v6_17").exists() and (ours / "notes.txt").exists(), out[-600:])
+
+    # free space is checked for updates too
+    (root / "df_kb").write_text("400\n")
+    before = tree_digest(root)
+    rc, out = run(srv, root, "install")
+    check("1a: update refused when /new_customer is nearly full, nothing changed",
+          rc == 1 and "KB free" in out and tree_digest(root) == before, out[-400:])
+    (root / "df_kb").unlink()
+
+    # a vendor update ran: new slot A, demo.sh replaced (no guard line), flag cleared, slot B replaced, tarball pending
+    orig_b = md5f(ours / "boot/demo_v9.vendor")
+    (root / "customer/demo_v9").write_bytes(b"\x7fELF MOCK VENDOR UI slot A v2\n" * 50)
+    (root / "customer/demo.sh").write_text(md.DEMO_SH.replace("ota bookkeeping", "ota bookkeeping v2"))
+    (root / "customer/new").unlink()
+    (root / "new_customer/demo_v9").write_bytes(b"\x7fELF MOCK VENDOR UI slot B v2\n" * 50)
+    (root / "customer/temp.tar.gz").write_bytes(b"vendor tarball")
+    before = tree_digest(root)
+    rc, out = run(srv, root, "status")
+    check("1a: status detects every vendor-update trace (read-only)",
+          rc == 0 and "vendor update      : DETECTED" in out and "temp.tar.gz exists" in out
+          and "is no longer Meraki+" in out and "no guard line any more" in out
+          and "slot A (stock UI) changed" in out and "boot flag is not set" in out
+          and "run ./install.sh again" in out and tree_digest(root) == before, out[-1200:])
+    rc, out = run(srv, root, "install", "--gesture", "--persist")
+    check("1a: re-install repairs it (guard line, slot B, flag), exit 0", rc == 0
+          and md5f(root / "new_customer/demo_v9") == MERAKIPLUS and (root / "customer/new").exists()
+          and sum(mp.GUARD_KEY in l for l in (root / "customer/demo.sh").read_text().splitlines()) == 1, out[-600:])
+    check("1a: the replaced vendor slot-B program got its own backup; the first backup is unchanged",
+          any(p.name.startswith("demo_v9.vendor.") for p in (ours / "boot").iterdir())
+          and md5f(ours / "boot/demo_v9.vendor") == orig_b)
+    check("1a: the vendor tarball itself is left alone", (root / "customer/temp.tar.gz").exists())
+    rc, out = run(srv, root, "status")
+    check("1a: after the repair only the pending tarball is reported",
+          "temp.tar.gz exists" in out and "no longer Meraki+" not in out and "slot A (stock UI) changed" not in out
+          and "demo.sh changed" not in out and "no guard line" not in out, out[-800:])
+    (root / "customer/temp.tar.gz").unlink()
+    (root / "customer/demo.sh").write_text(md.DEMO_SH.replace("ota bookkeeping", "ota bookkeeping v3") +
+                                           "\n" + mp.GUARD_LINE + "\n")
+    rc, out = run(srv, root, "status")
+    check("1a: a changed demo.sh that still has the guard line is reported", "demo.sh changed since" in out, out[-600:])
+    rc, out = run(srv, root, "revert")
+    check("1a: revert still works after all that", rc == 0 and [e for _, e in ui(root)] == ["/customer/demo_v9"])
+
+
+def health_fail(flag, expect):
+    def steps(srv, root):
+        (root / flag).write_text("1\n")
+        rc, out = run(srv, root, "install", "--health-seconds", "12")
+        check(f"health check ({flag}): install reports failure (exit 1)", rc == 1 and "HEALTH CHECK FAILED" in out
+              and expect in out and "./revert.sh --ip" in out, out[-700:])
+        check(f"health check ({flag}): Meraki+ stays installed (no automatic rollback in 1a)",
+              md5f(root / "new_customer/demo_v9") == MERAKIPLUS)
+        rc, out = run(srv, root, "revert")
+        check(f"health check ({flag}): revert.sh brings the stock UI back", rc == 0
+              and [e for _, e in ui(root)] == ["/customer/demo_v9"], (out[-500:], ui(root)))
+    return steps
+
+
+def degraded(srv, root):
+    (root / "no_stat").write_text("1\n")
+    (root / "no_sha256").write_text("1\n")
+    rc, out = run(srv, root, "install")
+    check("no stat / no sha256sum on the display: install still succeeds (md5 gate, warning)",
+          rc == 0 and "could not be measured" in out and "healthy and running" in out, out[-600:])
+    check("ls -e fallback parser: 7 s and a padded day",
+          mp.ls_e_age("crw-rw----    1 root     root        4,  65 Sun Nov  2 10:00:00 2026 /dev/ttyS1",
+                      "Sun Nov  2 10:00:07 2026") == 7 and mp.ls_e_age("crw 4, 65 Nov 2 10:00", "x") is None)
+
+
+def tampered(srv, root):
+    bad = pathlib.Path(tempfile.mkdtemp(prefix="merakiplus-bad-"))
+    for n in mp.BIN_MD5:
+        (bad / n).write_bytes((ROOT / "bin" / n).read_bytes())
+    b = bytearray((bad / "merakiplus").read_bytes())
+    b[-1] ^= 1
+    (bad / "merakiplus").write_bytes(bytes(b))
+    before = tree_digest(root)
+    rc, out = run(srv, root, "install", "--bin-dir", str(bad))
+    check("tampered binary: refused by the sha256 check, nothing changed",
+          rc == 1 and "sha256" in out and "expected 42cd7b9d" in out and tree_digest(root) == before, out[-400:])
+
+
 def not_a_display(srv, root):
     (root / "customer/test.sh").unlink()
     before = tree_digest(root)
@@ -296,5 +417,11 @@ if __name__ == "__main__":
     scenario("upgrade of a pre-rename install (legacy migration)", "stock_a", legacy_upgrade)
     scenario("revert of a pre-rename install (legacy migration)", "stock_a", legacy_revert)
     scenario("revert --purge with both layouts present", "stock_a", legacy_purge)
+    scenario("1a hardening: sync order, sha256, leftovers, free space, vendor-update traces", "stock_a", hardening)
+    scenario("1a health check: the new UI crashes", "stock_a", health_fail("crash_new_ui", "stopped after"))
+    scenario("1a health check: the controller link is silent", "stock_a", health_fail("uart_dead", "no data from"))
+    scenario("1a health check: the UI does not open the link", "vendor_b", health_fail("no_uart_fd", "does not hold"))
+    scenario("1a: display without stat / sha256sum", "stock_a", degraded)
+    scenario("1a: tampered local binary", "stock_a", tampered)
     print(f"\nINSTALLER TESTS: {'ALL PASS' if not FAILS else str(len(FAILS)) + ' FAIL: ' + ', '.join(FAILS)}")
     sys.exit(1 if FAILS else 0)

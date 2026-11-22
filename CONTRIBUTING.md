@@ -80,10 +80,10 @@ The simulator can also be played interactively in the browser: `python3 sim/play
 2. Run the quick test loop above; describe in the PR what you ran (and whether it was tested on a
    real machine — which model/firmware).
 3. If you change the binaries in `bin/`, describe how they were built and update `bin/MD5SUMS`
-   **and** `BIN_MD5` in `tools/merakiplus.py` (CI checks that they match). Build `bin/` with the **official**
+   **and** `BIN_MD5` + `BIN_SHA256` in `tools/merakiplus.py` (CI checks that they match). Build `bin/` with the **official**
    zig 0.17.1 tarball from ziglang.org (not a distribution package such as Homebrew's) and its own
    `ZIG_GLOBAL_CACHE_DIR`; only then are the files byte-identical to CI's fresh builds. The sounds in `audio/` are generated:
-   change `tools/gen_audio.py`, run it, and update `AUDIO_MD5` in `tools/merakiplus.py`. Never commit
+   change `tools/gen_audio.py`, run it, and update `AUDIO_MD5` + `AUDIO_SHA256` in `tools/merakiplus.py`. Never commit
    audio or video files you did not make (no vendor `.mp3`/`.mp4`; `tests/hygiene.py` refuses them).
 4. Update `CHANGELOG.md` and the relevant documentation.
 5. Use `merakiplus` for every technical name (paths, env vars `MERAKIPLUS_*`, binaries, logs). Names from

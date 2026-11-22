@@ -175,20 +175,26 @@ steaming, grinding or hot water — while you install. The installer asks before
 **What the installer does, step by step:**
 
 1. **Checks the display (read-only)** — fingerprint (A/B layout, ARMv7, slot B mounted), what is
-   running, which slot starts at boot, free space.
+   running, which slot starts at boot, free space (for updates too), and traces of a manufacturer
+   update (see *Security and OTA*).
 2. **Fetches and verifies the binary** — from your local `bin/` (git clone) or GitHub, always
-   md5-checked against the expected value. Anything else is rejected.
+   checked against the expected SHA-256 and md5. Anything else is rejected.
 3. **Takes a backup once** — slot B's existing program and `/customer/demo.sh` are copied and
    md5-verified. Backups are never overwritten by later runs.
-4. **Installs into slot B** — upload, md5 check, atomic rename on the same file system (no
-   half-written files, not even on power loss).
+4. **Installs into slot B** — upload to a temp file, md5 check (plus SHA-256 when the display has
+   `sha256sum`), `sync`, then an atomic rename on the same file system: the data is on flash before
+   the name changes, so a power cut leaves the complete old or the complete new file, never a
+   half-written one. Temp files left by an interrupted run are removed.
 5. **Optional** — `--gesture` (the gesture switcher; adds **one** line to `demo.sh`) and
    `--persist` (sets the boot flag). Without these, neither `demo.sh` nor the flag is touched.
 6. **Activates without a reboot** — either via the manufacturer's own watchdog (exec reload), or by a
    "stop-first" switch: the original UI is paused, Meraki+ is started and verified, and only then is
    the original stopped. If anything goes wrong, the original UI is resumed automatically.
-7. **Verifies** — the running program is slot B's binary with the correct md5, is still running
-   after 5 s, and slot A is unchanged. Finally it prints the revert command.
+7. **Verifies and health-checks** — the running program is slot B's binary with the correct md5 and
+   slot A is unchanged; then for **60 s** the same Meraki+ process must keep running (no crash, no
+   watchdog restart) and must be receiving data from the coffee machine's controller. If not, it
+   says so and tells you to run `./revert.sh` (there is no automatic rollback yet). Finally it prints
+   the revert command.
 
 **Options:**
 
@@ -325,10 +331,13 @@ Without `--persist` the machine starts the original UI. With `--persist`: see th
   the slot that is *not* running, after which the boot flag is switched. Consequences: an OTA can
   **overwrite Meraki+ in slot B**, **remove the gesture line** in `demo.sh` or **switch the boot
   slot**. If you want to keep Meraki+ permanently, block `oss.sanbontft.com` in your router/DNS (and
-  optionally `pro.ip-api.com`, which the stock UI contacts). After an OTA: run `./install.sh` again
-  (optionally `./revert.sh` first).
-- **Planned:** signed Meraki+ updates with automatic rollback and vendor-OTA detection — see
-  [docs/ota-plan.md](docs/ota-plan.md) (not implemented yet).
+  optionally `pro.ip-api.com`, which the stock UI contacts). `./install.sh --ip ADDR` (and the
+  read-only `python3 tools/merakiplus.py status --ip ADDR`) **detect** the traces of a manufacturer
+  update — a downloaded update waiting for the next boot, slot B or `demo.sh` replaced, slot A
+  changed, the boot flag cleared — and say so. After an OTA: run `./install.sh` again with the options
+  you used before (optionally `./revert.sh` first).
+- **Planned:** signed Meraki+ updates with automatic rollback — see [docs/ota-plan.md](docs/ota-plan.md)
+  (phase 1a, the hardened installer, is done; the rest is not implemented yet).
 - **Meraki+ itself** opens no new network ports and contacts no servers. Its only network function
   is bringing up the display's Wi-Fi at boot from slot B (the same configuration the stock UI uses;
   the password is never logged).

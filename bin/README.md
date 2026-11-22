@@ -11,7 +11,8 @@
 | `merakiplus_sim_arm` | SIM build (no hardware) as static ARMv7 | `src/merakiplus.c -DMERAKIPLUS_SIM` |
 | `merakiplus_sim-linux-x86_64`, `merakiplus_sim-macos-arm64` | SIM builds for running `sim/` without zig | `src/merakiplus.c -DMERAKIPLUS_SIM` |
 
-`MD5SUMS` lists every file; `tools/merakiplus.py` refuses to install anything whose md5 differs.
+`MD5SUMS` lists every file; `tools/merakiplus.py` pins SHA-256 and md5 of every file it installs
+(`BIN_SHA256`/`BIN_MD5`, `AUDIO_SHA256`/`AUDIO_MD5`) and refuses anything that differs. Releases also carry `SHA256SUMS`.
 **No vendor firmware, libraries or scripts are included here or anywhere in this repository.**
 
 ## Provenance of the ARM binaries
@@ -121,8 +122,8 @@ excluded from that check; `tests/hygiene.py` still md5-gates every file in `bin/
 
 GitHub releases are maintained automatically by `.github/workflows/release.yml`: a `v*` tag push, a
 manual dispatch, or a push to `main` that bumps `VERSION` past the latest release builds, runs the
-full quick test gate and publishes the committed `bin/` assets (device binary, sound helper, ARM SIM, Linux SIM,
-macOS SIM, `MD5SUMS`) with the CHANGELOG section as notes. Re-runs update the existing release
+full quick test gate and publishes the committed `bin/` assets (device binary, sound helper, switcher, `grab_shim.so`, the three
+WAVs from `audio/`, ARM SIM, Linux SIM, macOS SIM, `MD5SUMS`, `SHA256SUMS`) with the CHANGELOG section as notes. Re-runs update the existing release
 instead of creating a duplicate. The macOS SIM asset is the committed build from the table above —
 CI does not rebuild it (no macOS runner needed), it ships exactly what `bin/MD5SUMS` lists.
 
