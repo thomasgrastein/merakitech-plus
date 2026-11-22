@@ -90,6 +90,13 @@ The simulator can also be played interactively in the browser: `python3 sim/play
    releases before the 2026-11-19 rebrand exist only in the *legacy-compat* block of
    `tools/merakiplus.py` (install/revert migration); `tests/hygiene.py` fails if they appear elsewhere.
 
+## Releases
+
+**Releases are published only after explicit approval from the maintainer.** Other owners run these
+builds on their machines, so a release is a decision, not a side effect: do not bump the version or
+trigger the release workflow without prior agreement. CI may build and test any commit; publishing a
+release (version tag + assets) is reserved to the maintainer.
+
 ## Bug reports
 
 Use the "Bug report" issue template. Include: machine (Gen 1/Gen 2), Meraki+ version
