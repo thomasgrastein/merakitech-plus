@@ -1,7 +1,7 @@
 # Meraki+ — a community UI for the round display of MerakiTech espresso machines
 
 [![CI](https://github.com/thomasgrastein/merakitech-plus/actions/workflows/ci.yml/badge.svg)](https://github.com/thomasgrastein/merakitech-plus/actions/workflows/ci.yml)
-![version](https://img.shields.io/badge/Meraki%2B-v6.21-c9955c)
+![version](https://img.shields.io/badge/Meraki%2B-v6.22-c9955c)
 ![license](https://img.shields.io/badge/license-MIT-blue)
 ![status](https://img.shields.io/badge/status-unofficial%20%C2%B7%20experimental-red)
 
@@ -129,6 +129,11 @@ available to go back to.
   time) and stops each one by itself: the shot by weight, the steam at the milk temperature; each has its
   own STOP. Steam pressure is a bit lower while the shot runs
   ([details](docs/concurrent-brew-steam.md)).
+- **Hot water by weight or manual** (v6.22) — on a controller that can weigh hot water (firmware **> 5.1.2**,
+  e.g. 5.1.4) WATER stops by itself at the set weight, as in the stock UI; with *WATER MODE = MANUAL* — or on an
+  older controller, where Meraki+ offers **manual hot water only** (exactly the stock UI's rule) — it runs until
+  you tap **STOP WATER**. Meraki+ reads the controller's version from the normal status poll and shows it under
+  *SYSTEM → DIAGNOSTICS → CONTROLLER* ([details](docs/water-dosing-compat.md)).
 - **Center-hold gesture (optional, `--gesture`)** — hold one finger in the middle of the stock UI's
   screen for 5 seconds to switch to Meraki+ without a reboot (works from the first boot after
   installation). To go back: *gear → SYSTEM → STOCK UI → SWITCH TO ORIGINAL NOW*.
@@ -143,7 +148,7 @@ available to go back to.
 - **Boot selection in the UI** — *SYSTEM → STOCK UI → BOOT UI* selects whether the machine starts Meraki+ or the
   original UI.
 - **DIAGNOSTICS** (advanced, behind SYSTEM — or one tap on HOME's error line) — connection, error codes
-  E1–E3, version, boot slot, network status, raw counters.
+  E1–E3, version, controller firmware, boot slot, network status, raw counters.
 - **English and Danish** (switch under *SYSTEM → DISPLAY · SOUND → UI LANGUAGE*).
 - **Simulator + E2E tests** — the whole UI can run without a machine against a simulated controller
   (`sim/`), and CI runs the tests on every change.
@@ -153,6 +158,7 @@ available to go back to.
 | | |
 |---|---|
 | **Machine** | MerakiTech **Gen 1** with the round touch display (display module Sanbon SAT62091M, Linux 4.9). Developed and tested on one Gen 1. **Gen 2: not tested** — the installer checks a fingerprint and stops without changing anything if the display does not look as expected. Please report your results in an issue. |
+| **Designed and tested against** | Controller (MCU) firmware **V5.1.4** (`MEM03_V514_260923`) and the stock display app build **1.1.1-69** — the versions on the reference machine. Every frame Meraki+ sends was reverse-engineered from and verified against these two. Other controller versions: hot water by weight is used only when the controller reports a version **> 5.1.2** (the stock UI's own rule); older or unreadable versions get manual hot water. Nothing else has been tested on other firmware — please report your *DIAGNOSTICS → CONTROLLER* version in an issue. |
 | **Network** | The machine on your Wi-Fi (set up in the stock app/UI), and your computer on the **same local network**. |
 | **Computer** | macOS or Linux (Windows: use WSL) with `bash`, `python3` ≥ 3.8 and `git`. Nothing else. |
 | **The machine's IP address** | Find it in your router's list of devices, or let the installer find it with `--scan`. |
@@ -243,6 +249,7 @@ requires a clone of the repository.
 |---|---|
 | **Start an activity** | **Hold** one of the four icons (grind · brew · water · steam) for ~0.7 s — the number under the icon is what it will do. Or **tap** the icon to open its page and hold **HOLD TO START** there. |
 | **Stop an activity** | Tap the big red **STOP** button (*STOP WATER / STOP BREW / STOP GRIND / STOP STEAM*). Green message = the controller has confirmed the stop. Yellow/red message = try again. Auto-stop at the target weight works as in the stock UI. |
+| **Hot water** | *WATER MODE = AUTO* (controller > 5.1.2): stops by itself at the *HOT WATER* weight. *MANUAL* — and always on an older controller (the WATER page then says *MANUAL HOT WATER* and has no weight rows) — runs until you tap **STOP WATER**; there is no time limit, exactly as in the stock UI. |
 | **Get around** | **Tap an icon** = that function's page (GRIND · BREW · WATER · STEAM: live values + its settings). **Tap the gear** = SYSTEM (DISPLAY · CLOCK · SCHEDULE · STOCK UI · DIAGNOSTICS; tap a section to open it). **Back** = the arrow at the top of every page, or swipe right. |
 | **Change a setting** | Open the function's page (or SYSTEM) → tap the row → `−`/`+` (hold to go fast) → **SAVE**. Swipe down or tap the arrow at the top to cancel. |
 | **Language** | *gear → DISPLAY → UI LANGUAGE* (English/Danish; the DISPLAY row shows the current language). The stock UI's language is set separately (*STOCK UI → STOCK LANG.*). |
@@ -437,7 +444,7 @@ description (including the gesture, the watchdog race and the OTA table) is in
 | [docs/nfc-plan.md](docs/nfc-plan.md) | *Planned:* the NFC reader reversed (bus, chip, stock tag format and flow) and the phased NFC plan |
 | [docs/concurrent-brew-steam.md](docs/concurrent-brew-steam.md) | *Feasibility:* brewing and steaming at the same time — MCU/stock/Meraki+ evidence, sim result, hardware runbook |
 | [docs/ota-plan.md](docs/ota-plan.md) | *Planned:* secure updates — storage/tooling/vendor-OTA inventory, signed manifests, boot launcher with automatic rollback, phases and tests |
-| [docs/water-dosing-compat.md](docs/water-dosing-compat.md) | *Design:* hot water by weight needs controller firmware > 5.1.2 — how the stock UI detects it (words 80..87) and how Meraki+ should gate it |
+| [docs/water-dosing-compat.md](docs/water-dosing-compat.md) | Hot water by weight needs controller firmware > 5.1.2 — how the stock UI detects it (words 80..87), how Meraki+ gates it and its manual hot water (v6.22) |
 | [docs/dev/](docs/dev/) | Developer notes (full UI spec with changelog, parity analysis) |
 | [sim/README.md](sim/README.md) | The simulator and the E2E tests |
 

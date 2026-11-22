@@ -3,6 +3,39 @@
 All notable changes to Meraki+. Details (with evidence, frames and test figures) are in
 [docs/dev/UI_v6.md](docs/dev/UI_v6.md) under *CHANGES-v6.x*. All dates are 2026.
 
+## [6.22] — 2026-11-22
+**Hot water: the controller-version gate + manual hot water.** Hot water *by weight* (AUTO: the controller stops at
+the set weight) exists only on controllers with firmware **> 5.1.2**. Meraki+ now reads the controller's firmware
+string from the status poll it already sends and applies **exactly the stock UI's rule**; every other controller gets
+**manual hot water**, which Meraki+ now has. Details: [docs/water-dosing-compat.md §10–§11](docs/water-dosing-compat.md#11-implementation-v622).
+Designed and tested against controller firmware **V5.1.4** and the stock display build **1.1.1-69** (README).
+### Added
+- **Controller version gate:** words 80..87 (copy 88..95) are parsed; AUTO only when the version is **> 5.1.2**, the
+  copy matches and there is no scale fault. Not polled yet, empty, unparsable, copy mismatch or ≤ 5.1.2 → manual only
+  (fail-safe). No new UART traffic; no owner override; `config.json` is never written by the gate.
+- **Manual hot water:** the stock legacy water page's frames — start `cmd6 sub19 len1` word 19 = 1, stop word 19 = 0.
+  Runs until **STOP WATER**; no time limit and no display-side weight stop (as in the stock UI). Used on controllers
+  that cannot dose and for *WATER MODE = MANUAL* on those that can (v6.21: *"WATER = MANUAL · USE STOCK UI"*).
+- **Manual-only WATER page:** no HOT WATER / WATER MODE rows, *MANUAL HOT WATER · RUNS UNTIL YOU TAP STOP* and the
+  reason (*CONTROLLER < 5.1.3: NO WEIGHT STOP* / *CONTROLLER VERSION UNKNOWN* / *SCALE FAULT: NO WEIGHT STOP*). HOME: *MAN.*
+  under the water icon, *MANUAL · RUNS UNTIL STOP* while it runs. EN + DA.
+- **DIAGNOSTICS › CONTROLLER:** the controller's firmware string and what hot water can do (*AUTO + MANUAL* /
+  *MANUAL ONLY* / *MANUAL (SCALE)*).
+- **Scale fault** (word 35 bits `0x1000`/`0x0400`): manual only; a running AUTO dose is stopped once with word 16 = 0
+  if the controller has not cleared it itself (stock `hotWaterUpdate`); HOME says *SCALE FAULT* (code E2).
+- Simulator: event `mcu_version`, manual water by word 19 alone, the scale-fault model, state `water`; scenarios
+  `dosing_version_detect`, `dosing_gated_old_mcu`, `dosing_scale_fault` (sim/CONTRACT.md addendum v6.22).
+### Changed
+- **Frame policy:** word 19 is a start word (needs the new manual-water intent); **word 16 = 1 is rejected unless the
+  controller doses** — the AUTO start can never reach a controller ≤ 5.1.2. On such a controller STOP WATER sends
+  word 19 = 0 only (never word 16).
+- The 0x89 answer stays the stock build string `1.1.1-69` (the controller derives a brew-boiler offset from it).
+### Verification
+- UI self-test **582 / 0** EN and DA, also as a 32-bit ARMv7 binary (new section *v6.22 water dosing gate*, 13 checks);
+  `sim/selftest.py` **204 / 0** (T16 new); full E2E **51/51 EN** and **51/51 DA** (`dosing_version_detect` 28, `dosing_gated_old_mcu` 44, `dosing_scale_fault` 34 checks), quick E2E 5/5; installer suite 140/140, launcher tests (96 power-cut states), switcher 55/0, hygiene + bin/ drift OK (official zig 0.17.1). The three new scenarios fail against the v6.21 SIM build (20/28, 20/44, 20/34).
+- **Not yet on a machine** (install waits for the next hardware session). The manual frame on a ≤ 5.1.2 controller
+  is the stock one but not hardware-tested here; manual mode on the 5.1.4 machine is to be verified live.
+
 ## [6.21] — 2026-11-22
 **Automatic rollback (OTA plan phase 1b) + the installer hardening of phase 1a.** Every Meraki+ version now lives
 complete in its own release directory, and a small **launcher** decides at every start which one runs — falling back on

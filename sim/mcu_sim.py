@@ -21,6 +21,15 @@ Model:
   * Manual STOP (v6.13, SIM_HANDOFF/UI_v6 §18): cmd6 sub16/sub19=0 (water,
     also in auto mode), sub22=0 (brew), sub6=0 (grind) run the MCU's own
     auto-stop path (post/drip/decay) and are ACKed; auto-stop is unchanged.
+  * Controller firmware string (v6.22, docs/water-dosing-compat.md): words 80..87
+    = "V5.1.4" + copy 88..95 (SENSOR_BASELINE, the 2026-11-16 capture). Event
+    "mcu_version" {"version": str, "copy": str|omitted = same} overrides both
+    (survives a reboot); "copy": null leaves 88..95 as they are. A write of word16=1
+    while the override is <= 5.1.2 / empty / unparsable is logged "legacy_word16"
+    (what such a controller does with it is unknown; merakiplus must never send it).
+    Hot water: active = word19 | word16 (hotwater-ctl 0x1B8C) — MANUAL = word19 alone
+    (sub19 len1, no word 9) starts, has no weight stop and no timeout; a scale fault
+    (word35 & 0x1400 only) stops AUTO (word16 = 0, weight branch 0x1C64) but not MANUAL.
   * DEEP SLEEP/WAKE (v6.14, SIM_HANDOFF/UI_v6 §19): word0=0 (cmd6 sub0 len2 [0,0])
     → ACK, then ≤0.5 s until deep sleep (sleep task 0x2F52): work_sta=0, outputs
     0, activities are stopped safely, regs are kept, and the UART is SILENT (the status
@@ -47,6 +56,7 @@ import json
 import math
 import os
 import random
+import re
 import select
 import socket
 import struct
@@ -141,6 +151,7 @@ class McuSim:
             self.regs[w] = v
         for w, v in serial_words().items():
             self.regs[w] = v
+        self.mcu_version = None       # v6.22: (version, copy) override of words 80..95, None = baseline V5.1.4
         for w, v in config_to_words(self.cfg).items():
             self.regs[w] = v
         # ---- phase machine ----
@@ -389,6 +400,9 @@ class McuSim:
                     self.do_reboot(cause="word30")
             if word in (26, 27) and w != 0:
                 self.alog.log(self.t, "calib_trigger", word=word, value=w)
+            if word == 16 and w != 0 and not self.mcu_version_dosing():
+                # v6.22: AUTO hot water to a controller that is not > 5.1.2 — never sent by the stock UI
+                self.alog.log(self.t, "legacy_word16", word=16, value=w)
         # boot push detection (PARITY §1.4)
         if sub == 1 and n == 30:
             self.boot_push_setup = True
@@ -704,6 +718,7 @@ class McuSim:
             self.regs[w] = v
         for w, v in serial_words().items():
             self.regs[w] = v
+        self._apply_mcu_version()     # v6.22: the injected firmware string survives a reset
         defaults = None
         if factory:
             # v6.14 power wake: CPU reset to the start values (REGISTERMAP §2,
@@ -796,6 +811,10 @@ class McuSim:
             return
         if r[3] != 0:
             self.pending = {"kind": "grind", "at": self.t + 0.39}
+        elif r[9] == 0 and r[19] == 1 and r[16] == 0 and not (r[34] or r[35] or r[36]):
+            # v6.22: MANUAL hot water — word19 alone (sub19 len1, the stock legacy page);
+            # hotwater-ctl 0x1B8C recomputes active=(word19|word16) every cycle, no word 9.
+            self.pending = {"kind": "water", "at": self.t + 0.18}
         elif r[9] != 0:
             if r[16] == 1 or r[19] == 1:
                 self.pending = {"kind": "water", "at": self.t + 0.18}
@@ -836,8 +855,17 @@ class McuSim:
         self._sync_ft()
         el = self.t - a["t0"]
         kind = a["kind"]
+        # v6.22: a scale fault alone (word35 & 0x1400) is not in hotwater-ctl's cancel masks
+        # (word35 & 0x8001); only the AUTO weight branch (0x1C64) checks it and clears word16.
+        # MANUAL water keeps running (the display has to stop it).
+        scale_only = (not r[34] and not r[36] and r[35] and not (r[35] & ~0x1400))
+        if kind == "water" and scale_only:
+            if not a.get("manual"):
+                r[16] = 0
+                self._stop_activity("scale fault word35&0x1400 (auto weight branch)")
+                return
         # error → safety stop (MCU stop path, SESSION §5.2)
-        if r[34] or r[35] or r[36]:
+        elif r[34] or r[35] or r[36]:
             self._stop_activity("fault E1/E2/E3")
             return
         # v6.13 (SIM_HANDOFF/UI_v6 §18): MANUAL stop. The control tasks
@@ -915,7 +943,11 @@ class McuSim:
             # v6.13: a manual stop (word16/19=0) is handled at the top of the tick —
             # also in auto mode — and stops at the CURRENT weight (r[39]=w),
             # not at the target. The auto-stop snaps to target+overshoot as before.
-            if w >= a["target"]:
+            # v6.22: MANUAL (word19) has no weight stop and no timeout (controller 0x1C64 only
+            # checks the weight when word16 ≠ 0) — it runs until word19 = 0.
+            if a.get("manual"):
+                pass
+            elif w >= a["target"]:
                 r[39] = (a["target"] + a["overshoot"]) & 0xFFFF
                 self._stop_activity("weight target word39≥word17")
             elif el > 180:
@@ -1922,10 +1954,43 @@ class McuSim:
             return {"ok": True}
         return {"ok": False, "error": f"unknown cmd: {cmd}"}
 
+    # ---- v6.22: controller firmware string (words 80..87 + copy 88..95) ----
+    @staticmethod
+    def _ver_words(text):
+        b = (text or "").encode("ascii", "replace")[:16].ljust(16, b"\x00")
+        return [b[2 * i] | (b[2 * i + 1] << 8) for i in range(8)]
+
+    def _apply_mcu_version(self):
+        mv = getattr(self, "mcu_version", None)
+        if not mv:
+            return
+        ver, copy = mv
+        self.regs[80:88] = self._ver_words(ver)
+        if copy is not False:
+            self.regs[88:96] = self._ver_words(ver if copy is None else copy)
+
+    def mcu_version_dosing(self):
+        """The stock rule (mcu_has_hot_water_weight_ui 0x10885C): words 80..87 > 5.1.2."""
+        raw = b"".join(bytes((w & 0xFF, w >> 8)) for w in self.regs[80:88]).split(b"\x00")[0]
+        m = re.fullmatch(rb"[A-Za-z]{0,6}(\d{1,4})\.(\d{1,4})\.(\d{1,4})", raw)
+        return bool(m) and tuple(int(x) for x in m.groups()) > (5, 1, 2)
+
     def inject(self, ev):
         """Sim-side event (from the runner/scenario)."""
         typ = ev.get("type")
         r = self.regs
+        if typ == "mcu_version":
+            # v6.22 (additive): {"version": "V5.1.2"} (copy = same), {"copy": "V5.1.3"} (mismatch),
+            # {"copy": null} (88..95 untouched), {"version": ""} (not reported). Survives a reboot.
+            copy = ev.get("copy", None) if "copy" in ev else None
+            if "copy" in ev and ev["copy"] is None:
+                copy = False
+            self.mcu_version = (str(ev.get("version", "")), copy)
+            self._apply_mcu_version()
+            self.alog.log(self.t, "mcu_version", version=self.mcu_version[0],
+                          copy=None if copy is None else (copy if copy is not False else "unchanged"),
+                          dosing=self.mcu_version_dosing())
+            return True
         if typ == "fault":
             for w, key in ((34, "e1"), (35, "e2"), (36, "e3")):
                 if key in ev:

@@ -2,7 +2,7 @@
 
 | File | What | Built from |
 |---|---|---|
-| `merakiplus` | **Meraki+ v6.21** device binary (static ARMv7, musl). Installed as `/new_customer/merakiplus/rel/<version>-<sha8>/demo_v9`. | `src/merakiplus.c` |
+| `merakiplus` | **Meraki+ v6.22** device binary (static ARMv7, musl). Installed as `/new_customer/merakiplus/rel/<version>-<sha8>/demo_v9`. | `src/merakiplus.c` |
 | `merakiplus_boot` | the launcher (static ARMv7, no UI/network/UART). Installed as `/new_customer/demo_v9`; starts the chosen release and rolls back (docs/ota-plan.md phase 1b) | `src/merakiplus_boot.c` |
 | `merakiplus_snd` | sound helper (ARMv7, dynamic against the display's glibc 2.28; `dlopen`s the display's own `libmi_*.so` at run time). Installed into each release directory, next to `audio/` | `src/merakiplus_snd.c` |
 | `switcher` | gesture switcher daemon (center-hold 5 s → stock to Meraki+), only with `--gesture` | `boot/switcher.c` |
@@ -18,6 +18,14 @@
 **No vendor firmware, libraries or scripts are included here or anywhere in this repository.**
 
 ## Provenance of the ARM binaries
+
+**v6.22 (2026-11-22, water dosing gate + manual hot water):** `merakiplus` (`184d76fd…`), `merakiplus_sim_arm` and the two
+host SIM builds were rebuilt from the v6.22 source with the official zig 0.17.1. The change is the controller-version gate for
+hot water by weight (words 80..87, already polled) and manual hot water (`cmd6 sub19 len1`, the stock legacy page's frame);
+docs/water-dosing-compat.md §10–§11. `merakiplus_boot`, `merakiplus_snd`, `switcher`, `tinj_hold`, `keyinj`,
+`grab_shim.so` and `audio/` are byte-identical to v6.21. **Not yet verified on a machine** (install waits for the next
+hardware session): covered by the UI self-test (EN + DA, also as a 32-bit ARM binary), `sim/selftest.py` and the full
+simulator E2E suite (EN + DA) incl. the three `dosing_*` scenarios.
 
 **v6.21 (2026-11-22, launcher + automatic rollback, OTA plan phase 1b):** new `merakiplus_boot` (`c0035acd…`);
 `merakiplus`, `merakiplus_sim_arm` and the two host SIM builds rebuilt from the v6.21 source (release-relative sound files,
@@ -106,14 +114,14 @@ self-test and the simulator E2E suite.
 
 | File | md5 (this repo) | Built with |
 |---|---|---|
-| `merakiplus` (V6.21) | `624a561f50e7c0cdab4ca14186b69d8b` | `./build.sh` → `build/merakiplus` |
-| `merakiplus_sim_arm` (V6.21) | `86f6fa71b879928ae734550de07a78f7` | `./build.sh` → `build/merakiplus_sim_arm` |
+| `merakiplus` (V6.22) | `184d76fdce9015339eceec68bf190774` | `./build.sh` → `build/merakiplus` |
+| `merakiplus_sim_arm` (V6.22) | `b4c39d8668fb17b1d8b485e2302fee18` | `./build.sh` → `build/merakiplus_sim_arm` |
 | `merakiplus_snd` (V6.18.1) | `a7659c176b8ef78385b0b612a69e81ca` | `./build.sh` → `build/merakiplus_snd` |
 | `switcher` | `e02a463c16278545c04b8e4022b8369f` | `./build.sh` → `build/switcher` |
 | `tinj_hold` | `e9806fb92e9b8a7e506a34639173c648` | `./build.sh` → `build/tinj_hold` |
 | `keyinj` | `a0cbd4bc2a670abe0e250ec34a193843` | `./build.sh` → `build/keyinj` |
-| `merakiplus_sim-linux-x86_64` (V6.21) | `f96f108867f327e69f73deade02dcd9e` | `zig cc -target x86_64-linux-musl -DMERAKIPLUS_SIM -O2 -static -s src/merakiplus.c -lm` |
-| `merakiplus_sim-macos-arm64` (V6.21) | `946a37d73b8dceb45de9ea3bb430d81b` | `zig cc -DMERAKIPLUS_SIM -O2 -s src/merakiplus.c -lm` (Mach-O builds are not bit-reproducible) |
+| `merakiplus_sim-linux-x86_64` (V6.22) | `077d2920c037341018b4ddad9b48613b` | `zig cc -target x86_64-linux-musl -DMERAKIPLUS_SIM -O2 -static -s src/merakiplus.c -lm` |
+| `merakiplus_sim-macos-arm64` (V6.22) | `32c84b512621e56313dbac2204edf08b` | `zig cc -DMERAKIPLUS_SIM -O2 -s src/merakiplus.c -lm` (Mach-O builds are not bit-reproducible) |
 
 The ARM builds above are reproducible: running `./build.sh` on the same sources with the **official**
 zig 0.17.1 release (the ziglang.org tarball CI installs) gives the same md5 on macOS and Linux,

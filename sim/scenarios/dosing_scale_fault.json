@@ -1,0 +1,256 @@
+{
+  "name": "dosing_scale_fault",
+  "ui_only": true,
+  "description": "v6.22: dosing controller (V5.1.4), AUTO water running; a scale fault (word35 0x1000) stops the dose (the controller clears word16 itself — merakiplus would send word16=0 once if it still saw it set, selftest), the UI switches to MANUAL ONLY (no rows, DIAGNOSTICS 'MANUAL (SCALE)'), no new start while the error is active; the fault clears -> dosing again. Then an old controller (V5.1.2) runs MANUAL water and a scale fault (0x0400) does NOT stop it; STOP = sub19 [0].",
+  "duration_s": 34,
+  "events": [
+    {
+      "t": 2,
+      "target": "ui",
+      "cmd": "action",
+      "name": "water"
+    },
+    {
+      "t": 4,
+      "target": "sim",
+      "event": {
+        "type": "fault",
+        "e2": 4096,
+        "dur": 4
+      }
+    },
+    {
+      "t": 5,
+      "target": "runner",
+      "op": "snapshot",
+      "label": "scale-fault"
+    },
+    {
+      "t": 5.5,
+      "target": "ui",
+      "cmd": "action",
+      "name": "water"
+    },
+    {
+      "t": 12,
+      "target": "sim",
+      "event": {
+        "type": "mcu_version",
+        "version": "V5.1.2"
+      }
+    },
+    {
+      "t": 13,
+      "target": "ui",
+      "cmd": "action",
+      "name": "water"
+    },
+    {
+      "t": 16,
+      "target": "sim",
+      "event": {
+        "type": "fault",
+        "e2": 1024,
+        "dur": 3
+      }
+    },
+    {
+      "t": 17.5,
+      "target": "runner",
+      "op": "snapshot",
+      "label": "manual-scale-fault"
+    },
+    {
+      "t": 22,
+      "target": "ui",
+      "cmd": "action",
+      "name": "water_stop"
+    }
+  ],
+  "expect": [
+    {
+      "kind": "sim_log",
+      "assert": "write_words",
+      "sub": 9,
+      "words": [
+        1,
+        0,
+        870,
+        0,
+        60,
+        3,
+        60,
+        1,
+        400,
+        0,
+        0
+      ],
+      "t0": 1.9,
+      "t1": 3
+    },
+    {
+      "kind": "phase",
+      "t": 3.5,
+      "window": 0.5,
+      "value": "WATER"
+    },
+    {
+      "kind": "sim_log",
+      "assert": "activity_stop",
+      "activity": "water",
+      "reason_contains": "scale",
+      "t0": 3.9,
+      "t1": 4.6
+    },
+    {
+      "kind": "word",
+      "word": 16,
+      "t": 5,
+      "window": 0.5,
+      "value": 0
+    },
+    {
+      "kind": "state",
+      "path": "water.scale_fault",
+      "t": 5,
+      "window": 0.6,
+      "equals": true
+    },
+    {
+      "kind": "state",
+      "path": "water.dosing",
+      "t": 5,
+      "window": 0.6,
+      "equals": false
+    },
+    {
+      "kind": "state",
+      "path": "water.rows",
+      "t": 5,
+      "window": 0.6,
+      "equals": 0
+    },
+    {
+      "kind": "state",
+      "path": "water.start",
+      "t": 5,
+      "window": 0.6,
+      "equals": "manual"
+    },
+    {
+      "kind": "state",
+      "path": "water.diag_wd",
+      "t": 5,
+      "window": 0.6,
+      "equals": "TX_DV_WD_FAULT"
+    },
+    {
+      "kind": "phase",
+      "t": 5.5,
+      "window": 0.5,
+      "value": "ERROR"
+    },
+    {
+      "kind": "state",
+      "path": "toast.id",
+      "t": 5.9,
+      "window": 0.4,
+      "equals": "TX_G_ERROR"
+    },
+    {
+      "kind": "sim_log",
+      "assert": "no_writes_between",
+      "t0": 4,
+      "t1": 8,
+      "except_subs": [
+        0,
+        1,
+        112,
+        16
+      ]
+    },
+    {
+      "kind": "state",
+      "path": "water.dosing",
+      "t": 10,
+      "window": 1,
+      "equals": true
+    },
+    {
+      "kind": "state",
+      "path": "water.rows",
+      "t": 10,
+      "window": 1,
+      "equals": 2
+    },
+    {
+      "kind": "state",
+      "path": "water.scale_fault",
+      "t": 10,
+      "window": 1,
+      "equals": false
+    },
+    {
+      "kind": "sim_log",
+      "assert": "write_words",
+      "sub": 19,
+      "words": [
+        1
+      ],
+      "t0": 12.9,
+      "t1": 14
+    },
+    {
+      "kind": "phase",
+      "t": 15,
+      "window": 0.8,
+      "value": "WATER"
+    },
+    {
+      "kind": "state",
+      "path": "water.scale_fault",
+      "t": 17.5,
+      "window": 0.8,
+      "equals": true
+    },
+    {
+      "kind": "state",
+      "path": "work_sta",
+      "t0": 16.3,
+      "t1": 19.5,
+      "equals": 779,
+      "mode": "all"
+    },
+    {
+      "kind": "sim_log",
+      "assert": "write_words",
+      "sub": 19,
+      "words": [
+        0
+      ],
+      "t0": 21.9,
+      "t1": 23
+    },
+    {
+      "kind": "sim_log",
+      "assert": "activity_stop",
+      "activity": "water",
+      "reason_contains": "manual",
+      "t0": 21.9,
+      "t1": 23.2
+    },
+    {
+      "kind": "phase",
+      "t": 26,
+      "window": 1,
+      "value": "READY"
+    },
+    {
+      "kind": "sim_log",
+      "assert": "no_write_word",
+      "word": 16,
+      "t0": 8,
+      "t1": 34
+    }
+  ]
+}

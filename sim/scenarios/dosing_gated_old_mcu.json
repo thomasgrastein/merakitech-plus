@@ -1,0 +1,333 @@
+{
+  "name": "dosing_gated_old_mcu",
+  "ui_only": true,
+  "sim": {
+    "init_events": [
+      {
+        "type": "mcu_version",
+        "version": "V5.1.2"
+      }
+    ]
+  },
+  "description": "v6.22: the controller reports 'V5.1.2' -> MANUAL ONLY (the stock rule '> 5.1.2'). The WATER page has no rows; HOLD TO START sends the legacy manual frame sub19 len1 [1] (never sub9/sub16), the water runs past the word17 target with no weight stop and no time limit, STOP sends sub19 [0] only. Then the gate follows the words at runtime: empty string -> manual, copy mismatch -> manual, V5.1.4 -> dosing (both rows). config.json is never written.",
+  "duration_s": 36,
+  "events": [
+    {
+      "t": 2,
+      "target": "ui",
+      "cmd": "touch",
+      "layout": "water",
+      "ms": 90
+    },
+    {
+      "t": 3,
+      "target": "runner",
+      "op": "snapshot",
+      "label": "water-page-manual"
+    },
+    {
+      "t": 3.5,
+      "target": "ui",
+      "cmd": "touch",
+      "layout": "start",
+      "ms": 800
+    },
+    {
+      "t": 9,
+      "target": "runner",
+      "op": "snapshot",
+      "label": "manual-running"
+    },
+    {
+      "t": 17,
+      "target": "ui",
+      "cmd": "action",
+      "name": "water_stop"
+    },
+    {
+      "t": 22,
+      "target": "sim",
+      "event": {
+        "type": "mcu_version",
+        "version": ""
+      }
+    },
+    {
+      "t": 25,
+      "target": "sim",
+      "event": {
+        "type": "mcu_version",
+        "version": "V5.1.4",
+        "copy": "V5.1.3"
+      }
+    },
+    {
+      "t": 28,
+      "target": "sim",
+      "event": {
+        "type": "mcu_version",
+        "version": "V5.1.4"
+      }
+    },
+    {
+      "t": 29,
+      "target": "ui",
+      "cmd": "touch",
+      "layout": "water",
+      "ms": 90
+    },
+    {
+      "t": 31,
+      "target": "runner",
+      "op": "snapshot",
+      "label": "water-page-auto"
+    }
+  ],
+  "expect": [
+    {
+      "kind": "state",
+      "path": "water.mcu_ver",
+      "t": 1.5,
+      "window": 1,
+      "equals": "V5.1.2"
+    },
+    {
+      "kind": "state",
+      "path": "water.ver_state",
+      "t": 1.5,
+      "window": 1,
+      "equals": "ok"
+    },
+    {
+      "kind": "state",
+      "path": "water.dosing",
+      "t": 1.5,
+      "window": 1,
+      "equals": false
+    },
+    {
+      "kind": "state",
+      "path": "water.start",
+      "t": 1.5,
+      "window": 1,
+      "equals": "manual"
+    },
+    {
+      "kind": "state",
+      "path": "water.diag_wd",
+      "t": 1.5,
+      "window": 1,
+      "equals": "TX_DV_WD_MAN"
+    },
+    {
+      "kind": "state",
+      "path": "tab",
+      "t": 3,
+      "window": 0.4,
+      "equals": "water"
+    },
+    {
+      "kind": "state",
+      "path": "shown.rows",
+      "t": 3,
+      "window": 0.4,
+      "equals": 0
+    },
+    {
+      "kind": "sim_log",
+      "assert": "write_words",
+      "sub": 19,
+      "words": [
+        1
+      ],
+      "t0": 3.9,
+      "t1": 5
+    },
+    {
+      "kind": "sim_log",
+      "assert": "ack_words",
+      "sub": 19,
+      "words": [
+        1
+      ],
+      "t0": 3.9,
+      "t1": 5.3
+    },
+    {
+      "kind": "sim_log",
+      "assert": "activity_start",
+      "activity": "water",
+      "t0": 4,
+      "t1": 5.5
+    },
+    {
+      "kind": "state",
+      "path": "tab",
+      "t": 6,
+      "window": 0.6,
+      "equals": "home"
+    },
+    {
+      "kind": "phase",
+      "t": 6,
+      "window": 1,
+      "value": "WATER"
+    },
+    {
+      "kind": "state",
+      "path": "water.run_manual",
+      "t": 7,
+      "window": 1,
+      "equals": true
+    },
+    {
+      "kind": "word_min_seen",
+      "word": 39,
+      "min": 500,
+      "t0": 12,
+      "t1": 16.5
+    },
+    {
+      "kind": "state",
+      "path": "phase",
+      "t0": 15,
+      "t1": 16.8,
+      "equals": "WATER",
+      "mode": "all"
+    },
+    {
+      "kind": "sim_log",
+      "assert": "write_words",
+      "sub": 19,
+      "words": [
+        0
+      ],
+      "t0": 16.9,
+      "t1": 17.8
+    },
+    {
+      "kind": "word",
+      "word": 33,
+      "mask": "0x020A",
+      "value": 0,
+      "t": 18,
+      "window": 0.5
+    },
+    {
+      "kind": "sim_log",
+      "assert": "activity_stop",
+      "activity": "water",
+      "reason_contains": "manual",
+      "t0": 16.9,
+      "t1": 18
+    },
+    {
+      "kind": "stop_ok",
+      "min": 1,
+      "max_fail": 0,
+      "t0": 17,
+      "t1": 21
+    },
+    {
+      "kind": "phase",
+      "t": 21,
+      "window": 1,
+      "value": "READY"
+    },
+    {
+      "kind": "sim_log",
+      "assert": "no_write_word",
+      "word": 16,
+      "t0": 0,
+      "t1": 36
+    },
+    {
+      "kind": "sim_log",
+      "assert": "no_writes_between",
+      "t0": 2,
+      "t1": 36,
+      "except_subs": [
+        0,
+        1,
+        112,
+        19
+      ]
+    },
+    {
+      "kind": "state",
+      "path": "water.ver_state",
+      "t": 23.5,
+      "window": 1,
+      "equals": "none"
+    },
+    {
+      "kind": "state",
+      "path": "water.start",
+      "t": 23.5,
+      "window": 1,
+      "equals": "manual"
+    },
+    {
+      "kind": "state",
+      "path": "water.diag_wd",
+      "t": 23.5,
+      "window": 1,
+      "equals": "TX_DV_WD_MAN"
+    },
+    {
+      "kind": "state",
+      "path": "water.ver_state",
+      "t": 26.5,
+      "window": 1,
+      "equals": "copy"
+    },
+    {
+      "kind": "state",
+      "path": "water.dosing",
+      "t": 26.5,
+      "window": 1,
+      "equals": false
+    },
+    {
+      "kind": "state",
+      "path": "water.rows",
+      "t": 26.5,
+      "window": 1,
+      "equals": 0
+    },
+    {
+      "kind": "state",
+      "path": "water.ver_state",
+      "t": 29,
+      "window": 0.6,
+      "equals": "ok"
+    },
+    {
+      "kind": "state",
+      "path": "water.dosing",
+      "t": 29,
+      "window": 0.6,
+      "equals": true
+    },
+    {
+      "kind": "state",
+      "path": "shown.rows",
+      "t": 30.5,
+      "window": 0.8,
+      "equals": 2
+    },
+    {
+      "kind": "config",
+      "value": 1,
+      "t": 34,
+      "field": "hotWaterMode"
+    },
+    {
+      "kind": "state",
+      "path": "config_writes",
+      "t": 34,
+      "window": 1,
+      "equals": 0
+    }
+  ]
+}

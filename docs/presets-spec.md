@@ -80,6 +80,12 @@ on load. It is not clamped.
 | WATER | `hw` | `autoHotWaterTarget` (S_HOTW) | 17 | 300..5000 / 100 | 150 G |
 | WATER | `hm` | `hotWaterMode` (S_HOTMODE) | — (config only; Meraki+ uses it in the UI) | 1..2 | |
 
+> **v6.22 compatibility ([water-dosing-compat.md §10–§11](water-dosing-compat.md#11-implementation-v622)):** the WATER group
+> is stored and applied to `config.json` on every machine (they are config values), but on a controller that cannot dose
+> (≤ 5.1.2, version unknown, scale fault) the WATER page hides both rows and every start is manual; the apply toast should
+> then add that water is manual. A preset never changes the gate.
+
+
 `breakTime` (locked), `headTemper` (machine setting) and every SYSTEM row are deliberately not preset fields.
 Words 112/113 are packed pairs. Apply uses the existing `pack112`/`pack113`, so a preset that sets the pre-infusion switch
 never changes `breakTime` (113 lo).

@@ -2,6 +2,13 @@
  * 480x480 screen, v6.16: feature parity (settings + activity control), its own visual
  * design system, boot-slot integration, product name + two languages — and from v6.4 a SIM build.
  *
+ * v6.22 = v6.21 + WATER DOSING GATE + MANUAL HOT WATER (docs/water-dosing-compat.md §10-§11). Hot water by weight (AUTO: the controller
+ *  stops at word 17) exists only on controllers > 5.1.2. The controller's firmware string (words 80..87, copy 88..95 — already in the
+ *  sub56 len56 poll) is parsed with the stock rule (mcu_has_hot_water_weight_ui 0x10885C: > 5.1.2); empty / not polled / garbage / copy
+ *  mismatch / scale fault (word 35 & 0x1400) -> MANUAL ONLY: the WATER page hides HOT WATER + WATER MODE, frame_policy rejects word 16 = 1.
+ *  NEW: manual hot water — start cmd6 sub19 len1 word 19 = 1, stop word 19 = 0 (stock legacy page 0x105118); also for WATER MODE = MANUAL
+ *  on a dosing controller (v6.21: "use stock UI"). No time limit, no display-side weight stop (as stock). A scale fault stops a running AUTO
+ *  dose once (word 16 = 0, stock 0x115BD8). DIAGNOSTICS › CONTROLLER shows the firmware string. config.json is never written by the gate.
  * v6.20 = v6.19 + STEAM DURING A BREW (docs/concurrent-brew-steam.md §9, hardware-verified §11): act_guard() lets a latched steam
  *  start through when a brew (pre-infusion or extraction) is the ONLY running activity (no steam bits, word 24 = 0, no grind / hot-water
  *  bit, no error, queue idle). HOME shows HOLD·STEAM next to STOP BREW during a brew; once steam latches it is STOP STEAM (the existing
@@ -311,7 +318,7 @@ static int  sim_net_on=1;
 #define KBD_NAME "k62091"
 #define BL_SYSFS "/sys/class/pwm/pwmchip0/pwm2/duty_cycle"
 #define BL_EN_SYSFS "/sys/class/pwm/pwmchip0/pwm2/enable"   /* v6.14: stock uikit_os_back_light_off/on 0xC2278 = blpwm_set_enable(2,0/1) */
-#define MERAKIPLUS_VERSION "V6.21"
+#define MERAKIPLUS_VERSION "V6.22"
 
 /* ---- v6.10: pressure estimate (UI_v6.md §16) ----
  * Word 51 (SPI2 ADC channel 0xA, REGISTERMAP: pressure OR pump-drive candidate) -> bar with ONE linear anchor:
@@ -445,17 +452,21 @@ static uint8_t last_tx[80]; static int last_tx_len=0;   /* latest cmd6 frame (se
  * No intent can allow TRIG_NEVER — merakiplus never calibrates and never reboots. */
 #define WBIT(n) (1u<<(n))
 #define TRIG_NEVER (WBIT(26)|WBIT(27)|WBIT(30))
-#define TRIG_START (WBIT(3)|WBIT(6)|WBIT(9)|WBIT(16)|WBIT(22)|WBIT(24))
+#define TRIG_START (WBIT(3)|WBIT(6)|WBIT(9)|WBIT(16)|WBIT(19)|WBIT(22)|WBIT(24))   /* v6.22: + 19 (manual hot water) */
 #define I_NONE  0u
 #define I_GRIND (WBIT(3)|WBIT(6))      /* grind-start + grind-tare   (sub3 len4)  */
 #define I_BREW  (WBIT(9)|WBIT(22))     /* start trigger + brew active (sub5 len18) */
 #define I_WATER (WBIT(9)|WBIT(16))     /* start trigger + auto flag  (sub9 len11) */
 #define I_STEAM (WBIT(24))             /* steam switch               (sub24 len8) */
+/* v6.22: MANUAL hot water = word 19 alone (sub19 len1), the stock legacy water page's frame: set_manual_hot_water_switch 0x105118
+ * usart_send(6,19,1) (word 19 = 1 start / 0 stop). Word 16 = 1 (AUTO, weight-dosed) is additionally gated on the controller version in
+ * frame_policy (wd_dosing(), docs/water-dosing-compat.md). */
+#define I_WATERMAN (WBIT(19))         /* manual hot water           (sub19 len1) */
 /* v6.14: word 0 = 0 (PowerOff) is not a start word but a "power off" word: it may ONLY be sent with this explicit intent
  * (pw_off_step, stock powerOff 0x149074: usart_send(6,0,2) with word 0 = 0). Without intent it is rejected (WJ_TRIG). */
 #define I_POWEROFF (WBIT(0))
-_Static_assert(((I_GRIND|I_BREW|I_WATER|I_STEAM)&TRIG_NEVER)==0,"no intent may allow words 26/27/30");
-_Static_assert(((I_GRIND|I_BREW|I_WATER|I_STEAM)&~TRIG_START)==0,"intent may only name start words");
+_Static_assert(((I_GRIND|I_BREW|I_WATER|I_WATERMAN|I_STEAM)&TRIG_NEVER)==0,"no intent may allow words 26/27/30");
+_Static_assert(((I_GRIND|I_BREW|I_WATER|I_WATERMAN|I_STEAM)&~TRIG_START)==0,"intent may only name start words");
 _Static_assert((I_POWEROFF&(TRIG_NEVER|TRIG_START))==0,"power-off intent is neither a start word nor a service word");
 _Static_assert((TRIG_NEVER&TRIG_START)==0,"the trigger classes must not overlap");
 enum { WJ_NONE=0, WJ_RO, WJ_FULL, WJ_BAND, WJ_TRIG, WJ_RANGE };
@@ -1308,7 +1319,7 @@ enum { K0=0, KT, KSUB, KLAB, KCHIP, KBTN, KBTNS, KTITLE, KPSUB, KSPL, KDL, KDV, 
  X(TX_SL_HOTW, K0, "HOT WATER", "VARMT VAND") \
  X(TX_SN_HOTW, KNOTE, "STOPS AUTOMATICALLY AT THIS WEIGHT", "STOPPER AUTOMATISK VED DENNE VÆGT") \
  X(TX_SL_HOTMODE, K0, "WATER MODE", "VAND-TILSTAND") \
- X(TX_SN_HOTMODE, KNOTE, PRODUCT " STARTS AUTO ONLY", PRODUCT " STARTER KUN AUTO") \
+ X(TX_SN_HOTMODE, KNOTE, "AUTO STOPS AT THE WEIGHT · MANUAL AT STOP", "AUTO STOPPER VED VÆGTEN · MANUEL VED STOP") \
  X(TX_SL_HOTT, K0, "WATER SENSOR", "VAND-SENSOR") \
  X(TX_SN_HOTT, KNOTE, "MEASURED ONLY · NO TARGET EXISTS", "KUN MÅLT · INTET MÅL FINDES") \
  X(TX_SL_UILANG, K0, "UI LANGUAGE", "UI-SPROG") \
@@ -1393,7 +1404,6 @@ enum { K0=0, KT, KSUB, KLAB, KCHIP, KBTN, KBTNS, KTITLE, KPSUB, KSPL, KDL, KDV, 
  X(TX_G_NOCFG, KT, "CONFIG MISSING · START BLOCKED", "CONFIG MANGLER · START SPÆRRET") \
  X(TX_G_OOR, KT, "CONFIG OUT OF SPEC · FIX FIRST", "CONFIG UDEN FOR SPEC · RET FØRST") \
  X(TX_G_GRINDTIME, KT, "GRIND = TIME · USE STOCK UI", "KVÆRN = TID · BRUG STOCK-UI") \
- X(TX_G_WATERMAN, KT, "WATER = MANUAL · USE STOCK UI", "VAND = MANUEL · BRUG STOCK-UI") \
  X(TX_T_POLICY, KT, "BLOCKED BY A SAFETY RULE", "SPÆRRET AF EN SIKKERHEDSREGEL") \
  X(TX_T_QFULL, KT, "BUSY · TRY AGAIN", "OPTAGET · PRØV IGEN") \
  X(TX_T_RANGE, KT, "OUT OF RANGE", "UDEN FOR GRÆNSER") \
@@ -1690,6 +1700,25 @@ enum { K0=0, KT, KSUB, KLAB, KCHIP, KBTN, KBTNS, KTITLE, KPSUB, KSPL, KDL, KDV, 
  X(TX_DG_SNDCAP, KDF, "SOUND", "LYD") \
  X(TX_DL_SND, KDL, "SOUND · VOLUME", "LYD · LYDSTYRKE") \
  X(TX_DL_SND_LAST, KDL, "LAST SOUND", "SIDSTE LYD") \
+ /* v6.22: water dosing gate — one contiguous block (TX_ER_E2_SCALE .. TX_DV_WD_FAULT; the v6.17 string-count rule leaves it out) */ \
+ X(TX_ER_E2_SCALE, KSUB, "SCALE FAULT", "VÆGTFEJL") \
+ X(TX_H_HOLD_WATER_MAN, KSUB, "HOLD · HOT WATER · MANUAL", "HOLD · VARMT VAND · MANUEL") \
+ X(TX_H_WATER_MAN, KSUB, "MANUAL · RUNS UNTIL STOP", "MANUEL · KØRER TIL STOP") \
+ X(TX_A_WATER_MAN, K0, "MAN.", "MAN.") \
+ X(TX_W_MAN_T, KST, "MANUAL HOT WATER", "MANUELT VARMT VAND") \
+ X(TX_W_MAN_RUN, KST, "RUNS UNTIL YOU TAP STOP", "LØBER TIL DU TRYKKER STOP") \
+ X(TX_W_WHY_OLD, KST, "CONTROLLER < 5.1.3: NO WEIGHT STOP", "STYRING < 5.1.3: INGEN VÆGT-STOP") \
+ X(TX_W_WHY_UNK, KST, "CONTROLLER VERSION UNKNOWN", "STYRINGENS VERSION UKENDT") \
+ X(TX_W_WHY_FAULT, KST, "SCALE FAULT: NO WEIGHT STOP", "VÆGTFEJL: INGEN VÆGT-STOP") \
+ X(TX_T_WATER_SCALE, KT, "SCALE FAULT · WATER STOPPED", "VÆGTFEJL · VAND STOPPET") \
+ X(TX_DG_MCUCAP, KDF, "CONTROLLER", "STYRING") \
+ X(TX_DL_MCU_VER, KDL, "FIRMWARE", "FIRMWARE") \
+ X(TX_DL_MCU_WD, KDL, "HOT WATER", "VARMT VAND") \
+ X(TX_DV_MCU_NONE, KDL, "NOT REPORTED", "IKKE MELDT") \
+ X(TX_DV_MCU_COPY, KDL, "COPY DIFFERS", "KOPI AFVIGER") \
+ X(TX_DV_WD_AUTO, KDL, "AUTO + MANUAL", "AUTO + MANUEL") \
+ X(TX_DV_WD_MAN, KDL, "MANUAL ONLY", "KUN MANUEL") \
+ X(TX_DV_WD_FAULT, KDL, "MANUAL (SCALE)", "MANUEL (VÆGT)") \
  X(TX_DV_SND_ON, KDV, "ON · %d", "TIL · %d") \
  X(TX_DV_SND_STOCK, KDV, "STOCK · %d", "STOCK · %d") \
  X(TX_DV_SND_OFF, KDV, "OFF", "FRA") \
@@ -2557,6 +2586,55 @@ static void settings_load(void){
 static uint16_t pack112(int sw,int press){ return (uint16_t)((sw?0x0100:0)|(press&0xFF)); }
 static uint16_t pack113(int t,int brk){ return (uint16_t)(((t&0xFF)<<8)|(brk&0xFF)); }
 
+/* ================= v6.22: WATER DOSING GATE (docs/water-dosing-compat.md §5 + decisions §10) =================
+ * "Dosing" = hot water in AUTO, stopped BY THE CONTROLLER when the brew scale passes word 17 (controller fw 0x1C64..0x1C84). Only
+ * controllers > 5.1.2 have it (release note 5.1.4 "Added hot water weighing"). The controller reports its firmware string read-only in
+ * words 80..87 (ASCII, lo byte first: "V5.1.4") and a copy in words 88..95 — both are in the sub56 len56 poll merakiplus already sends.
+ * The rule is the stock UI's, copied exactly (maintainer decision 1, no owner override):
+ *   stock mcu_has_hot_water_weight_ui 0x10885C = compare_versions(word80 string, "5.1.2") > 0   (literal 0x178FB0)
+ *   stock hotWaterScaleFault 0x112BD8 = word 35 & (0x1000 | 0x0400) -> MANUAL; a running AUTO dose is stopped (hotWaterUpdate 0x115B80:
+ *   mirror word 16 != 0 -> word 16 = 0, usart_send(6,16,1))
+ * Stricter than stock on purpose (fail-safe: a wrong answer only costs convenience): the string must be <= 6 letters + N.N.N (digits only,
+ * <= 4 per part) and nothing else, and the copy (88..95) must match byte for byte. Empty, not polled yet, garbage, copy mismatch, scale
+ * fault -> MANUAL ONLY: the WATER page hides HOT WATER + WATER MODE, a start is the manual frame, frame_policy rejects word 16 = 1.
+ * config.json is NEVER written by the gate (hotWaterMode = 1 on an old controller is simply not used — like stock). */
+enum { MV_NONE=0, MV_OK, MV_BAD, MV_COPY };
+static int ver_parse(const char*s,int v[3]){
+    int k=0; while(k<6&&((s[k]>='A'&&s[k]<='Z')||(s[k]>='a'&&s[k]<='z'))) k++;
+    for(int p=0;p<3;p++){
+        int n=0,d=0; while(s[k]>='0'&&s[k]<='9'){ if(++d>4) return 0; n=n*10+(s[k]-'0'); k++; }
+        if(!d) return 0; v[p]=n;
+        if(p<2){ if(s[k]!='.') return 0; k++; }
+    }
+    return s[k]==0;
+}
+/* the firmware string as reported (o: printable, upper case, '?' for anything else; "" when empty) + its state */
+static int mcu_ver_read(char*o,size_t n,int v[3]){
+    char a[17],b[17]; o[0]=0;
+    for(int w=80;w<96;w++) if(!reg_seen[w]) return MV_NONE;
+    for(int k=0;k<8;k++){ a[2*k]=(char)(reg[80+k]&0xFF); a[2*k+1]=(char)(reg[80+k]>>8); b[2*k]=(char)(reg[88+k]&0xFF); b[2*k+1]=(char)(reg[88+k]>>8); }
+    a[16]=b[16]=0;
+    size_t L=strlen(a), j=0;
+    for(size_t i=0;i<L&&j+1<n;i++){ unsigned char c=(unsigned char)a[i]; if(c>='a'&&c<='z') c=(unsigned char)(c-32);
+        o[j++]=((c>='A'&&c<='Z')||(c>='0'&&c<='9')||c=='.'||c=='-'||c=='_')?(char)c:'?'; }
+    o[j]=0;
+    if(!L) return MV_NONE;
+    if(memcmp(a,b,16)) return MV_COPY;
+    return ver_parse(a,v)?MV_OK:MV_BAD;
+}
+static int wd_scale_fault(void){ return reg_seen[35]&&(reg[35]&0x1400)!=0; }
+static int wd_ver_dosing(void){     /* the version alone says "> 5.1.2" */
+    char b[20]; int v[3]; if(mcu_ver_read(b,sizeof b,v)!=MV_OK) return 0;
+    return v[0]!=5?v[0]>5:(v[1]!=1?v[1]>1:v[2]>2);
+}
+static int wd_dosing(void){ return wd_ver_dosing()&&!wd_scale_fault(); }
+/* the next WATER start is MANUAL: no dosing, or WATER MODE = MANUAL (config hotWaterMode 2) */
+static int water_manual(void){ return !wd_dosing()||sv(S_HOTMODE)!=1; }
+/* why there is no dosing (the manual-only WATER page's last line): 0 controller <= 5.1.2, 1 version not (validly) reported, 2 scale fault */
+enum { WDW_OLD=0, WDW_UNK, WDW_FAULT };
+static int wd_why(void){ char b[20]; int v[3]; if(mcu_ver_read(b,sizeof b,v)!=MV_OK) return WDW_UNK; return wd_ver_dosing()?WDW_FAULT:WDW_OLD; }
+static struct { int fault, due, man; long n_fault, n_stop; } wd;   /* fault: last seen; due: an AUTO stop still has to go out; man: the running/last water was MANUAL */
+
 /* ---- frame policy (declared at the write queue): per-word spec interval + trigger words ---- */
 static int word_in(int si,int v){ return set_valid(&SET[si],v); }
 static int word_ok(int idx,uint16_t v){
@@ -2564,7 +2642,7 @@ static int word_ok(int idx,uint16_t v){
     case 0:   return v<=1;                               /* power: 1 = PowerOn; 0 = PowerOff only w. I_POWEROFF (frame_policy) — v6.14 */
     case 1:   return v==0;                               /* 0=awake; 1 (sleep/drain) is never sent */
     case 2:   return word_in(S_GRINDMODE,v);
-    case 3: case 6: case 9: case 16: case 22: case 24: return v<=1;   /* start words (intent checked in frame_policy) */
+    case 3: case 6: case 9: case 16: case 19: case 22: case 24: return v<=1;   /* start words (intent checked in frame_policy); v6.22: + 19 */
     case 4:   return word_in(S_GRINDW,v);
     case 5: case 13: case 15: return v==60;              /* hardcoded recipe words [fuart_thread 0x146810] */
     case 11:  return word_in(S_BREWT,v);
@@ -2575,7 +2653,7 @@ static int word_ok(int idx,uint16_t v){
     case 112: return (v>>8)<=1 && word_in(S_PIPRESS,v&0xFF);
     case 113: return word_in(S_PITIME,v>>8);             /* lo byte = breakTime: arbitrary byte, no effect */
     case 114: return word_in(S_HEADT,v);
-    default:  return v==0;                               /* 7,8,10,12,18..21,26..31: always 0 */
+    default:  return v==0;                               /* 7,8,10,12,18,20,21,26..31: always 0 */
     }
 }
 static int frame_policy(uint8_t sub,const uint16_t*w,int len,uint32_t intent){
@@ -2586,6 +2664,7 @@ static int frame_policy(uint8_t sub,const uint16_t*w,int len,uint32_t intent){
         if(idx<32&&v!=0){
             if(TRIG_NEVER&WBIT(idx)) return WJ_TRIG;                              /* calibration/reboot: never */
             if((TRIG_START&WBIT(idx))&&!(intent&WBIT(idx))) return WJ_TRIG;       /* start word without intent */
+            if(idx==16&&!wd_dosing()) return WJ_TRIG;                             /* v6.22: AUTO hot water only on a dosing controller */
         }
         if(!word_ok(idx,v)) return WJ_RANGE;
     }
@@ -2621,7 +2700,8 @@ static int setting_mcu_push(int i,int v){
 /* ================= activity recipes (PARITY §3.1-3.4; observed frames, byte-for-byte) =================
  * GRIND  [L BREW.md W1]     cmd6 sub3 len4  : 1, dose, 60, 1
  * BREW   [L BREW.md W3]     cmd6 sub5 len18 : 60,0,0,0,1,0,temp,0,60,gear,60,0,water,0,0,0,0,1
- * WATER  [L HOTWATER.md W1] cmd6 sub9 len11 : 1,0,temp,0,60,gear,60,1,water,0,0
+ * WATER  [L HOTWATER.md W1] cmd6 sub9 len11 : 1,0,temp,0,60,gear,60,1,water,0,0   (AUTO; only on a dosing controller, v6.22)
+ * WATER  MANUAL (v6.22)     cmd6 sub19 len1 : 1   (stock legacy page set_manual_hot_water_switch 0x105118 usart_send(6,19,1))
  * STEAM  [S SESSION.md §10] cmd6 sub24 len8 : 1,target,0,0,0,0,0,0   (stop: word24=0)
  * Only the config-derived fields are substituted; all other words are as in the atlas. Each
  * start frame states explicitly which start words it may set (I_*); words 26/27/30 in the
@@ -2643,7 +2723,9 @@ static int act_push(int kind){
         if(!wq_push_t(5,b,18,I_BREW)){ wq.n=0; return 0; }      /* never half sequences */
         return 1;
     }
-    case ACT_WATER: { uint16_t h[11]={1,0,(uint16_t)sv(S_BREWT),0,60,(uint16_t)sv(S_STEAMG),60,1,(uint16_t)sv(S_HOTW),0,0}; return wq_push_t(9,h,11,I_WATER); }
+    case ACT_WATER: {
+        if(water_manual()){ uint16_t m[1]={1}; return wq_push_t(19,m,1,I_WATERMAN); }   /* v6.22: manual — runs until word 19 = 0 (no timeout, like stock) */
+        uint16_t h[11]={1,0,(uint16_t)sv(S_BREWT),0,60,(uint16_t)sv(S_STEAMG),60,1,(uint16_t)sv(S_HOTW),0,0}; return wq_push_t(9,h,11,I_WATER); }
     case ACT_STEAM: { uint16_t s[8]={1,(uint16_t)sv(S_STEAMT),0,0,0,0,0,0}; return wq_push_t(24,s,8,I_STEAM); }
     }
     return 0;
@@ -2668,7 +2750,8 @@ static int act_push_steam_stop(void){
  *   WATER cmd6 sub16 len1: word 16 = 0   aa 55 06 10 01 00 00 c0 0f   (+ sub19 len1 word 19 = 0 — only if word 19 != 0)
  *         MCU hotwater-ctl 0x1B8C: active = (word 19 | word 16) != 0, recomputed every cycle (0x1C44..0x1C4E). The MCU's weight stop
  *         itself writes word 16 = 0 (0x1C80). Stock: hotWaterStartStop 0x11468C usart_send(6,16,1) (auto mode, = merakiplus's
- *         start) and 0x114720 usart_send(6,19,1) (manual mode; merakiplus never starts it, but stops it if it is seen).
+ *         start) and 0x114720 usart_send(6,19,1) (manual mode; since v6.22 merakiplus starts it too — and on a controller that
+ *         is not known to be > 5.1.2 the stop is word 19 = 0 ONLY, the legacy page's frame).
  *   STEAM cmd6 sub24 len8: word 24 = 0   (unchanged from v6)
  * A stop frame contains only zeros: frame_policy does not reject it (start words <= 1, others == 0), and it can never start
  * anything. Same write queue as everything else: CRC + ACK wait + one retransmit. AUTO-STOP is unchanged: merakiplus sends nothing when the MCU
@@ -2680,6 +2763,9 @@ static int act_push_stop(int kind){
     case ACT_GRIND: return wq_push(6,&z,1);
     case ACT_BREW:  return wq_push(22,&z,1);
     case ACT_WATER:
+        /* v6.22: a controller that is not known to be > 5.1.2 gets only the legacy page's stop (word 19 = 0) — the stock UI never sends it
+         * word 16 (what word 16 does on <= 5.1.2 firmware is unknown, docs/water-dosing-compat.md §1.4) */
+        if(!wd_ver_dosing()) return wq_push(19,&z,1);
         if(!wq_push(16,&z,1)) return 0;
         if(reg_seen[19]&&reg[19]!=0&&!wq_push(19,&z,1)){ wq.n=n0; return 0; }   /* never a half water stop */
         return 1;
@@ -2780,6 +2866,7 @@ static const char* err_text(void){
     if(e2&0x02) return TR(TX_ER_E2_GROUP);
     if(e2&0x08) return TR(TX_ER_E2_STEAM);
     if(e2&0x10) return TR(TX_ER_E2_MILK);
+    if(e2&0x1400) return TR(TX_ER_E2_SCALE);                 /* v6.22: stock hotWaterScaleFault 0x112BD8 */
     return TR(TX_ER_UNKNOWN);
 }
 /* v6.11: the error code (E1/E2/E3) is no longer in the HOME subline (that is plain language); it is shown dimmed in the chart area
@@ -2788,7 +2875,7 @@ static const char* err_code(void){
     uint16_t e1=reg[34],e2=reg[35],e3=reg[36];
     if(e3&0x30) return "E3";
     if(e1&0x21) return "E1";
-    if(e2&0x1B) return "E2";
+    if(e2&0x141B) return "E2";                               /* v6.22: + the scale-fault bits 0x1400 */
     return "?";
 }
 
@@ -3770,7 +3857,9 @@ static int pg_list(int pg){ return pg>=PG_GRIND&&pg<=PG_SYS; }
 static int tier_of_page(int pg){ return pg-PG_T0; }
 static int rows_get(int pg,Row*r){
     int n=0;
-    if(pg_feat(pg)){ for(const signed char*p=FEAT_ROWS[pg-PG_GRIND];*p!=-1;p++){ r[n].kind=RK_SET; r[n++].a=*p; } }
+    if(pg_feat(pg)){ for(const signed char*p=FEAT_ROWS[pg-PG_GRIND];*p!=-1;p++){
+        if(pg==PG_WATER&&!wd_dosing()) break;          /* v6.22: no dosing -> the WATER page is manual-only (stock legacy page): no rows */
+        r[n].kind=RK_SET; r[n++].a=*p; } }
     else if(pg==PG_SYS){
         for(int sc=0;sc<NSEC;sc++){
             r[n].kind=RK_SEC; r[n++].a=(signed char)sc;
@@ -3811,7 +3900,8 @@ static int page_parent(int pg){ return pg==PG_DIAG?diag_from:PG_HOME; }
 #define DG_PWR (DG_RAW+28+4*DG_P+10)        /* v6.14: POWER BUTTON (state, word 0, press, last button, node) — where ABOUT was in v6.13 */
 #define DG_TIME (DG_PWR+28+3*DG_P+10)       /* v6.16: TIME · SCHEDULE (clock, zone/DST, auto off, last alarm sent, next pre-heat) — where ABOUT was in v6.15 */
 #define DG_SND (DG_TIME+28+3*DG_P+10)        /* v6.18: SOUND (mode + volume, last event + outcome) — where ABOUT was in v6.17 */
-#define DG_ABOUT (DG_SND+28+DG_P+10)         /* v6.18: + SOUND. v6.14: + POWER BUTTON. v6.11: + RAW COUNTERS. v6.3: heading of the ABOUT block (UI language, wordmark, tagline); v6.7: + the NET line; v6.9: + the GRAPH row; v6.10: + PRESSURE · ESTIMATE */
+#define DG_MCU (DG_SND+28+DG_P+10)           /* v6.22: CONTROLLER (firmware string from words 80..87 + what hot water can do) — where ABOUT was in v6.21 */
+#define DG_ABOUT (DG_MCU+28+DG_P+10)         /* v6.22: + CONTROLLER. v6.18: + SOUND. v6.14: + POWER BUTTON. v6.11: + RAW COUNTERS. v6.3: heading of the ABOUT block (UI language, wordmark, tagline); v6.7: + the NET line; v6.9: + the GRAPH row; v6.10: + PRESSURE · ESTIMATE */
 #define DG_BOTTOM (DG_ABOUT+76+24+11+22)
 static float scroll_max(int pg){
     if(pg==PG_DIAG) return DG_BOTTOM-(LIST_VY1-14);
@@ -3872,7 +3962,6 @@ static const char* act_guard(int kind,ms_t now){
         if(set_oor(s)) return TR(TX_G_OOR);
     }
     if(kind==ACT_GRIND&&sv(S_GRINDMODE)!=1) return TR(TX_G_GRINDTIME);
-    if(kind==ACT_WATER&&sv(S_HOTMODE)!=1)   return TR(TX_G_WATERMAN);
     return NULL;
 }
 static void act_request(int kind,ms_t now){
@@ -4671,6 +4760,7 @@ static int home_preheat_text(char*b,size_t n){
     struct tm lt; clk_local_at(at,&lt); char t[24]; fmt_hm(t,sizeof t,ah,am,1);
     snprintf(b,n,TR(TX_C_PREHEAT),TR(WD_TX[lt.tm_wday]),t); return 1;
 }
+#define WMAN_GAUGE 3000.f    /* v6.22: MANUAL hot water — the gauge is full at 300 g (0.1 g); there is no target */
 static void home_model(ms_t now){
     HomeM*m=&hm; memset(m,0,sizeof *m);
     int ph=act.ph, e=(ph==PH_DONE)?act.last_ph:ph; m->ph=ph; m->eff=e;
@@ -4678,12 +4768,14 @@ static void home_model(ms_t now){
     ms_t el=phase_active(ph)? now-(ph==PH_STEAM?stm.t0:act.t_act0) : act.done_ms; char tb[16]; snprintf(tb,sizeof tb,"%ld.%ld %s",(long)(el/1000),(long)((el%1000)/100),TR(TX_U_S));
     char a[16],b[16]; int ss=SS_IDLE;
     if(e==PH_GRIND||e==PH_WATER||e==PH_PRE||e==PH_EXT){
-        int tgt=(e==PH_GRIND)?sv(S_GRINDW):(e==PH_WATER?sv(S_HOTW):sv(S_BREWW));
+        int wm=e==PH_WATER&&wd.man;                                  /* v6.22: MANUAL hot water has no target — it runs until STOP */
+        int tgt=(e==PH_GRIND)?sv(S_GRINDW):(e==PH_WATER?(wm?0:sv(S_HOTW)):sv(S_BREWW));
         int src=wsl.src, w=wdbi(hero_v(ph<<8|src,s16(src),tgt,now)); if(w<0&&w>-30)w=0; if(w<-999)w=-999; if(w>9999)w=9999;   /* v6.9: latched source, conditioned, deadband */
         fmt_fix(m->hero,sizeof m->hero,w,1); m->unit=TR(TX_U_G);
         fmt_fix(a,sizeof a,tgt,1);
         snprintf(m->label,sizeof m->label,"%s",TR(e==PH_GRIND?TX_H_DOSE:TX_H_CUP));   /* v6.17: the target is said ONCE — in the sub-line ("STOPS AT 36.0 G"); v6.16 had it in the label too */
         if(ph==PH_DONE) snprintf(m->sub,sizeof m->sub,TR(TX_H_DONE_IN),tb);
+        else if(wm) snprintf(m->sub,sizeof m->sub,"%s",TR(TX_H_WATER_MAN));
         else snprintf(m->sub,sizeof m->sub,TR(TX_H_AUTOSTOP_G),a);
         float fr=tgt>0? (float)w/tgt : 0;
         if(e==PH_PRE||e==PH_EXT){
@@ -4695,6 +4787,7 @@ static void home_model(ms_t now){
             snprintf(m->svv[2],16,"%u",reg[52]);
         } else {
             m->gf=clampf(fr/1.15f,0,1); m->gmark=1/1.15f;
+            if(wm){ m->gf=clampf((float)w/WMAN_GAUGE,0,1); m->gmark=-1; }   /* v6.22: no target mark; the ring fills over WMAN_GAUGE */
             snprintf(m->svv[0],16,"%s",tb);
             if(e==PH_GRIND){ ss=SS_GRIND; snprintf(m->svv[1],16,"%u",reg[58]); snprintf(m->svv[2],16,"%u",reg[37]); }
             else { ss=SS_WATER; snprintf(m->svv[1],16,"%u",reg[52]); fmt_t10(b,sizeof b,reg[40],1); snprintf(m->svv[2],16,"%s°",b); }
@@ -4761,8 +4854,9 @@ static void home_model(ms_t now){
       fmt_fix(u,sizeof u,sv(S_GRINDW),1); snprintf(m->alab[ACT_GRIND],16,"%s %s",u,TR(TX_U_G));
       fmt_fix(u,sizeof u,sv(S_BREWW),-1); snprintf(m->alab[ACT_BREW],16,"%s %s",u,TR(TX_U_G));
       fmt_fix(u,sizeof u,sv(S_HOTW),-1);  snprintf(m->alab[ACT_WATER],16,"%s %s",u,TR(TX_U_G));
+      int wml=water_manual(); if(wml) snprintf(m->alab[ACT_WATER],16,"%s",TR(TX_A_WATER_MAN));   /* v6.22 */
       fmt_t10(u,sizeof u,sv(S_STEAMT),0); snprintf(m->alab[ACT_STEAM],16,"%s\xC2\xB0",u);
-      for(int k=0;k<4;k++){ static const int si[4]={S_GRINDW,S_BREWW,S_HOTW,S_STEAMT}; if(!SET[si[k]].loaded) snprintf(m->alab[k],16,"--"); } }
+      for(int k=0;k<4;k++){ static const int si[4]={S_GRINDW,S_BREWW,S_HOTW,S_STEAMT}; if(!SET[si[k]].loaded&&!(k==ACT_WATER&&wml)) snprintf(m->alab[k],16,"--"); } }
     if(cd.raw&&(ss==SS_BREW||ss==SS_BREW_M)) m->sl[1]=TR(TX_ST_PRAW);   /* v6.10: the RAW view shows raw numbers — so ≈BAR is not shown above them */
     m->chip=(ph==PH_STEAM)?steam_label(stm.kind):ph_name(ph);
     m->badge=m->conc?steam_label(m->sk):NULL;
@@ -4773,6 +4867,7 @@ static void home_model(ms_t now){
         int k=tch.target-T_ACT0;
         if(k==ACT_GRIND){ fmt_fix(a,sizeof a,sv(S_GRINDW),1); snprintf(m->sub,sizeof m->sub,TR(TX_H_HOLD_GRIND),a); }
         else if(k==ACT_BREW){ fmt_fix(a,sizeof a,sv(S_BREWW),1); snprintf(m->sub,sizeof m->sub,TR(TX_H_HOLD_BREW),a); }
+        else if(k==ACT_WATER&&water_manual()) snprintf(m->sub,sizeof m->sub,"%s",TR(TX_H_HOLD_WATER_MAN));   /* v6.22 */
         else if(k==ACT_WATER){ fmt_fix(a,sizeof a,sv(S_HOTW),1); snprintf(m->sub,sizeof m->sub,TR(TX_H_HOLD_WATER),a); }
         else { fmt_t10(a,sizeof a,sv(S_STEAMT),1); snprintf(m->sub,sizeof m->sub,TR(TX_H_HOLD_STEAM),a); }
     }
@@ -4805,6 +4900,20 @@ static void arc_targets(ms_t now){
         parc.vis=hm.pvis; parc.c_hi=C_TXT; parc.c_lo=rgb(160,167,180);   /* v6.11: v6.10's C_TXT2 — the progress ring is unchanged (C_TXT2 was raised for text) */ parc.f_t=hm.pf; parc.mark=-1;
     } else { garc.vis=0; parc.vis=0; }
 }
+/* v6.22: the scale-fault fallback (stock hotWaterUpdate 0x115B40..0x115BD8): on the rising edge of word 35 & 0x1400 a pending water start
+ * is dropped (hotWaterCancelStartWait) and, on a > 5.1.2 controller whose word 16 is still set, word 16 = 0 is sent ONCE (usart_send(6,16,1)).
+ * The controller's own weight branch stops on the same bits; a MANUAL run is not stopped (stock does not either). No config write. */
+static void wd_step(ms_t now){
+    int f=link_up(now)&&wd_scale_fault();
+    if(f&&!wd.fault){
+        wd.n_fault++;
+        if(act.pending==ACT_WATER) act.pending=ACT_NONE;
+        wd.due=wd_ver_dosing()&&reg_seen[16]&&reg[16]!=0;
+    }
+    wd.fault=f;
+    if(!f||(reg_seen[16]&&reg[16]==0)) wd.due=0;
+    if(wd.due&&!ro_mode){ uint16_t z=0; if(wq_push(16,&z,1)){ wd.due=0; wd.n_stop++; toast_show(TR(TX_T_WATER_SCALE),C_WARN,now); } }
+}
 static void ui_update(ms_t now){
     if(ui_start<0){ ui_start=now; ui_last=now; }
     float dt=(float)(now-ui_last); if(dt>200)dt=200; ui_last=now; ui_anim=0;
@@ -4812,11 +4921,13 @@ static void ui_update(ms_t now){
     steam_track(now);
     int p=phase_main(now);
     if(p!=act.raw){
-        if(phase_active(p)&&!phase_active(act.raw)){ act.t_act0=now; act.pending=ACT_NONE; }
+        if(phase_active(p)&&!phase_active(act.raw)){ act.t_act0=now; act.pending=ACT_NONE; wd.man=0; }
         if(!phase_active(p)&&phase_active(act.raw)){ act.t_done=now; act.done_ms=now-(act.raw==PH_STEAM?stm.t0:act.t_act0); }
         act.raw=p;
     }
     if(phase_active(p)) act.last_ph=p;
+    if(p==PH_WATER&&reg_seen[19]&&reg[19]!=0) wd.man=1;            /* v6.22: this water run is MANUAL (word 19) — sticky until the next activity */
+    wd_step(now);
     int ph=p; if(p>=PH_HEAT&&!phase_active(p)&&now-act.t_done<8000) ph=PH_DONE;
     if(ph!=act.ph){ act.c_from_hi=garc.c_hi; act.c_from_lo=garc.c_lo; act.t_col=now; act.ph=ph; }
     /* pending activity: ACK result / start timeout */
@@ -5253,6 +5364,7 @@ static void draw_start(ms_t now){
         W_end();
     }
 }
+#define WMAN_Y0 170          /* v6.22: the manual-only WATER page's three lines (title F_S, two F_XS lines) */
 static void draw_list(ms_t now){
     Row rw[ROW_MAX]; int n=rows_get(page,rw), vy1=list_vy1(page); int sc=(int)lroundf(scroll[page]); int prow=-1;
     draw_pback();
@@ -5263,6 +5375,7 @@ static void draw_list(ms_t now){
     uint32_t h=hi(hi(hi(hi(H0,sc),prow),page),sec_open*8+ui_lang);
     for(int k=0;k<n;k++){ h=hi(h,rw[k].kind*64+rw[k].a); if(rw[k].kind==RK_SET){ const Setting*q=&SET[rw[k].a]; h=hi(hi(h,q->val),q->loaded); } }
     h=hi(h,sv(S_TUNIT));
+    int wman=page==PG_WATER&&n==0; if(wman) h=hi(h,100+wd_why());      /* v6.22: the manual-only WATER page */
     if(page==PG_SYS){ char sm[40]; h=hi(hi(hi(h,bs.flag*8+bs.lock),switch_locked()),switch_mode()); for(int q=0;q<NSEC;q++){ sec_summary(q,sm,sizeof sm); h=hs(h,sm); } h=hi(hs(h,dgs),(int)dgc); }
     Rect vr=R(60,LIST_VY0,360,vy1-LIST_VY0);
     if(W_begin(W_LIST,vr,h)){
@@ -5308,6 +5421,12 @@ static void draw_list(ms_t now){
             }
         }
         if(c0>=0){ int ya=c0<LIST_VY0?LIST_VY0:c0, yb=c1>vy1?vy1:c1; if(yb>ya) fill_rect(64,ya,2,yb-ya,C_ACC,150); }   /* the open section's rows are tied together by a thin accent rail */
+        if(wman){   /* v6.22: no dosing — what HOLD TO START does here, and why there is no weight target (docs/water-dosing-compat.md §5.2) */
+            static const short WHY[3]={TX_W_WHY_OLD,TX_W_WHY_UNK,TX_W_WHY_FAULT}; int why=wd_why();
+            text_c(CX,WMAN_Y0,TR(TX_W_MAN_T),F_S,C_TXT,255);
+            text_c(CX,WMAN_Y0+34,TR(TX_W_MAN_RUN),F_XS,C_TXT2,255);
+            text_c(CX,WMAN_Y0+60,TR(WHY[why]),F_XS,why==WDW_FAULT?C_WARN:C_TXT3,255);
+        }
         edge_fade(vr,1,1);
         W_end();
     }
@@ -5618,6 +5737,17 @@ static void dg_caption(int yc,const char*cap,Rect vr){
     int tw=text_w(cap,F_XS);
     if(yc+11>=vr.y0&&yc<=vr.y1){ text_c(CX,yc,cap,F_XS,C_ACC,255); hspan(yc+5,84,CX-tw/2-12,C_LINE,255); hspan(yc+5,CX+tw/2+12,396,C_LINE,255); }
 }
+/* v6.22: the CONTROLLER block's texts (shared w/ the selftest): the firmware string as reported (words 80..87, read-only) and the hot water
+ * capability the gate derives from it. Owners quote this line in bug reports ("SYSTEM › DIAGNOSTICS › CONTROLLER"). */
+static void diag_mcu_text(char ver[28],uint32_t*vc,char wdt[28],uint32_t*wc){
+    char b[20]; int v[3], st=mcu_ver_read(b,sizeof b,v);
+    if(st==MV_NONE){ snprintf(ver,28,"%s",TR(TX_DV_MCU_NONE)); *vc=C_TXT2; }
+    else if(st==MV_COPY){ snprintf(ver,28,"%s",TR(TX_DV_MCU_COPY)); *vc=C_WARN; }
+    else { snprintf(ver,28,"%s",b); *vc=st==MV_OK?C_TXT:C_WARN; }
+    if(wd_dosing()){ snprintf(wdt,28,"%s",TR(TX_DV_WD_AUTO)); *wc=C_OK; }
+    else if(wd_ver_dosing()){ snprintf(wdt,28,"%s",TR(TX_DV_WD_FAULT)); *wc=C_WARN; }
+    else { snprintf(wdt,28,"%s",TR(TX_DV_WD_MAN)); *wc=C_TXT2; }
+}
 /* v6.14: the POWER BUTTON block's texts (shared w/ the selftest) */
 static void diag_pw_text(char st[28],uint32_t*stc,char w0[28],char cnt[28],char key[40],char*node,size_t nn,ms_t now){
     static const short S[4]={TX_DV_PW_ON,TX_DV_PW_OFFING,TX_DV_PW_OFF,TX_DV_PW_WAKING};
@@ -5644,10 +5774,12 @@ static void draw_diag(ms_t now){
     diag_lang_text(lng,sizeof lng); draw_pback();
     char pst[28],pw0[28],pcnt[28],pkey[40],pnode[80]; uint32_t pstc; diag_pw_text(pst,&pstc,pw0,pcnt,pkey,pnode,sizeof pnode,now);   /* v6.14 */
     char tck[28],tzn[40],tao[28],tal[40],tnx[72]; uint32_t tcc; diag_time_text(tck,&tcc,tzn,tao,tal,tnx,now);   /* v6.16 */
+    char mver[28],mwd[28]; uint32_t mvc,mwc; diag_mcu_text(mver,&mvc,mwd,&mwc);                                   /* v6.22 */
     int sc=(int)lroundf(scroll[PG_DIAG]); float mx=scroll_max(PG_DIAG);
     uint32_t h=hi(hi(hi(hi(hi(H0,sc),ui_lang),repush_count()),cd.raw),pressed(T_GRAPH)); for(int i=0;i<DG_N+DG_NB;i++) h=hi(hs(h,v[i]),(int)col[i]); h=hs(hs(hs(hs(h,exe),evt),pids),lng); h=hi(hs(h,nets),(int)netc); h=hi(hs(hs(h,panc),pnow),(int)pcol);
     h=hi(hs(hs(hs(hs(hs(h,pst),pw0),pcnt),pkey),pnode),(int)pstc);
     h=hi(hs(hs(hs(hs(hs(h,tck),tzn),tao),tal),tnx),(int)tcc);
+    h=hi(hi(hs(hs(h,mver),mwd),(int)mvc),(int)mwc);
     Rect vr=R(40,LIST_VY0,400,LIST_VY1-LIST_VY0);
     if(W_begin(W_DIAG,vr,h)){
         for(int i=0;i<DG_N+DG_NB;i++){
@@ -5695,6 +5827,11 @@ static void draw_diag(ms_t now){
         { char sm[40], sl[64]; uint32_t smc=snd_diag_text(sm,sizeof sm,sl,sizeof sl); const short L[2]={TX_DL_SND,TX_DL_SND_LAST}; const char*vv[2]={sm,sl};
           for(int k=0;k<2;k++){ int cx=k?DG_COL_R:DG_COL_L, y=DG_SND+28-sc; if(y+30<vr.y0||y>vr.y1) continue;
               text_c(cx,y,TR(L[k]),F_XS,C_TXT3,255); text_c(cx,y+16,vv[k],F_XS,k?C_TXT:smc,255); } }
+        /* v6.22: CONTROLLER — firmware string (words 80..87) · hot water capability (AUTO + MANUAL / MANUAL ONLY / MANUAL · SCALE FAULT) */
+        dg_caption(DG_MCU-sc,TR(TX_DG_MCUCAP),vr);
+        { const short L[2]={TX_DL_MCU_VER,TX_DL_MCU_WD}; const char*vv[2]={mver,mwd}; const uint32_t cc[2]={mvc,mwc};
+          for(int k=0;k<2;k++){ int cx=k?DG_COL_R:DG_COL_L, y=DG_MCU+28-sc; if(y+30<vr.y0||y>vr.y1) continue;
+              text_c(cx,y,TR(L[k]),F_XS,C_TXT3,255); text_c(cx,y+16,vv[k],F_XS,cc[k],255); } }
         /* v6.3: ABOUT — UI language (+ source), wordmark w/ version, tagline */
         dg_caption(DG_ABOUT-sc,TR(TX_DG_ABOUT),vr);
         { int y=DG_ABOUT+28-sc;
@@ -6283,6 +6420,13 @@ static void sim_state_emit(ms_t now,int force){   /* force=0: only if the line's
       jb(&j,",\"pending\":"); if(stp.active) jb(&j,"\"%s\"",ACT_KEY[stp.kind]); else jb(&j,"null");
       jb(&j,",\"last\":"); if(stp.n_req) jb(&j,"\"%s\"",ACT_KEY[stp.kind]); else jb(&j,"null");
       jb(&j,",\"req\":%ld,\"ok\":%ld,\"fail\":%ld}",stp.n_req,stp.n_ok,stp.n_fail); }
+    /* v6.22 (addendum): the water dosing gate — controller firmware string (words 80..87), its state, dosing, scale fault, the start kind */
+    { static const char*const MVK[]={"none","ok","bad","copy"}; char vb[20]; int vv[3], vs=mcu_ver_read(vb,sizeof vb,vv); Row wr[ROW_MAX];
+      jb(&j,",\"water\":{\"mcu_ver\":"); jb_s(&j,vb);
+      jb(&j,",\"ver_state\":\"%s\",\"ver_dosing\":%s,\"dosing\":%s,\"scale_fault\":%s,\"start\":\"%s\",\"run_manual\":%s,\"rows\":%d,\"fault_n\":%ld,\"fault_stops\":%ld}",
+         MVK[vs],wd_ver_dosing()?"true":"false",wd_dosing()?"true":"false",wd_scale_fault()?"true":"false",water_manual()?"manual":"auto",wd.man?"true":"false",rows_get(PG_WATER,wr),wd.n_fault,wd.n_stop);
+      { char dv[28],dw[28]; uint32_t c1,c2; diag_mcu_text(dv,&c1,dw,&c2); j.p--; jb(&j,",\"diag_ver\":"); jb_s(&j,dv);   /* DIAGNOSTICS › CONTROLLER as drawn */
+        jb(&j,",\"diag_wd\":\"%s\"}",wd_dosing()?"TX_DV_WD_AUTO":(wd_ver_dosing()?"TX_DV_WD_FAULT":"TX_DV_WD_MAN")); } }
     jb(&j,",\"regs\":{"); for(unsigned k=0;k<sizeof SHOWN/sizeof SHOWN[0];k++) jb(&j,"%s\"%d\":%u",k?",":"",SHOWN[k],reg[SHOWN[k]]);
     jb(&j,"},\"regs_s\":{\"38\":%d,\"39\":%d}",s16(38),s16(39));
     /* v6.18 (addendum): the sound engine — events by name with their outcome; log = newest first "event:outcome" */
@@ -6880,12 +7024,19 @@ static int pv_lang=LANG_EN;                /* --lang en|da: the language preview
 static int pv_sched=0;                     /* v6.16: run sched_step() in sim_run() */
 static void (*sim_tick)(ms_t)=NULL;
 static const uint32_t* sim_last=NULL;
+/* v6.22: the controller's firmware string in words 80..87 (a) and its copy in 88..95 (b; NULL = same as a), lo byte first — as the
+ * 2026-11-16 capture shows "V5.1.4". The preview/selftest base state is the reference machine (V5.1.4 = dosing). */
+static void pv_mcu_ver(const char*a,const char*b){
+    char x[16],y[16]; memset(x,0,16); memset(y,0,16); if(!b) b=a; memcpy(x,a,strlen(a)<16?strlen(a):16); memcpy(y,b,strlen(b)<16?strlen(b):16);
+    for(int k=0;k<8;k++){ reg[80+k]=(uint16_t)((unsigned char)x[2*k]|((unsigned char)x[2*k+1]<<8)); reg[88+k]=(uint16_t)((unsigned char)y[2*k]|((unsigned char)y[2*k+1]<<8)); reg_seen[80+k]=reg_seen[88+k]=1; }
+}
 static void sim_base(void){
     memset(reg,0,sizeof reg); for(int i=0;i<REGN;i++) reg_seen[i]=1;
     reg[0]=1; reg[1]=0; reg[33]=0x0101; reg[2]=1; reg[4]=185; reg[11]=870; reg[14]=3; reg[17]=400; reg[23]=360; reg[25]=650;
     reg[40]=999; reg[41]=999; reg[42]=702; reg[47]=1297; reg[48]=226; reg[49]=236; reg[61]=50; reg[50]=5; reg[58]=5;
     reg[37]=16; reg[71]=41; reg[72]=39; reg[112]=0x0104; reg[113]=0x0605; reg[114]=70;
     reg[62]=100; reg[63]=100;                                         /* v6.18: both boilers at their heat stage 100 (hot) */
+    pv_mcu_ver("V5.1.4",NULL);                                        /* v6.22: the reference controller (dosing) */
     rx_ok=8794; rx_bad=0; last_bad_ms=-100000;
 }
 static void sim_run(ms_t ms){
@@ -6915,6 +7066,7 @@ static void sim_reset(void){
     sim_now+=100000; ui_start=sim_now-20000; ui_last=sim_now; sim_tick=NULL; sim_link=1; sim_t0=sim_now;
     memset(&wq,0,sizeof wq); wq.sim_ack=1; sim_base(); settings_load();
     memset(&bp,0,sizeof bp); bp.state=BP_DONE; bp.ra=bp.rb=BPR_OK; bp.runs=1; rx_resync=0;   /* v6.5: normal operation — the boot push has completed */
+    memset(&wd,0,sizeof wd);                                                                   /* v6.22 */
     memset(&stm,0,sizeof stm); memset(&stp,0,sizeof stp); stp.kind=ACT_NONE; memset(&rps,0,sizeof rps); memset(&lt,0,sizeof lt); ver_n=0; rx_n112=0;      /* v6.6 */
     memset(&pw,0,sizeof pw); pw.kbd_ok=1; snprintf(pw.node,sizeof pw.node,"%s · %s",INP_KBD,KBD_NAME); bl_is_off=0; ka_next=0;   /* v6.14: the button node as on the device */
     nm_reset(0); memset(&net,0,sizeof net); net.on=1; net.cfg_logged=-1; nh_probe(&net.p,sim_now,1); net.state=NS_UP; net.booted=net.was_up=net.gw_seen=1;   /* v6.7: healthy stack (DIAGNOSE: 841 / 192.168.1.100 / UP) */
@@ -7112,7 +7264,7 @@ static int frame_trig_audit(const WFrame*f,uint32_t allowed){
     for(int k=0;k<f->len;k++){
         int idx=f->sub+k; if(idx>=32||f->w[k]==0) continue;
         if(idx==26||idx==27||idx==30) return 0;
-        if((idx==3||idx==6||idx==9||idx==16||idx==22||idx==24)&&!(allowed&WBIT(idx))) return 0;
+        if((idx==3||idx==6||idx==9||idx==16||idx==19||idx==22||idx==24)&&!(allowed&WBIT(idx))) return 0;   /* v6.22: + 19 (manual water) */
     }
     return 1;
 }
@@ -7126,6 +7278,7 @@ static float chord_half(int y,int h){ int d0=abs(y-CY), d1=abs(y+h-CY); int d=d0
 static void sim_ready(ms_t now){   /* minimal "READY" state without simulator */
     memset(reg,0,sizeof reg); for(int i=0;i<REGN;i++) reg_seen[i]=1;
     reg[0]=1; reg[33]=0x0101; reg[11]=870; reg[40]=900; reg[23]=360; reg[112]=0x0104; reg[113]=0x0605; reg[114]=70; last_rx_ms=now;
+    pv_mcu_ver("V5.1.4",NULL);                                        /* v6.22 */
 }
 /* ---- v6.3: i18n helpers ---- */
 #define LAY(w,lim,what,st) do{ if((w)>(lim)){ ok=0; printf("     [%s] %s: '%s' is %.0f px, room %.0f px\n",LANG_CODE[ui_lang],what,st,(double)(w),(double)(lim)); } }while(0)
@@ -8557,7 +8710,7 @@ static void st_v617(void){
       int bad=0; for(int i=0;i<NSTR;i++){ int k=STR_K[i]; if(k==KCON||k==KDL||k==KDV||k==KDF) continue; for(int lg=0;lg<NLANG;lg++){ const char*t=STR[lg][i];
             if(strstr(t,"CONFIG ONLY")||strstr(t,"KUN CONFIG")||strstr(t,"CMD8")||strstr(t,"CONFIG.JSON")||strstr(t,"OR STOP")||strstr(t,"ELLER STOP")||strstr(t,"EST.")){ bad++; printf("     [%s] %s: '%s'\n",LANG_CODE[lg],STR_ID[i],t); } } }
       printf("       string table: %d ids (v6.16: 449)\n",NSTR);
-      st_check("text: no user-facing string says CONFIG ONLY / CONFIG.JSON / CMD8 / '· OR STOP' / 'EST.' any more; the string table is smaller than v6.16's 449 ids although v6.17 adds pages (v6.18's sound block aside)",bad==0&&NSTR-(TX_DV_SO_DROP-TX_SL_SOUND+1)<449);   /* v6.18: the sound feature's own strings (one contiguous block) are not counted */
+      st_check("text: no user-facing string says CONFIG ONLY / CONFIG.JSON / CMD8 / '· OR STOP' / 'EST.' any more; the string table is smaller than v6.16's 449 ids although v6.17 adds pages (v6.18's sound block aside)",bad==0&&NSTR-(TX_DV_SO_DROP-TX_SL_SOUND+1)-(TX_DV_WD_FAULT-TX_ER_E2_SCALE+1)<449);   /* v6.18: the sound feature's own strings (one contiguous block) are not counted; v6.22: nor the water gate's */
       st_home(); home_model(sim_now); int one=!strcmp(hm.hint1,TR(TX_C_HINT))&&hm.hint2==NULL&&!strcmp(hm.label,TR(TX_H_BOILER))&&!st_has(hm.label,"\xC2\xB7");
       reg[33]=0x0141; sim_run(600); home_model(sim_now); fmt_fix(a,sizeof a,sv(S_GRINDW),1); snprintf(b,sizeof b,TR(TX_H_AUTOSTOP_G),a); int g=!strcmp(hm.label,TR(TX_H_DOSE))&&!st_has(hm.label,a)&&!strcmp(hm.sub,b)&&sub_font(&hm)==F_S;
       st_check("HOME: one hint line; the label is the name of the number only ('BREW BOILER', 'DOSE' — no '· NOW', no repeated target); during an activity the target is said once, in F_S ('STOPS AT 18.5 G')",one&&g); }
@@ -8878,8 +9031,8 @@ static void st_stop(void){
               if(f->sub!=24&&(frame_covers(f,26)||frame_covers(f,27)||frame_covers(f,30))) ok=0; } }   /* the steam block covers 24..31 — there they are zeros (checked above) */
       wq.n=0; reg[19]=0;
       st_check("policy: all stop frames are zeros (steam: + the target word), pass frame_policy WITHOUT intent and cover words 26/27/30 only in the steam block (as zeros)",ok); }
-    st_check("policy: the same words with value 1 WITHOUT intent are still rejected (sub6=1, sub22=1, sub16=1: WJ_TRIG; sub19=1: WJ_RANGE) — the STOP path cannot start anything",
-             rej(6,W1(1),1,0,WJ_TRIG)&&rej(22,W1(1),1,0,WJ_TRIG)&&rej(16,W1(1),1,0,WJ_TRIG)&&rej(19,W1(1),1,0,WJ_RANGE));
+    st_check("policy: the same words with value 1 WITHOUT intent are still rejected (sub6=1, sub22=1, sub16=1, v6.22: sub19=1 — all WJ_TRIG) — the STOP path cannot start anything",
+             rej(6,W1(1),1,0,WJ_TRIG)&&rej(22,W1(1),1,0,WJ_TRIG)&&rej(16,W1(1),1,0,WJ_TRIG)&&rej(19,W1(1),1,0,WJ_TRIG));
     /* ---- (3) visible per phase + touch area >= 48 px + subline "· OR STOP" ---- */
     { static const struct { uint16_t ws; int kind; const char*nm; } P[]={{0x0141,ACT_GRIND,"grind 0141"},{0x1107,ACT_BREW,"pre-inf. 1107"},{0x1307,ACT_BREW,"extraction 1307"},{0x030B,ACT_WATER,"water 030B"}};
       int ok=1, okw=1, oks=1;
@@ -9082,13 +9235,91 @@ static void st_v621(const char*dir){
     memset(&ota,0,sizeof ota); ota.link0=-1; snprintf(ota.dir,sizeof ota.dir,"%s",OTA_DIR); toast.dur=0;
     strcpy(sysroot,ksr); bs.m_valid=0; last_rx_ms=klr;
 }
+/* ============================ v6.22: water dosing gate + MANUAL hot water (docs/water-dosing-compat.md) ============================ */
+static int st_rows_water(void){ Row r[ROW_MAX]; return rows_get(PG_WATER,r); }
+static void st_v622(void){
+    printf("== selftest: v6.22 water dosing gate (stock mcu_has_hot_water_weight_ui 0x10885C: words 80..87 > 5.1.2; scale fault word 35 & 0x1400) + MANUAL hot water (sub19 len1) ==\n");
+    char a[96],b[96]; int v[3], ok; ms_t t;
+    /* (1) the parser: <= 6 letters + N.N.N, nothing else (stricter than stock = fail-safe) */
+    { static const struct { const char*s; int ok,a,b,c; } P[]={{"V5.1.4",1,5,1,4},{"5.1.4",1,5,1,4},{"V5.1.2",1,5,1,2},{"V10.0.0",1,10,0,0},{"v4.1.16",1,4,1,16},{"MCUVER5.1.4",1,5,1,4},
+          {"",0,0,0,0},{"V",0,0,0,0},{"V5.1",0,0,0,0},{"V5.1.4x",0,0,0,0},{"V5.1.4.1",0,0,0,0},{"V5..4",0,0,0,0},{"VERSION5.1.4",0,0,0,0},{"V 5.1.4",0,0,0,0},{"V5.1.12345",0,0,0,0},{"-5.1.4",0,0,0,0},{"\x01\x02",0,0,0,0},{"V5,1,4",0,0,0,0}};
+      ok=1; for(unsigned q=0;q<sizeof P/sizeof P[0];q++){ int r=ver_parse(P[q].s,v); if(r!=P[q].ok||(r&&(v[0]!=P[q].a||v[1]!=P[q].b||v[2]!=P[q].c))){ ok=0; printf("     ver_parse('%s') = %d\n",P[q].s,r); } }
+      st_check("version parse: V5.1.4 / 5.1.4 / V10.0.0 / v4.1.16 / MCUVER5.1.4 parse; empty, V, V5.1, V5.1.4x, V5.1.4.1, V5..4, a 7-letter prefix, a space, a 5-digit part, '-', control bytes, commas do not",ok); }
+    /* (2) the gate on the register words (lo byte first), incl. the copy and 'not polled yet' */
+    { static const struct { const char*a,*b; int st, dose; } G[]={{"V5.1.4",NULL,MV_OK,1},{"V5.1.3",NULL,MV_OK,1},{"V6.0.0",NULL,MV_OK,1},{"V10.0.0",NULL,MV_OK,1},{"V5.2.0",NULL,MV_OK,1},
+          {"V5.1.2",NULL,MV_OK,0},{"V5.0.9",NULL,MV_OK,0},{"V4.1.6",NULL,MV_OK,0},{"V3.8.5",NULL,MV_OK,0},{"",NULL,MV_NONE,0},{"V5.1.4","V5.1.3",MV_COPY,0},{"V5.1.4","",MV_COPY,0},{"V5.1.4 ",NULL,MV_BAD,0},{"GARBAGE",NULL,MV_BAD,0}};
+      ok=1; t=st_home();
+      for(unsigned q=0;q<sizeof G/sizeof G[0];q++){ pv_mcu_ver(G[q].a,G[q].b); int st=mcu_ver_read(a,sizeof a,v);
+          if(st!=G[q].st||wd_ver_dosing()!=G[q].dose||wd_dosing()!=G[q].dose||water_manual()==G[q].dose||(st_rows_water()==2)!=G[q].dose){ ok=0; printf("     gate '%s'/'%s': state %d dosing %d rows %d\n",G[q].a,G[q].b?G[q].b:"=",st,wd_dosing(),st_rows_water()); } }
+      pv_mcu_ver("V5.1.4",NULL); reg_seen[87]=0; int np=mcu_ver_read(a,sizeof a,v)==MV_NONE&&!wd_dosing(); reg_seen[87]=1; reg_seen[95]=0; np&=!wd_dosing(); reg_seen[95]=1; np&=wd_dosing();
+      st_check("gate: > 5.1.2 = dosing (5.1.3, 5.1.4, 5.2.0, 6.0.0, 10.0.0); <= 5.1.2, empty, copy (88..95) differs, garbage, a word not polled yet -> MANUAL ONLY",ok&&np); }
+    /* (3) MANUAL ONLY (V5.1.2): rows hidden, the manual frame, never word 16 = 1, the legacy stop, config untouched */
+    t=st_home(); pv_mcu_ver("V5.1.2",NULL); int cw0=cfg_writes; char md0[33]; strcpy(md0,cfg_md5); int hm0=SET[S_HOTMODE].val, hw0=SET[S_HOTW].val;
+    page=PG_WATER; static_dirty=1; sim_run(300); memset(&wq,0,sizeof wq);
+    int rows0=st_rows_water()==0&&page_rows(PG_WATER)==0&&scroll_max(PG_WATER)==0;
+    act_push(ACT_WATER); int fr=wq.n==1&&wq.q[0].sub==19&&wq.q[0].len==1&&wq.q[0].w[0]==1&&frame_trig_audit(&wq.q[0],I_WATERMAN)&&!frame_trig_audit(&wq.q[0],0)&&q_hex(0,"aa 55 06 13 01 01 00 c1 db");
+    wq.n=0;
+    st_check("no dosing (V5.1.2): the WATER page has NO rows (HOT WATER + WATER MODE hidden); a start = cmd6 sub19 len1 word 19 = 1: aa 55 06 13 01 01 00 c1 db (stock 0x105118 usart_send(6,19,1))",rows0&&fr);
+    { uint16_t h[11]={1,0,870,0,60,3,60,1,400,0,0}; int r1=rej(9,h,11,I_WATER,WJ_TRIG), r2=rej(16,W1(1),1,WBIT(16),WJ_TRIG), r3=rej(19,W1(1),1,0,WJ_TRIG);
+      pv_mcu_ver("V5.1.4",NULL); int a1=wq_push_t(9,h,11,I_WATER); wq.n=0; pv_mcu_ver("V5.1.2",NULL);
+      st_check("frame policy: word 16 = 1 is rejected without a dosing controller EVEN WITH the water intent (the AUTO block, a bare sub16); word 19 = 1 needs its own intent; the same AUTO block passes on V5.1.4",r1&&r2&&r3&&a1); }
+    reg[19]=1; reg[16]=0; act_push_stop(ACT_WATER); int sp=wq.n==1&&q_hex(0,"aa 55 06 13 01 00 00 c0 4b"); wq.n=0; reg[19]=0; act_push_stop(ACT_WATER); sp&=wq.n==1&&wq.q[0].sub==19&&wq.q[0].w[0]==0; wq.n=0;
+    st_check("no dosing: STOP WATER = word 19 = 0 ONLY (aa 55 06 13 01 00 00 c0 4b, the legacy page's stop) — never a word 16 frame to a controller that is not known to be > 5.1.2",sp);
+    /* the whole UI path: HOLD TO START on the manual WATER page -> frame -> ACK -> the controller runs -> HOME (MANUAL, no target) -> STOP */
+    toast.dur=0; sim_now=t=sim_now+100; int f=st_hold(CX,START_Y+START_H/2,700); t=sim_now;
+    int hs=f&&act.pending==ACT_WATER&&wq.n==1&&q_hex(0,"aa 55 06 13 01 01 00 c1 db")&&page==PG_HOME;
+    wq_step(t); st_ack_last(t+20); ui_frame(t+=30); reg[19]=1;
+    reg[39]=0; st_s0(0x030B,0,0x000C,0,300,t+=200); ui_frame(t); home_model(t);
+    int run=act.pending==ACT_NONE&&act.ph==PH_WATER&&wd.man&&!strcmp(hm.sub,TR(TX_H_WATER_MAN))&&hm.gmark<0&&hit_test(240,372,t)==T_STOP;
+    int quiet=1; for(int q=0;q<60;q++){ reg[39]=(uint16_t)(q*20); st_s0(0x030B,0,0x000C,0,300,t+=2000); ui_frame(t); if(wq.n||(toast.dur&&!strcmp(toast.msg,TR(TX_T_NOSTART)))) quiet=0; }
+    st_check("manual WATER page: HOLD TO START sends the sub19 frame and goes HOME; running: 'MANUAL · RUNS UNTIL STOP', no target mark, STOP shown — and NOTHING is sent for 120 s (no time limit, no weight stop: decision 2)",hs&&run&&quiet&&act.ph==PH_WATER);
+    t=st_tap(240,372,t); int st1=wq.n==1&&q_hex(0,"aa 55 06 13 01 00 00 c0 4b")&&!strcmp(toast.msg,TR(TX_T_STOP_WATER)); wq_step(t); st_ack_last(t+20); ui_frame(t+=30);
+    reg[19]=0; st_s0(0x0101,0,0x000C,0,300,t+=200); ui_frame(t);
+    st_check("STOP during manual water: word 19 = 0 -> bits cleared -> 'WATER STOPPED', DONE",st1&&!strcmp(toast.msg,TR(TX_T_STOPPED_WATER))&&act.ph==PH_DONE&&act.last_ph==PH_WATER&&stp.n_ok==1);
+    settings_load();
+    st_check("config.json is never written by the gate: hotWaterMode / autoHotWaterTarget unchanged, no config write, same md5 (config hotWaterMode = 1 on an old controller -> manual in the UI only)",
+             cfg_writes==cw0&&!strcmp(md0,cfg_md5)&&SET[S_HOTMODE].val==hm0&&SET[S_HOTW].val==hw0&&hm0==1);
+    /* (4) dosing controller (V5.1.4): AUTO unchanged; WATER MODE = MANUAL now starts manual water (no more 'use stock UI') */
+    t=st_home(); act_push(ACT_WATER); int au=wq.n==1&&q_hex(0,"aa 55 06 09 0b 01 00 00 00 66 03 00 00 3c 00 03 00 3c 00 01 00 90 01 00 00 00 00 08 3e"); wq.n=0;
+    int kh=SET[S_HOTMODE].val; SET[S_HOTMODE].val=2; int g2=act_guard(ACT_WATER,t)==NULL&&st_rows_water()==2; act_push(ACT_WATER); int mn=wq.n==1&&q_hex(0,"aa 55 06 13 01 01 00 c1 db"); wq.n=0;
+    reg[19]=1; act_push_stop(ACT_WATER); int ms2=wq.n==2&&q_hex(0,ST_V_WATER)&&q_hex(1,ST_V_WMAN); wq.n=0; reg[19]=0;
+    home_model(t); int lab=!strcmp(hm.alab[ACT_WATER],TR(TX_A_WATER_MAN)); SET[S_HOTMODE].val=kh; home_model(t); int lab2=strcmp(hm.alab[ACT_WATER],TR(TX_A_WATER_MAN))!=0;
+    st_check("V5.1.4: AUTO = the unchanged HOTWATER.md W1 frame; WATER MODE = MANUAL: no guard (v6.21: 'USE STOCK UI'), both rows stay, start = sub19 len1, stop = word 16 + word 19 = 0 as since v6.13; HOME's water label says 'MAN.'",au&&g2&&mn&&ms2&&lab&&lab2);
+    /* (5) scale fault: manual only + a running AUTO dose is stopped once (stock hotWaterUpdate 0x115B80..0x115BD8) */
+    t=st_home(); reg[16]=1; reg[19]=0; st_s0(0x030B,0,0x000C,0,300,t+=100); ui_frame(t); int nf0=wd.n_fault;
+    reg[35]=0x1000; st_s0(0x030B,0,0x000C,0,300,t+=100); ui_frame(t);
+    int fs=wq.n==1&&q_hex(0,ST_V_WATER)&&wd.n_stop==1&&wd.n_fault==nf0+1&&!strcmp(toast.msg,TR(TX_T_WATER_SCALE))&&!wd_dosing()&&water_manual()&&st_rows_water()==0;
+    for(int q=0;q<10;q++){ st_s0(0x030B,0,0x000C,0,300,t+=100); ui_frame(t); } int once=wq.n==1&&wd.n_stop==1;
+    diag_mcu_text(a,&(uint32_t){0},b,&(uint32_t){0}); int dg=!strcmp(a,"V5.1.4")&&!strcmp(b,TR(TX_DV_WD_FAULT));
+    st_check("scale fault (word 35 0x1000) during an AUTO dose: word 16 = 0 sent ONCE + 'SCALE FAULT · WATER STOPPED'; manual only (rows hidden), DIAGNOSTICS 'MANUAL (SCALE)'",fs&&once&&dg);
+    wq.n=0; reg[35]=0; reg[16]=0; st_s0(0x0101,0,0x000C,0,300,t+=100); ui_frame(t); int back=wd_dosing()&&st_rows_water()==2&&!wd.fault;
+    t=st_home(); reg[16]=0; reg[19]=1; st_s0(0x030B,0,0x000C,0,300,t+=100); ui_frame(t); reg[35]=0x0400; st_s0(0x030B,0,0x000C,0,300,t+=100); ui_frame(t); int man=wq.n==0&&wd.n_stop==0;
+    reg[35]=0; reg[19]=0; t=st_home(); pv_mcu_ver("V5.1.2",NULL); reg[16]=1; st_s0(0x030B,0,0x000C,0,300,t+=100); ui_frame(t); reg[35]=0x1000; st_s0(0x030B,0,0x000C,0,300,t+=100); ui_frame(t); int old=wq.n==0;
+    reg[35]=0; reg[16]=0;
+    st_check("scale fault: cleared -> AUTO again; a MANUAL run is not stopped (stock neither); on a controller not > 5.1.2 no word 16 frame is ever sent; err text 'SCALE FAULT', code E2",back&&man&&old&&(reg[35]=0x0400,!strcmp(err_text(),TR(TX_ER_E2_SCALE))&&!strcmp(err_code(),"E2"))); reg[35]=0;
+    /* (6) DIAGNOSTICS CONTROLLER block + texts that fit (both languages) */
+    t=st_home(); uint32_t c1,c2; diag_mcu_text(a,&c1,b,&c2); int d1=!strcmp(a,"V5.1.4")&&c1==C_TXT&&!strcmp(b,TR(TX_DV_WD_AUTO))&&c2==C_OK;
+    pv_mcu_ver("",NULL); diag_mcu_text(a,&c1,b,&c2); int d2=!strcmp(a,TR(TX_DV_MCU_NONE))&&!strcmp(b,TR(TX_DV_WD_MAN));
+    pv_mcu_ver("V5.1.4","V5.1.3"); diag_mcu_text(a,&c1,b,&c2); int d3=!strcmp(a,TR(TX_DV_MCU_COPY))&&c1==C_WARN;
+    pv_mcu_ver("v5.1.2",NULL); diag_mcu_text(a,&c1,b,&c2); int d4=!strcmp(a,"V5.1.2")&&!strcmp(b,TR(TX_DV_WD_MAN));
+    pv_mcu_ver("V5.1.4",NULL); page=PG_DIAG; scroll[PG_DIAG]=scroll_max(PG_DIAG); sim_run(300); int d5=DG_ABOUT+76+36-(int)scroll[PG_DIAG]<=LIST_VY1+40;
+    st_check("DIAGNOSTICS › CONTROLLER: FIRMWARE 'V5.1.4' · HOT WATER 'AUTO + MANUAL' (green); empty -> NOT REPORTED / MANUAL ONLY; copy differs (amber); 'v5.1.2' shown upper case; ABOUT still reachable",d1&&d2&&d3&&d4&&d5);
+    ok=1; for(int lg=0;lg<NLANG;lg++){ int kl=ui_lang; lang_set(lg);
+        LAY(text_wf(TR(TX_A_WATER_MAN),F_XS),60-8,"icon target (pitch 60)",TR(TX_A_WATER_MAN));
+        LAY(text_wf(TR(TX_W_MAN_T),F_S),2*chord_half(WMAN_Y0,20)-24,"manual WATER page title (F_S)",TR(TX_W_MAN_T));
+        static const short L[]={TX_W_MAN_RUN,TX_W_WHY_OLD,TX_W_WHY_UNK,TX_W_WHY_FAULT}; for(unsigned q=0;q<sizeof L/sizeof L[0];q++) LAY(text_wf(TR(L[q]),F_XS),336-8,"manual WATER page line (list 336)",TR(L[q]));
+        LAY(text_wf(TR(TX_H_HOLD_WATER_MAN),F_XS),KB[KSUB].maxw,"HOME subline",TR(TX_H_HOLD_WATER_MAN));
+        lang_set(kl); }
+    st_check("v6.22 texts fit: 'MAN.' under the icon (52 px), the manual WATER page's title + lines, the HOME sublines (both languages)",ok);
+    sim_reset();
+}
 static int selftest(const char*cfgsrc){
     int base_lang=ui_lang;
     printf("== selftest (UI language during the test: %s) ==\n",LANG_CODE[ui_lang]);
     printf("== selftest: frame vectors (observed bytes) ==\n");
     snprintf(cfg_path,sizeof cfg_path,"%s",cfgsrc); settings_load();
     st_check("config loaded",cfg_ok);
-    memset(reg_seen,0,sizeof reg_seen); memset(&wq,0,sizeof wq);
+    memset(reg_seen,0,sizeof reg_seen); memset(&wq,0,sizeof wq); pv_mcu_ver("V5.1.4",NULL);   /* v6.22: the AUTO water frame needs a dosing controller */
     uint8_t b[80]; int n;
     uint16_t aw=0; n=build_write(b,1,&aw,1);
     st_check("keep-awake word1=0 = AA 55 06 01 01 00 00 C5 33 (SESSION §10.1)",hexeq(b,n,"aa 55 06 01 01 00 00 c5 33"));
@@ -9141,7 +9372,7 @@ static int selftest(const char*cfgsrc){
     { uint16_t on=1,awk=0; int ok=wq_push(0,&on,1)&&wq_push(1,&awk,1)&&wq.n==2&&frame_trig_audit(&wq.q[0],0)&&frame_trig_audit(&wq.q[1],0)&&q_hex(0,"aa 55 06 00 01 01 00 c5 5f")&&q_hex(1,"aa 55 06 01 01 00 00 c5 33");
       wq.n=0; st_check("keep-awake/PowerOn: sub0=[1], sub1=[0] — no trigger words",ok); }
     act_push(ACT_GRIND); st_check("GRIND: only start words 3+6 set (explicit intent)",wq.n==1&&frame_trig_audit(&wq.q[0],I_GRIND)&&!frame_trig_audit(&wq.q[0],0)); wq.n=0;
-    act_push(ACT_WATER); st_check("WATER:  only start words 9+16 set; word 19 (manual) = 0",wq.n==1&&frame_trig_audit(&wq.q[0],I_WATER)&&wq.q[0].w[10]==0); wq.n=0;
+    pv_mcu_ver("V5.1.4",NULL); act_push(ACT_WATER); st_check("WATER:  only start words 9+16 set; word 19 (manual) = 0",wq.n==1&&frame_trig_audit(&wq.q[0],I_WATER)&&wq.q[0].w[10]==0); wq.n=0;
     act_push(ACT_BREW);  st_check("BREW:   only start words 9+22 set; words 6/16 = 0",wq.n==1&&frame_trig_audit(&wq.q[0],I_BREW)&&wq.q[0].w[1]==0&&wq.q[0].w[11]==0); wq.n=0;
     act_push(ACT_STEAM);
     { const WFrame*f=&wq.q[0]; st_check("STEAM start: words 26/27/28/29/30/31 = 0 (atlas §3.4)",wq.n==1&&f->sub==24&&f->len==8&&f->w[0]==1&&!f->w[2]&&!f->w[3]&&!f->w[4]&&!f->w[5]&&!f->w[6]&&!f->w[7]&&frame_trig_audit(f,I_STEAM)); } wq.n=0;
@@ -9164,7 +9395,7 @@ static int selftest(const char*cfgsrc){
     st_check("REJECTED: brew block with the wrong intent (I_GRIND)",rej(5,(uint16_t[18]){60,0,0,0,1,0,870,0,60,3,60,0,400,0,0,0,0,1},18,I_GRIND,WJ_TRIG));
     st_check("REJECTED: stock's sub2 len2 with word3=1 (grind mode + start)",rej(2,(uint16_t[2]){1,1},2,0,WJ_TRIG));
     st_check("REJECTED: service words — word1=1 (sleep/drain), word0=0 (power off) WITHOUT power-off intent (v6.14: WJ_TRIG), word8=1 (self-test)",rej(1,W1(1),1,0,WJ_RANGE)&&rej(0,W1(0),1,0,WJ_TRIG)&&rej(8,W1(1),1,0,WJ_RANGE));
-    st_check("REJECTED: service words — word20=1 (back-flush), word28/29=1 (drain), word19=1 (manual water), word21=1",rej(20,W1(1),1,0,WJ_RANGE)&&rej(28,W1(1),1,0,WJ_RANGE)&&rej(29,W1(1),1,0,WJ_RANGE)&&rej(19,W1(1),1,0,WJ_RANGE)&&rej(21,W1(1),1,0,WJ_RANGE));
+    st_check("REJECTED: service words — word20=1 (back-flush), word28/29=1 (drain), word21=1; word19=1 (manual water) WITHOUT the manual-water intent (v6.22: WJ_TRIG)",rej(20,W1(1),1,0,WJ_RANGE)&&rej(28,W1(1),1,0,WJ_RANGE)&&rej(29,W1(1),1,0,WJ_RANGE)&&rej(19,W1(1),1,0,WJ_TRIG)&&rej(21,W1(1),1,0,WJ_RANGE));
     st_check("REJECTED: values out of spec — temp 1200/840, group 110, milk 710, dose 310/9",rej(11,W1(1200),1,0,WJ_RANGE)&&rej(11,W1(840),1,0,WJ_RANGE)&&rej(114,W1(110),1,0,WJ_RANGE)&&rej(25,W1(710),1,0,WJ_RANGE)&&rej(4,W1(310),1,0,WJ_RANGE)&&rej(4,W1(9),1,0,WJ_RANGE));
     st_check("REJECTED: values out of spec — water 250/5100, brew weight 95/1000, level 0/5, mode 0/3",rej(17,W1(250),1,0,WJ_RANGE)&&rej(17,W1(5100),1,0,WJ_RANGE)&&rej(23,W1(95),1,0,WJ_RANGE)&&rej(23,W1(1000),1,0,WJ_RANGE)&&rej(14,W1(0),1,0,WJ_RANGE)&&rej(14,W1(5),1,0,WJ_RANGE)&&rej(2,W1(0),1,0,WJ_RANGE)&&rej(2,W1(3),1,0,WJ_RANGE));
     st_check("REJECTED: word112 with pressure 5 / switch byte 2; word113 with time 4; recipe word 13 != 60",rej(112,(uint16_t[2]){0x0105,0x0605},2,0,WJ_RANGE)&&rej(112,(uint16_t[2]){0x0204,0x0605},2,0,WJ_RANGE)&&rej(113,W1(0x0405),1,0,WJ_RANGE)&&rej(13,W1(340),1,0,WJ_RANGE));
@@ -9636,7 +9867,7 @@ static int selftest(const char*cfgsrc){
       { int ktu=SET[S_TUNIT].val; uint16_t kr[REGN]; int ks[REGN]; memcpy(kr,reg,sizeof reg); memcpy(ks,reg_seen,sizeof reg_seen); ms_t klr=last_rx_ms; char lv[96];
         for(int tu=0;tu<2;tu++){ SET[S_TUNIT].val=tu; reg[38]=(uint16_t)-9999; reg[40]=reg[42]=reg[47]=reg[48]=1500; reg_seen[38]=reg_seen[40]=reg_seen[42]=reg_seen[47]=reg_seen[48]=1; reg[33]=0x0101; reg[34]=reg[35]=reg[36]=0; reg[1]=0; last_rx_ms=1000000000L;
             for(int pg=PG_GRIND;pg<=PG_SYS;pg++){ page_live_text(pg,lv,sizeof lv,1000000000L); LAY(text_wf(lv,F_XS),LIVE_W,"page live line",lv); LAY(text_wf(lv,F_XS),2*chord_half(PG_LIVE_Y,11)-12,"page live line (chord)",lv); } }
-        { static const short gl[]={TX_G_RO,TX_G_NOLINK,TX_G_ERROR,TX_G_SLEEP,TX_G_BUSY,TX_G_NOCFG,TX_G_OOR,TX_G_GRINDTIME,TX_G_WATERMAN,TX_DV_VERSION_RO};
+        { static const short gl[]={TX_G_RO,TX_G_NOLINK,TX_G_ERROR,TX_G_SLEEP,TX_G_BUSY,TX_G_NOCFG,TX_G_OOR,TX_G_GRINDTIME,TX_DV_VERSION_RO};
           for(size_t i=0;i<sizeof gl/sizeof gl[0];i++) LAY(text_wf(TR(gl[i]),F_XS),LIVE_W,"page live line (guard text)",TR(gl[i])); }
         memcpy(reg,kr,sizeof reg); memcpy(reg_seen,ks,sizeof reg_seen); last_rx_ms=klr;
         for(int tu=0;tu<2;tu++){ SET[S_TUNIT].val=tu; int kv[4]={SET[S_GRINDW].val,SET[S_BREWW].val,SET[S_HOTW].val,SET[S_STEAMT].val};
@@ -9776,6 +10007,7 @@ static int selftest(const char*cfgsrc){
     st_v618(dir);                      /* v6.18 */
     st_v619();                         /* v6.19 */
     st_v620();                         /* v6.20 */
+    st_v622();                         /* v6.22 */
     /* ============================ v6.15 ============================ */
     st_graph();
     printf("== selftest [%s]: %s (%d checks, %d failed) — work dir %s ==\n",LANG_CODE[base_lang],st_fail?"FAILED":"ALL OK",st_n,st_fail,dir);
@@ -10018,6 +10250,14 @@ int main(int argc,char**argv){
     sim_reset(); PV_SEC(SEC_DISPLAY); sim_run(300); detail_open(S_VOL,sim_now); sim_run(900); dump(out,"103_detail_volume");
     sim_reset(); PV_SEC(SEC_DISPLAY); sim_run(300); detail_open(S_SNDRDY,sim_now); edit_val=1; save_begin(sim_now); sim_run(500); dump(out,"104_sound_saved_toast");
     unlink(snd_path); sim_reset(); snd_uptime_ovr=20; reg[63]=60; sim_run(SND_SETTLE_MS+800); reg[63]=100; sim_run(400); page=PG_DIAG; scroll[PG_DIAG]=DG_SND-LIST_VY0-12; static_dirty=1; force_all=1; sim_run(600); dump(out,"105_diag_sound");
+    /* v6.22: water dosing gate — the manual-only WATER page (old / unknown controller, scale fault), HOME with manual water, DIAGNOSTICS › CONTROLLER */
+    sim_reset(); pv_mcu_ver("V5.1.2",NULL); page=PG_WATER; sim_run(600); dump(out,"106_page_water_manual_old");
+    sim_reset(); pv_mcu_ver("",NULL); page=PG_WATER; sim_run(600); dump(out,"107_page_water_manual_unknown");
+    sim_reset(); SET[S_HOTMODE].val=2; page=PG_WATER; sim_run(600); dump(out,"108_page_water_mode_manual");
+    sim_reset(); pv_mcu_ver("V5.1.2",NULL); sim_run(600); dump(out,"109_home_water_manual_label");
+    sim_reset(); pv_mcu_ver("V5.1.2",NULL); sim_run(400); reg[19]=1; sim_tick=tick_water; sim_t0=sim_now; sim_run(5200); dump(out,"110_home_water_manual_running");
+    sim_reset(); page=PG_DIAG; scroll[PG_DIAG]=DG_MCU-LIST_VY0-12; sim_run(600); dump(out,"111_diag_controller");
+    sim_reset(); reg[35]=0x1000; page=PG_DIAG; scroll[PG_DIAG]=DG_MCU-LIST_VY0-12; sim_run(600); dump(out,"112_diag_controller_scale_fault");
     return 0;
 }
 #endif

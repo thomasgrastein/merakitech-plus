@@ -56,14 +56,14 @@ import time
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
-VERSION = "6.21"
+VERSION = "6.22"
 REPO = "thomasgrastein/merakitech-plus"
 RAW_BASE = "https://raw.githubusercontent.com/" + REPO + "/{ref}/bin/{name}"
 RAW_AUDIO = "https://raw.githubusercontent.com/" + REPO + "/{ref}/audio/{name}"
 
 # md5 of the shipped device binaries in bin/ (kept in sync with bin/MD5SUMS by CI).
 BIN_MD5 = {
-    "merakiplus": "624a561f50e7c0cdab4ca14186b69d8b",
+    "merakiplus": "184d76fdce9015339eceec68bf190774",
     "switcher": "e02a463c16278545c04b8e4022b8369f",
     "grab_shim.so": "c42076c807c54d477a5868977404186d",
     "merakiplus_snd": "a7659c176b8ef78385b0b612a69e81ca",
@@ -78,7 +78,7 @@ AUDIO_MD5 = {
 # SHA-256 of the same files (docs/ota-plan.md phase 1a). Checked on the computer before upload, and on the display
 # when its busybox has sha256sum. md5 stays as well (the display always has md5sum; older docs/scripts quote it).
 BIN_SHA256 = {
-    "merakiplus": "d1d9ddb59856b3ce390b9223c6a189e94c159c3b99b1a1b54c5eee10bd58df6a",
+    "merakiplus": "1e586718ff3df73a067df2558013c72d802b6c967710b054946c6f42942279be",
     "switcher": "6af721e297e8d13dedc9ad9c14bf39d925eb7d4cc7ae9fab49f99b428873d5bf",
     "grab_shim.so": "c02f61b53ec4613f04950966bcfab7e7aa2ad53dfe1035eae22a542861d268d7",
     "merakiplus_snd": "84c06c507a04d0c06ae9250a60405f10bcf05b105e481144869180fd30d479cb",

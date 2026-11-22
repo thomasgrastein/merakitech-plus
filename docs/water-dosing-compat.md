@@ -1,6 +1,9 @@
 # Water dosing compatibility — controller firmware detection and UI gating (research + design)
 
-Status: **research and design only, nothing implemented.** No code, no version bump, no release in this round.
+Status: **implemented in v6.22 (2026-11-22)** — gate + manual hot water, per the maintainer decisions in
+[§10](#10-decisions-resolved-by-the-maintainer); implementation, tests and deviations in [§11](#11-implementation-v622).
+Not yet installed on the reference machine (next hardware session, §11.5). §1–§9 are the research as written before
+the decisions; where they differ (display-side limits, `T_MAN`, strings), §10/§11 win.
 Addresses are in the controller firmware `MEM03_V514_260923.bin` (powerMcu **5.1.4**, flash base `0x0`) and
 in the stock display app `demo_v9` (build **1.1.1-69**, symbols kept; VMA = file offset + 0x10000). Neither
 binary is in this repository. Register words are as in [registermap.md](registermap.md); frames as in
@@ -22,7 +25,7 @@ binary is in this repository. Register words are as in [registermap.md](register
   `> 5.1.2`. No version yet / empty / unparsable → **manual hot water only** (the stock UI does the same).
   No owner confirmation, no file probes, no OTA traffic. Keep the stock runtime fallback too: a scale fault
   forces manual.
-* **Prerequisite:** Meraki+ has no manual hot water today (WATER MODE = MANUAL only shows *"use stock UI"*).
+* **Prerequisite (done in v6.22):** Meraki+ had no manual hot water (WATER MODE = MANUAL only showed *"use stock UI"*).
   Manual start/stop must land in the same release as the gate, or owners with older controllers lose hot
   water in Meraki+ entirely (§5).
 * **The reference machine doses** — by version (`V5.1.4` in words 80..87) and by behaviour (two doses stopped
@@ -304,3 +307,110 @@ the controller reports its version in words 80..87 and Meraki+ already polls the
 | P9b | `ls -la /customer/ \| grep -i -E 'mcu\|tmp'; md5sum /customer/mcu.bin /customer/mcu_tmp.bin 2>&1` | for the record only (§3.5) |
 | P9c | `grep -o -E '"[A-Za-z]*([Vv]ersion\|[Mm]cu)[A-Za-z]*":[^,]*' /customer/config.json` (never print the whole file) | confirms no controller-version key in config (static analysis says none) |
 | P9d | pull `/new_customer/merakiplus/boot/demo_v9.vendor` (md5 `3b63e13f…`) to the dev workspace (never into this repo) | the previous stock display's hot water flow and version floors |
+
+## 10. Decisions (resolved by the maintainer)
+
+Binding record (2026-11-22). Where a decision differs from the proposal in §5–§8, the decision wins.
+
+1. **Copy the stock rule, no owner override.** Dosing only when words 80..87 parse as a version **> 5.1.2** AND the
+   copy in words 88..95 matches AND there is no scale fault (word 35 & `0x1400`). Everything else — empty string, not
+   polled yet, parse failure, copy mismatch, ≤ 5.1.2 — is **manual only** (fail-safe). (§8 item 1.)
+2. **No extra safety limits — match stock exactly.** No 90 s manual time limit (`T_MAN` dropped), no display-side AUTO
+   stop at target + 10 g, no start-up cleanup of a foreign word 19. The controller's own weight stop governs AUTO;
+   MANUAL runs until STOP, as in the stock UI. (§8 item 2.)
+3. **Manual water start/stop ships in the same release** and replaces the *"use stock UI"* toast on dosing machines set
+   to WATER MODE = MANUAL. (§8 item 3.)
+4. (§8 item 4: done in commit `fb55491`.)
+5. **No survey of other owners.** (§8 item 5.) The README asks for the *DIAGNOSTICS → CONTROLLER* version in issues
+   instead, without a template field.
+6. **Release v6.22 is pre-approved for exactly this scope** once all tests are green. **Install on the reference machine
+   is not approved in this round** — it waits for the next hardware session (§11.5).
+
+## 11. Implementation (v6.22)
+
+### 11.1 What changed in the UI (`src/merakiplus.c`)
+
+* **Version read** (`mcu_ver_read`, `ver_parse`): words 80..95 as ASCII, lo byte first; at most 6 letters, then
+  exactly `N.N.N` (1–4 digits each), then the NUL; the copy must match all 16 bytes. Stricter than stock's
+  `compare_versions` (which skips up to 6 *non-digits* and compares an empty string as equal) — a stricter parser can only
+  turn a dosing controller into a manual one, never the reverse. **No new UART traffic**: the words are in the existing
+  sub56 len56 poll; the UI never writes words 80..95.
+* **Gate** (`wd_dosing()` = version > 5.1.2 && no scale fault), evaluated every frame from the register mirror (so a
+  controller restart or a scale fault switches it at runtime). Not dosing →
+  the WATER page has no rows (HOT WATER and WATER MODE hidden), HOME shows *MAN.* under the water icon, a start is the
+  manual frame, and **`frame_policy` rejects any frame with word 16 ≠ 0** (the last line of defence, also against the
+  AUTO block with its own intent).
+* **Manual water** (`act_push(ACT_WATER)` when `water_manual()` = not dosing or WATER MODE = MANUAL): `cmd6 sub19 len1`
+  word 19 = 1 (`aa 55 06 13 01 01 00 c1 db`) — the stock legacy water page's frame (`set_manual_hot_water_switch`
+  `0x105118`, `usart_send(6,19,1)`, verified in `demo_v9` 1.1.1-69). New intent `I_WATERMAN` (word 19 is now a start
+  word: without the intent it is rejected). **Stop:** on a controller that is not known to be > 5.1.2: word 19 = 0 only
+  (`aa 55 06 13 01 00 00 c0 4b`); on a dosing controller unchanged since v6.13 (word 16 = 0, + word 19 = 0 when set).
+  No timeout, no display-side weight stop (decision 2). `act_guard`'s *WATER = MANUAL · USE STOCK UI* is gone.
+* **Scale fault** (`wd_step`): rising edge of word 35 & `0x1400` → a pending water start is dropped; on a > 5.1.2
+  controller whose word 16 is still ≠ 0, word 16 = 0 is sent once + toast *SCALE FAULT · WATER STOPPED* (stock
+  `hotWaterUpdate` `0x115B80..0x115BD8`). A manual run is not stopped (stock neither). HOME's error text for these bits is
+  now *SCALE FAULT* (code E2; v6.21: *UNKNOWN FAULT*, code `?`).
+* **DIAGNOSTICS › CONTROLLER** (a new block above ABOUT): *FIRMWARE* (the string as reported, upper case; *NOT
+  REPORTED*; amber *COPY DIFFERS* / unparsable) and *HOT WATER* (*AUTO + MANUAL* / *MANUAL ONLY* / *MANUAL (SCALE)*).
+* **config.json is never written by the gate**: `hotWaterMode = 1` on an old controller is simply not used (like stock);
+  the selftest checks md5 + write counter. The 0x89 answer stays the stock build string `"1.1.1-69"` (§1.5) — unchanged.
+* **Presets** (not implemented yet, [presets-spec.md](presets-spec.md)): the water group stays a config group on every
+  machine; applying it never changes the gate (§5.3 stands).
+
+Strings (EN / DA): see [ui-guide.md §21](ui-guide.md#21-hot-water-dosing-gate--manual-water-v622); the drafts of §5.4
+were shortened to fit the pixel budgets (`TX_T_WATER_LIMIT` / `TX_T_WATER_OVER` dropped with decision 2; the icon
+label is *MAN.* — *MANUAL* is 63 px for a 52 px slot).
+
+### 11.2 Simulator (`sim/`, additive)
+
+* Words 80..95 were already `"V5.1.4"` + copy in `SENSOR_BASELINE` (§5.5's "the sim leaves them 0" was wrong), so every
+  existing water scenario keeps its meaning.
+* `mcu_sim.py`: event `mcu_version` (`version`, `copy` — mismatch, `null` = leave 88..95; survives a reset); a write of
+  word 16 = 1 while the reported version is not > 5.1.2 is logged `legacy_word16`; **word 19 alone starts manual water**
+  (as hotwater-ctl `0x1B8C`: `active = word19 | word16`, no word 9), manual has no weight stop and no timeout; a scale
+  fault alone stops AUTO (word 16 = 0) but not MANUAL. `sim/selftest.py` T16 (9 checks) → 204/0.
+* State JSON `water` (`mcu_ver`, `ver_state`, `ver_dosing`, `dosing`, `scale_fault`, `start`, `run_manual`, `rows`,
+  `fault_n`, `fault_stops`, `diag_ver`, `diag_wd`); [sim/CONTRACT.md](../sim/CONTRACT.md) addendum v6.22.
+* Scenarios (all `ui_only`): `dosing_version_detect` (28 checks), `dosing_gated_old_mcu` (44), `dosing_scale_fault`
+  (34). All three fail against the v6.21 SIM build (20/28, 20/44, 20/34).
+
+### 11.3 Tests
+
+UI selftest **582 checks** EN + DA and on ARMv7 (new section *v6.22 water dosing gate*, 13 checks: parser table, gate
+table incl. copy/empty/not-polled, manual frames byte for byte, policy rejects, the HOLD TO START → run → STOP path with
+120 s of silence, config untouched, MANUAL mode on V5.1.4, scale-fault stop once, DIAGNOSTICS texts, pixel budgets),
+sim selftest 204/0, full E2E 51/51 EN + 51/51 DA, quick E2E 5/5, installer suite 140/140, launcher tests, switcher 55/0,
+hygiene + bin/ drift OK; all built with the official zig 0.17.1 ([CHANGELOG](../CHANGELOG.md) entry for 6.22).
+
+### 11.4 Deviations and open points
+
+* **Weight stop threshold unresolved:** the controller code stops at word 39 > target + 1.5 g (`0x1C64..0x1C84`), the
+  2026-11-16 capture saw 40.5 / 41.0 g for a 40.0 g target (§1.1). It is controller-side; per decision 2 Meraki+ adds no
+  display-side stop, so the difference does not affect the UI.
+* **The manual frame on ≤ 5.1.2 is not hardware-tested.** It is the stock 1.1.1-69 legacy page's frame (the field-proven
+  path for every older controller), but no ≤ 5.1.2 controller was available. Risk: if an old controller treated a lone
+  word 19 differently, manual water would not start (fail-safe: nothing runs) — STOP (word 19 = 0) is the stock stop.
+* **Manual on a 5.1.4 controller uses `sub19 len1`, not stock's new-panel frame.** The 1.1.1-69 hot water panel starts
+  MANUAL on a > 5.1.2 controller with the whole `sub9 len11` block (word 9 = 1, word 16 = 0, word 19 = 1,
+  `0x113D94`). Meraki+ sends the legacy page's `sub19 len1` on every controller (the decision's "same frames stock sends
+  to older controllers"). By the controller code (`active = word19 | word16`, recomputed every 10 ms cycle) both start
+  the same; **to verify on the 5.1.4 machine** (§11.5).
+* **Scale fault blocks every start**, including manual: the error words (34/35/36) block starts since v6.0, and v6.22
+  keeps that (the stock legacy page would still offer manual water). Fail-safe; the page says *SCALE FAULT: NO WEIGHT
+  STOP* and the live line *ERROR*.
+* **Stricter parser than stock** (letters-only prefix, exactly three parts, copy must match): a hypothetical
+  `"V5.1.4a"` or a 4-part version would be manual-only in Meraki+ but dosing in the stock UI. Deliberate (decision 1:
+  fail-safe).
+
+### 11.5 Next hardware session (not done in this round)
+
+1. **Install v6.22** — needs separate approval (this round's approval covers the release only).
+2. **P9a** words 80..95 live (Meraki+ log or a passive tap of one sub56 reply): `V5.1.4` + identical copy; check
+   *DIAGNOSTICS → CONTROLLER* shows *V5.1.4 · AUTO + MANUAL*.
+3. **P9b** `md5sum /customer/mcu.bin /customer/mcu_tmp.bin` for the record (§3.5).
+4. **P9c** the sanitized config grep (never print the whole file) — no controller-version key.
+5. **P9d** pull the older stock app from slot B (`boot/demo_v9.vendor`) to the dev workspace, never into this repo.
+6. **Manual water live on the 5.1.4 machine:** WATER MODE = MANUAL → HOLD TO START → `sub19 len1 [1]` on the wire,
+   work_sta `0x030B`, water runs past the HOT WATER weight, no stop from the display for > 90 s, STOP WATER → word 16 = 0
+   + word 19 = 0 → bits cleared. AUTO still stops by weight with no frame from the display.
+7. The OTA phase 1b items already pending (ordinary update, flag-cleared rollback / power-cut tests).

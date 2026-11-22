@@ -992,11 +992,68 @@ def t15_concurrent_brew_steam():
           cur_ok)
 
 
+# ---------------------------------------------------------------- T16: controller version + manual water (v6.22)
+def t16_water_dosing():
+    print("== T16: controller firmware string words 80..95 + MANUAL hot water (word19 alone) + scale fault (v6.22) ==")
+    sim = fresh_sim()
+    s = b"".join(bytes((w & 0xFF, w >> 8)) for w in sim.regs[80:88])
+    check("baseline: words 80..87 = 'V5.1.4' (lo byte first) and 88..95 = the same copy; dosing by the stock rule",
+          s.rstrip(b"\x00") == b"V5.1.4" and sim.regs[80:88] == sim.regs[88:96] and sim.mcu_version_dosing())
+    sim.inject({"type": "mcu_version", "version": "V5.1.2"})
+    old = sim.regs[80:88] == McuSim._ver_words("V5.1.2") and sim.regs[88:96] == sim.regs[80:88] and not sim.mcu_version_dosing()
+    sim.do_reboot()
+    check("mcu_version event: V5.1.2 in words 80..95 (not dosing); survives a controller reset",
+          old and sim.regs[80:88] == McuSim._ver_words("V5.1.2") and not sim.mcu_version_dosing())
+    sim.inject({"type": "mcu_version", "version": "V5.1.4", "copy": "V5.1.3"})
+    mm = sim.regs[80:88] != sim.regs[88:96]
+    sim.inject({"type": "mcu_version", "version": ""})
+    check("mcu_version event: a copy mismatch and an empty string can be injected",
+          mm and sim.regs[80:96] == [0] * 16 and not sim.mcu_version_dosing())
+    # manual hot water: word19 alone starts, no weight stop, no timeout, word19=0 stops
+    sim = fresh_sim()
+    sim.inject({"type": "mcu_version", "version": "V5.1.2"})
+    sim.handle_write(19, [1])
+    sim.advance(sim.t + 1.0)
+    st = sim.regs[33] == 0x030B and sim.act and sim.act["manual"]
+    sim.advance(sim.t + 200.0)
+    check("MANUAL: sub19 len1 word19=1 starts hot water (no word 9); still running after 200 s, past the word17 target (no weight stop, no timeout)",
+          st and sim.regs[33] == 0x030B and s16(sim.regs[39]) > sim.regs[17] + 100)
+    sim.handle_write(19, [0])
+    sim.advance(sim.t + 0.05)
+    check("MANUAL: word19=0 stops it (bits cleared)", sim.regs[33] == 0x0101 and sim.act is None)
+    check("no legacy_word16 event (no word16=1 was written)",
+          not any(e["kind"] == "legacy_word16" for e in sim.alog.events))
+    sim.handle_write(9, [1, 0, 870, 0, 60, 3, 60, 1, 400, 0, 0])
+    check("a word16=1 write while the controller reports V5.1.2 is logged as legacy_word16",
+          any(e["kind"] == "legacy_word16" for e in sim.alog.events))
+    # scale fault: stops AUTO (word16=0), not MANUAL
+    sim = fresh_sim()
+    sim.handle_write(9, [1, 0, 870, 0, 60, 3, 60, 1, 400, 0, 0])
+    sim.advance(sim.t + 1.5)
+    run = sim.regs[33] == 0x030B
+    sim.inject({"type": "fault", "e2": 0x1000})
+    sim.advance(sim.t + 0.05)
+    check("scale fault (word35 0x1000) during AUTO: the controller clears word16 and stops",
+          run and sim.regs[16] == 0 and sim.regs[33] & 0x000A == 0
+          and any(e["kind"] == "activity_stop" and "scale" in e.get("reason", "") for e in sim.alog.events))
+    sim = fresh_sim()
+    sim.handle_write(19, [1])
+    sim.advance(sim.t + 1.0)
+    sim.inject({"type": "fault", "e2": 0x0400})
+    sim.advance(sim.t + 2.0)
+    man = sim.regs[33] == 0x030B and sim.regs[19] == 1
+    sim.inject({"type": "fault", "e2": 0x0001})
+    sim.advance(sim.t + 0.05)
+    check("scale fault during MANUAL: keeps running; any other E2 bit still safety-stops it",
+          man and sim.regs[33] & 0x000A == 0)
+
+
 def main():
     t0 = time.monotonic()
     for fn in (t1_crc, t2_chunking, t3_write_policy, t4_packing, t5_boot,
                t6_autostop, t7_keepalive, t8_faults, t9_ack, t10_link, t11_replay,
-               t12_manual_stop, t13_power, t14_heat_stage, t15_concurrent_brew_steam):
+               t12_manual_stop, t13_power, t14_heat_stage, t15_concurrent_brew_steam,
+               t16_water_dosing):
         fn()
     dt = time.monotonic() - t0
     print(f"\nSELFTEST: {N_PASS} PASS / {N_FAIL} FAIL ({dt:.1f}s)")

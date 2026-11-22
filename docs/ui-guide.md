@@ -30,7 +30,7 @@ whole header is the target), or swipe right. There are no page dots, no edge zon
 | **HOME** | — (root) | clock (or the wordmark while the clock is not set) · phase chip · gauge · hero number · sub-line · chart (40 s) / one hint line · 3 stats · the 4 activity icons **with their targets underneath** (grind dose, brew weight, water amount, milk temperature) — or the STOP button(s) while something runs · the gear |
 | **GRIND** | tap the bean icon | live line *ON THE SCALE 0.0 G* · GRIND DOSE, GRIND MODE · HOLD TO START |
 | **BREW** | tap the cup icon | live line *BOILER 92.4° · GROUP 70°* · BREW WEIGHT, BREW TEMP, PRE-INFUSION, PRE-INF. TIME, PRE-INF. PRESSURE, GROUP HEAD (4 in view, the list scrolls) · HOLD TO START |
-| **WATER** | tap the drop icon | live line *WATER 99.9°* (word 40 — the "water sensor") · HOT WATER, WATER MODE · HOLD TO START |
+| **WATER** | tap the drop icon | live line *WATER 99.9°* (word 40 — the "water sensor") · HOT WATER, WATER MODE · HOLD TO START. **v6.22:** on a controller that cannot dose (≤ 5.1.2, version unknown, scale fault) no rows — *MANUAL HOT WATER · RUNS UNTIL YOU TAP STOP* + the reason (§21) |
 | **STEAM** | tap the steam icon | live line *BOILER 130° · MILK 22.6°* · MILK TEMP, STEAM LEVEL · HOLD TO START |
 | **SYSTEM** | the gear | *MERAKI+ V6.18.1* · four section headers with a summary (**DISPLAY · SOUND** *ENGLISH* · **CLOCK** *16:35* · **SCHEDULE** *06:30 / OFF* · **STOCK UI**) + the **DIAGNOSTICS** row (*OK* / the error code / *DOWN*). Closed: 5 rows, no scrolling. A tap on a header opens it (and closes the other) |
 | **DIAGNOSTICS** | SYSTEM's last row, or a tap on HOME's error / offline hint | STATUS, BOOT · SLOT · SWITCHER, NET, GRAPH (smooth / raw), PRESSURE · ESTIMATE, RAW COUNTERS, POWER BUTTON, TIME · SCHEDULE, SOUND (v6.18), ABOUT — scrolls vertically. Its chevron returns to where it was opened from |
@@ -125,7 +125,7 @@ WATER SHORTCUT, CLEANING REMINDER, AUTO TIME, PAUSE TIME → **SYSTEM › STOCK 
 | MILK TEMP | `AtuoSteamTarge` | 25 | sub25 len1 | 450..700 / 10 | 45.0–70.0 °C | **PROVEN** [0x12bf80] |
 | STEAM LEVEL | `steamGears` | 14 | sub14 len1 | 1..4 / 1 | GENTLE / MILD / MEDIUM / STRONG | **PROVEN** [0xdd028] |
 | HOT WATER | `autoHotWaterTarget` | 17 | sub17 len1 | 300..5000 / 100 | 30–500 g in steps of 10 g | **PROVEN** [0xfbf0c] |
-| WATER MODE | `hotWaterMode` | (16/19 in the start block) | — config only | 1..2 | 1 AUTO / 2 MANUAL | **PROVEN** [0x11344c] |
+| WATER MODE | `hotWaterMode` | (16/19 in the start block) | — config only | 1..2 | 1 AUTO / 2 MANUAL (v6.22: MANUAL starts manual water; before: "use stock UI") | **PROVEN** [0x11344c] |
 | WATER SENSOR | *(none)* | 40 (read-only) | — no write exists | — | live, e.g. 99.9 °C | **SENSOR** [0x112c9c] |
 
 ### 4.3 SYSTEM (config only — no MCU write)
@@ -369,3 +369,39 @@ The full description — the reversed stock audio path with addresses, the rules
   also a line in `/tmp/merakiplus_snd.log`.
 * Previews: `100_system_display_sound`, `101_detail_sound`, `102_detail_ready_tone`, `103_detail_volume`,
   `104_sound_saved_toast`, `105_diag_sound` (EN + DA).
+
+## 21. Hot water: dosing gate + manual water (v6.22)
+
+Background, evidence and decisions: [water-dosing-compat.md](water-dosing-compat.md) §10–§11.
+
+* **The rule (stock, copied):** hot water by weight (AUTO) only when the controller's firmware string in words 80..87
+  (copy in 88..95, both in the sub56 len56 poll) parses as a version **> 5.1.2** and the copy matches and there is no
+  scale fault (word 35 & 0x1400). Everything else — not polled yet, empty, garbage, copy mismatch, ≤ 5.1.2, scale
+  fault — is **MANUAL ONLY**. No owner override. `config.json` is never written by the gate.
+* **WATER page, manual only:** no rows (HOT WATER and WATER MODE are hidden, their config values untouched); three
+  centred lines — *MANUAL HOT WATER* (F_S), *RUNS UNTIL YOU TAP STOP*, and why: *CONTROLLER < 5.1.3: NO WEIGHT STOP* /
+  *CONTROLLER VERSION UNKNOWN* / *SCALE FAULT: NO WEIGHT STOP* (amber). HOLD TO START as on every feature page.
+* **Frames:** manual start `aa 55 06 13 01 01 00 c1 db` (sub19 len1, word 19 = 1), manual stop `aa 55 06 13 01 00 00 c0 4b`
+  (word 19 = 0) — the stock legacy water page (`set_manual_hot_water_switch` 0x105118, `usart_send(6,19,1)`). On a
+  controller not known to be > 5.1.2 the stop is word 19 = 0 **only**; word 16 is never written to it.
+  `frame_policy` rejects word 16 = 1 unless dosing, and word 19 = 1 without the manual-water intent.
+* **WATER MODE = MANUAL on a dosing controller** starts manual water too (v6.17–v6.21: toast *WATER = MANUAL · USE
+  STOCK UI*, removed).
+* **HOME:** the water icon's target reads *MAN.* when the next start is manual; the hold sub-line *HOLD · HOT WATER ·
+  MANUAL*; while running *MANUAL · RUNS UNTIL STOP*, no target mark, the ring fills over 300 g; STOP WATER as always.
+  **No time limit and no display-side weight stop** (maintainer decision 2; the stock UI has none either).
+* **Scale fault while AUTO runs:** on the rising edge, a pending water start is dropped and — if the controller still
+  reports word 16 ≠ 0 — word 16 = 0 is sent once with the toast *SCALE FAULT · WATER STOPPED* (stock `hotWaterUpdate`
+  0x115B80..0x115BD8). The controller clears word 16 itself on the same bits, so usually nothing has to be sent.
+  A manual run is not stopped. HOME's error text: *SCALE FAULT* (code E2). Starts stay blocked while the error is
+  active (as for every error word).
+* **DIAGNOSTICS › CONTROLLER** (above ABOUT): *FIRMWARE* = the string as reported (upper case; *NOT REPORTED*,
+  amber *COPY DIFFERS*, amber when unparsable) · *HOT WATER* = *AUTO + MANUAL* (green) / *MANUAL ONLY* /
+  *MANUAL (SCALE)* (amber).
+* **Strings (EN / DA):** `TX_W_MAN_T` MANUAL HOT WATER / MANUELT VARMT VAND, `TX_W_MAN_RUN` RUNS UNTIL YOU TAP STOP / LØBER
+  TIL DU TRYKKER STOP, `TX_W_WHY_*`, `TX_H_HOLD_WATER_MAN`, `TX_H_WATER_MAN`, `TX_A_WATER_MAN` MAN., `TX_T_WATER_SCALE`,
+  `TX_ER_E2_SCALE`, `TX_DG_MCUCAP` CONTROLLER / STYRING, `TX_DL_MCU_*`, `TX_DV_MCU_*`, `TX_DV_WD_*` (one block; full
+  table in [dev/UI_v6.md Appendix A](dev/UI_v6.md#appendix-a--string-table-id--en--da)). All fit their pixel budgets
+  in both languages (selftest).
+* Previews: `106_page_water_manual_old`, `107_page_water_manual_unknown`, `108_page_water_mode_manual`,
+  `109_home_water_manual_label`, `110_home_water_manual_running`, `111_diag_controller`, `112_diag_controller_scale_fault`.
