@@ -269,6 +269,11 @@ as *"STOP NOT CONFIRMED · TRY AGAIN"* after 5 s. This path has never been seen 
 * **Two buttons:** if a main activity runs at the same time as latched steam (e.g. `5327` + word 24 =
   1), there are two buttons side by side: left = the main activity, right = STOP STEAM. Each has a
   touch area of 160 × 60 px and a pill of 152 × 54 px in F_S (v6.13–v6.16: 148 × 56 / 136 × 44 px in F_XS). The wand/flush still has no STOP button.
+* **v6.20 — HOLD·STEAM during a brew:** while a brew runs and no steam does, the right-hand slot is **HOLD·STEAM**
+  (*HOLD·DAMP*; same size as the two STOP slots, outlined in the steam colour, filled while held). Holding it 650 ms starts
+  latched steam on top of the brew (the same frame as the steam icon); a tap only explains. Once the controller latches,
+  the slot is STOP STEAM. Dimmed when steam cannot start (error, a write in transit). See
+  [concurrent-brew-steam.md §12](concurrent-brew-steam.md#12-implementation-v620).
 * **Feedback:** a tap (activated on release, like all buttons) immediately shows the toast *"STOPPING
   WATER…"*. When the MCU has cleared the bits, *"WATER STOPPED"* (green) follows. If there is no ACK,
   not even after a retransmit, *"STOP: NO REPLY · TRY AGAIN"* (red) is shown. If the bits have not

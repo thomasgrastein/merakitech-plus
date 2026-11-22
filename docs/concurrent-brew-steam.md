@@ -1,5 +1,9 @@
 # Brewing and steaming at the same time — feasibility
 
+> **Status: implemented in v6.20 (§12).** During a brew the brew screen offers **HOLD·STEAM** next to STOP BREW; holding it
+> starts a latched steam session on top of the brew. §1–§11 are the feasibility study and the hardware verification that led
+> to it; they describe the state *before* v6.20 where they say "Meraki+ today".
+
 **Date:** 2026-11-22 · **Method:** static analysis of the MCU firmware (`MEM03_V514_260923.bin`, Nuvoton M451) and the
 stock display UI (`demo_v9`), a re-analysis of the existing live UART capture (the STEAMLIVE session, 2026-11-17), and a new
 sim scenario. The static/sim round had no device access; the hardware runbook (§8) was **executed on the real machine later
@@ -13,7 +17,7 @@ the same day — see §11 (PASS)**. This round changed no code; the only additio
 | Does the hardware share anything critical? | **The pump is shared, but steam does not use it.** Steam = boiler pressure + the wand solenoid (PE.6). Brew = pump + inlet valve + group valve. They use different outputs (§2). |
 | Power / thermal? | **Handled by the MCU.** Its heater task never runs both heaters at once, and it switches the brew-boiler heater off while a brew runs. During brew + steam the only heater allowed on is the steam heater, and only once the steam boiler has fallen 10 °C below its target (§3.4). Peak load ≈ steam heater + pump (§4). |
 | Does the stock UI allow it? | **Yes — proven on hardware (§11).** The brew screen's back button reaches HOME, the steam start latches during a brew, and `dealBrewAndSteam` / `brewAndSteamRuningPlay` show a combined view with live brew weight + milk temperature. |
-| Does Meraki+ allow it? | **No.** `act_guard()` refuses every start while any activity runs (toast *ACTIVITY IN PROGRESS*). It sends nothing (§6). If both run anyway, Meraki+ already shows them correctly: EXTRACTION + STEAM·AUTO and two STOP buttons (sim, §7). |
+| Does Meraki+ allow it? | **Since v6.20: yes, steam during a brew (§12).** Up to v6.19 `act_guard()` refused every start while any activity ran (toast *ACTIVITY IN PROGRESS*) and sent nothing (§6). Showing both was already correct: EXTRACTION + STEAM·AUTO and two STOP buttons (sim, §7). |
 | Sim | **Allows it:** 26/26 PASS (EN and DA). Each activity stops on its own (§7). |
 | Easy to enable? | **Yes, and hardware-confirmed (§11): small UI change, nothing to change in the MCU.** Relax one guard and add a "start steam" button to the brew screen (§9). The hardware session is done. |
 
@@ -120,7 +124,7 @@ stop. Neither stop touches the other's bits.
 * **Proven on hardware (§11):** stock jumps to the brew page when a brew starts, but the brew page's back button returns to
   HOME, from which the steam start latches during the brew. The combined view is shown. There is no stock UI guard against it.
 
-## 6. Meraki+ today (`src/merakiplus.c`)
+## 6. Meraki+ before v6.20 (`src/merakiplus.c`)
 
 * `act_guard()` (`/* ---- activity guards */`): `if(phase_active(phase_raw(now))) return TR(TX_G_BUSY);`. So a steam start during a brew
   becomes the toast *ACTIVITY IN PROGRESS* and **no frame is sent**. The same guard blocks a brew start during steam. The feature-page HOLD TO START and the
@@ -131,6 +135,9 @@ stop. Neither stop touches the other's bits.
 * SAVE, SWITCH NOW, power-off and sleep stay blocked while anything runs. Those guards should stay as they are.
 
 ## 7. Sim — `sim/scenarios/concurrent_brew_steam.json` (new, `ui_only`)
+
+> This section describes the scenario as written for the feasibility round (v6.19 UI). v6.20 turned it into a real UI start and
+> removed both simplifications below — see §12.
 
 The scenario: brew starts (UI) → at t = 9 s the UI tries to start steam → at t = 10.5 s it writes word 24 = 1 directly, bypassing the guard. That write has the same register
 effect as `cmd6 sub24 len8` (it stands in for a UI without the guard). Cold milk (12.0 °C), target 65.0 °C.
@@ -192,7 +199,7 @@ unusual noise or smell · steam runs past its 60 s cap without stopping.
 ## 9. Recommendation
 
 **Enable "steam during a brew" in Meraki+. The hardware confirmation run (§8) is done and PASSED (§11).** The MCU supports it, protects the
-power budget itself, and stops each activity on its own. Proposed change (not implemented):
+power budget itself, and stops each activity on its own. Proposed change — **implemented in v6.20 (items 1, 2 and 5; see §12)**:
 
 1. `act_guard(ACT_STEAM)`: allow it when the **only** running activity is a brew (`phase_main` ∈ {PRE, EXT}). Steam bits must be clear
    (no flush running), word 24 = 0, no error, link up, write queue idle, nothing pending. **Everything else stays blocked**: steam during grind (the MCU would
@@ -257,3 +264,36 @@ combined state, time-slices the heaters so only one is ever on, and stops each a
 steam during a brew, add a HOLD·STEAM button on the brew screen) is now hardware-validated and can be implemented. No extra power or
 thermal guard is needed in the UI. The end state was restored exactly (Meraki+ live again, boot flag and config unchanged, temp files
 removed); the switch back used the gesture switcher with no reboot.
+
+## 12. Implementation (v6.20)
+
+What shipped, against §9:
+
+| §9 item | v6.20 |
+|---|---|
+| 1. Relaxed guard | `steam_brew_ok()` + `act_guard()`: a **steam** start passes when `phase_raw` is PRE or EXT (a brew, no steam bits) and work_sta has no grind bit 6, no hot-water bit 3 and no steam bits 5/14, and word 24 = 0. Then the rest of the guard still applies: an active error (words 34–36 — `phase_raw` ranks a running brew above them, so this is now checked explicitly) → *ERROR ACTIVE*, write queue / pending start / SAVE → *ONE MOMENT*, config not loaded / out of spec. Every other start during an activity stays *ACTIVITY IN PROGRESS*: steam during grind or hot water, steam on top of a wand flush or latched steam, and grind / brew / water during anything. SAVE, SWITCH NOW, power-off and sleep guards are unchanged. |
+| 2. HOLD·STEAM | On HOME during a brew with no steam running, the action row is **STOP BREW** (left, red) + **HOLD·STEAM** (right, the steam colour; *HOLD·DAMP* in Danish) — the two-slot layout that already existed for brew + latched steam (pills 152 × 54, tap areas 160 × 60). Hold 650 ms = the same `act_request(ACT_STEAM)` as the steam icon (the same stock frame `cmd6 sub24 len8`, word 24 = 1, word 25 = target); a tap only says *KEEP HOLDING TO START* or why it is blocked; the pill fills while held and is dimmed when the guard says no. Once the MCU latches steam the slot becomes **STOP STEAM** (the existing stop path, word 24 = 0). A pending steam start is confirmed by the steam bits themselves (the brew keeps the main phase, so the old "phase became active" confirmation did not apply). |
+| 3. Recovery hint | **Not done** (optional, information only). |
+| 4. Brew during latched steam | **Not offered** in the UI: during steam HOME shows only STOP STEAM, and `act_guard()` still blocks a brew start. The MCU would accept it and the sim now models it (below), so it can be added later without new research. |
+| 5. Tests | below. |
+
+![the brew screen in v6.20: STOP BREW + HOLD·STEAM](../screenshots/brew-extraction.png)
+
+**UX note.** STOP BREW is 152 px wide during a brew (it was the single 216 px pill), because the right-hand slot now holds HOLD·STEAM.
+It is still red, first in reading order, and the same size it already had whenever two activities ran. HOLD·STEAM uses the
+hold-to-start look of the feature pages (outline in the steam colour, fill while held), so it cannot be mistaken for a STOP.
+A tap never starts anything.
+
+**Simulator.** `mcu_sim.py` now (a) accepts a brew start during steam (brew-ctl does not read the steam state, §3.2), keeping the steam bits
+on top; (b) models the heater rule of §3.4 for latched steam during a brew: no steam-heater slots until the steam boiler is below target − 10 °C
+(gear word 14), then bit 13 (work_sta `0x7327`) and cur1 ≈ 7.95 k (pump + heater) until the target; none during phase-controlled pre-infusion;
+brew pressure/flow stay the brew's. Steam alone and the wand flush are unchanged (replays unaffected).
+
+**Tests.** UI self-test section *v6.20 steam during a brew* (9 checks: the guard allows PRE/EXT and blocks grind, water, steam, brew + steam,
+word 24 already set, a combined grind/water state; error and busy queue; the HOME layout and tap; the hold's frame; the confirmed latch with
+no *NO START* toast; STOP STEAM mid-brew with the brew timer unchanged; STOP BREW while steaming; the label width in both languages).
+Six older checks that tapped STOP BREW in the centre now tap its left-hand slot. Sim self-test T15 (brew during steam; the heater rule).
+Scenarios (all `ui_only`): `concurrent_brew_steam` (now a real UI start during pre-infusion — the §11 timing — instead of the `set_reg` bypass: the
+`sub24` write, `0x5327`, the heater slots `0x7327`, brew stops by weight, steam by milk, the button states), `concurrent_brew_steam_stops`
+(STOP STEAM mid-brew, a second steam via the direct word 24 write, STOP BREW while steaming, STOP STEAM) and `concurrent_steam_blocked`
+(steam refused during grind, hot water and an E2 during a brew; no word 24 write). All three fail against the v6.19 build.

@@ -943,11 +943,60 @@ def t14_heat_stage():
     check("model off again -> 62 = 63 = 100", sim.heat is None and sim.regs[62] == 100)
 
 
+def t15_concurrent_brew_steam():
+    """v6.20: brew + latched steam both ways round, and the MCU heater rule during the overlap
+    (docs/concurrent-brew-steam.md §3.4 / §11)."""
+    BREW = [60, 0, 0, 0, 1, 0, 870, 0, 60, 3, 60, 0, 400, 0, 0, 0, 0, 1]
+    # brew started DURING latched steam: the MCU accepts it (brew-ctl does not read steam)
+    sim = fresh_sim()
+    sim.inject({"type": "milk_jump", "value": 120})
+    sim.handle_write(24, [1, 650, 0, 0, 0, 0, 0, 0])
+    sim.advance(sim.t + 1.0)
+    ok0 = sim.regs[33] == 0x4121 and sim.mode == "steam"
+    sim.handle_write(5, BREW)
+    sim.advance(sim.t + 1.0)
+    ws = sim.regs[33]
+    check("concurrent: brew start DURING latched steam is accepted (brew bits 1+2 on top of 5+14, word24 stays 1)",
+          ok0 and (ws & 0x0006) == 0x0006 and (ws & 0x4020) == 0x4020 and sim.regs[24] == 1
+          and any(e["kind"] == "activity_start" and e.get("activity") == "brew" for e in sim.alog.events),
+          f"ws={ws:#06x}")
+    # heater rule: steam latched during the brew -> no steam heater until word47 < target-100, then bit 13
+    sim = fresh_sim()
+    sim.handle_write(5, BREW)
+    sim.advance(sim.t + 3.0)
+    sim.inject({"type": "milk_jump", "value": 120})
+    sim.handle_write(24, [1, 650, 0, 0, 0, 0, 0, 0])
+    tgt = {1: 1200, 2: 1250, 3: 1300}.get(sim.regs[14], 1350)
+    first, early, both, cur_ok, w_min = None, False, False, True, 99999
+    while sim.act and sim.act["kind"] == "brew" and sim.t < 120:
+        sim.advance(sim.t + 0.1)
+        ws, w47 = sim.regs[33], sim.regs[47]
+        if (ws & 0x4020) != 0x4020 or not (ws & 0x0006) == 0x0006:
+            continue
+        w_min = min(w_min, w47)
+        if ws & 0x2000:
+            if first is None:
+                first = w47
+            if sim.regs[50] < 7000:
+                cur_ok = False
+        elif first is None and sim.regs[50] > 2000:
+            cur_ok = False
+        if (ws & 0x2000) and first is None and w47 >= tgt - 100 + 5:
+            early = True
+        if (ws & 0x0400) and (ws & 0x2000):
+            both = True
+    check("heater rule: during brew + latched steam the steam heater (bit 13) stays off until the steam boiler is < target-10 °C, then on; never with bit 10",
+          first is not None and tgt - 100 - 15 <= first < tgt - 100 + 5 and not early and not both,
+          f"target={tgt} first bit13 at word47={first} min={w_min}")
+    check("heater rule: cur1 = pump only (~1 k) before, pump + steam heater (~8 k) once bit 13 runs",
+          cur_ok)
+
+
 def main():
     t0 = time.monotonic()
     for fn in (t1_crc, t2_chunking, t3_write_policy, t4_packing, t5_boot,
                t6_autostop, t7_keepalive, t8_faults, t9_ack, t10_link, t11_replay,
-               t12_manual_stop, t13_power, t14_heat_stage):
+               t12_manual_stop, t13_power, t14_heat_stage, t15_concurrent_brew_steam):
         fn()
     dt = time.monotonic() - t0
     print(f"\nSELFTEST: {N_PASS} PASS / {N_FAIL} FAIL ({dt:.1f}s)")

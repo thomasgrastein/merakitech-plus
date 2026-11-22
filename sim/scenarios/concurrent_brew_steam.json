@@ -1,33 +1,246 @@
 {
   "name": "concurrent_brew_steam",
-  "description": "Feasibility (docs/concurrent-brew-steam.md): a LATCHED steam session started mid-brew. (1) merakiplus's activity guard blocks its own steam start during the brew (no word24 write). (2) A word24=1 write that bypasses the guard (set_reg, the same register effect as cmd6 sub24 len8) starts steam on top of the brew: work_sta 0x5327, brew weight keeps rising, brew stops by weight on its own, steam keeps running (0x4121), then auto-stops at milk >= word25 on its own.",
+  "description": "v6.20 (docs/concurrent-brew-steam.md §9/§11): a LATCHED steam session started from the UI during a brew. The brew screen offers HOLD·STEAM next to STOP BREW; the UI's steam start (cmd6 sub24 len8, word24=1) passes the relaxed guard during pre-infusion, the MCU runs both (work_sta 0x5327), keeps the steam heater off until the steam boiler is 10 °C below target and then fires it (bit 13, 0x7327), stops the brew by weight on its own while steam continues (0x4121), then auto-stops steam at milk >= word25 on its own. Both are shown (EXTRACTION + STEAM·AUTO, STOP BREW + STOP STEAM). The direct-write path (set_reg word24=1) still works in a second, short session.",
   "duration_s": 66,
   "ui_only": true,
   "events": [
-    {"t": 1, "target": "ui", "cmd": "action", "name": "brew"},
-    {"t": 9, "target": "ui", "cmd": "action", "name": "steam"},
-    {"t": 10, "target": "sim", "event": {"type": "milk_jump", "value": 120}},
-    {"t": 10.4, "target": "sim", "event": {"type": "set_reg", "word": 25, "value": 650}},
-    {"t": 10.5, "target": "sim", "event": {"type": "set_reg", "word": 24, "value": 1}},
-    {"t": 15, "target": "runner", "op": "snapshot", "label": "brew-plus-steam"},
-    {"t": 36, "target": "runner", "op": "snapshot", "label": "steam-after-brew"},
-    {"t": 63, "target": "runner", "op": "snapshot", "label": "both-done"}
+    {
+      "t": 1,
+      "target": "ui",
+      "cmd": "action",
+      "name": "brew"
+    },
+    {
+      "t": 3.5,
+      "target": "sim",
+      "event": {
+        "type": "milk_jump",
+        "value": 120
+      }
+    },
+    {
+      "t": 4,
+      "target": "ui",
+      "cmd": "action",
+      "name": "steam"
+    },
+    {
+      "t": 12,
+      "target": "runner",
+      "op": "snapshot",
+      "label": "brew-plus-steam"
+    },
+    {
+      "t": 36,
+      "target": "runner",
+      "op": "snapshot",
+      "label": "steam-after-brew"
+    },
+    {
+      "t": 63,
+      "target": "runner",
+      "op": "snapshot",
+      "label": "both-done"
+    }
   ],
   "expect": [
-    {"kind": "phase", "t": 4, "window": 1, "value": "PRE"},
-    {"kind": "phase", "t": 9, "window": 0.7, "value": "EXT"},
-    {"kind": "sim_log", "assert": "no_write_word", "word": 24, "t0": 8.5, "t1": 10.3},
-    {"kind": "sim_log", "assert": "activity_start", "activity": "steam", "t0": 10.5, "t1": 11.5},
-    {"kind": "work_sta_seen", "t0": 11, "t1": 25, "value": "0x5327"},
-    {"kind": "word", "word": 24, "t": 15, "window": 1, "value": 1},
-    {"kind": "word", "word": 22, "t": 15, "window": 1, "value": 1},
-    {"kind": "word_min_seen", "word": 39, "t0": 18, "t1": 24, "min": 150, "signed": true},
-    {"kind": "sim_log", "assert": "activity_stop", "activity": "brew", "reason_contains": "weight", "t0": 25, "t1": 32},
-    {"kind": "work_sta_seen", "t0": 32, "t1": 45, "value": "0x4121"},
-    {"kind": "word", "word": 24, "t": 38, "window": 1, "value": 1},
-    {"kind": "phase", "t": 38, "window": 1.5, "value": "STEAM"},
-    {"kind": "sim_log", "assert": "activity_stop", "activity": "steam", "reason_contains": "milk", "t0": 40, "t1": 62},
-    {"kind": "word", "word": 24, "t": 64, "window": 1, "value": 0},
-    {"kind": "phase", "t": 64.5, "window": 1.5, "value": "READY"}
+    {
+      "kind": "phase",
+      "t": 2.5,
+      "window": 0.8,
+      "value": "PRE"
+    },
+    {
+      "kind": "state",
+      "path": "stop.steam_hold",
+      "t": 2.8,
+      "window": 0.6,
+      "equals": "on"
+    },
+    {
+      "kind": "state",
+      "path": "stop.btns",
+      "t": 2.8,
+      "window": 0.6,
+      "equals": [
+        "brew"
+      ]
+    },
+    {
+      "kind": "sim_log",
+      "assert": "write_words",
+      "sub": 24,
+      "words": [
+        1,
+        650,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "t0": 3.9,
+      "t1": 4.6
+    },
+    {
+      "kind": "sim_log",
+      "assert": "activity_start",
+      "activity": "steam",
+      "t0": 4,
+      "t1": 5
+    },
+    {
+      "kind": "work_sta_seen",
+      "t0": 5,
+      "t1": 25,
+      "value": "0x5327"
+    },
+    {
+      "kind": "state",
+      "path": "phase_main",
+      "t": 12,
+      "window": 1,
+      "equals": "EXT"
+    },
+    {
+      "kind": "state",
+      "path": "steam.kind",
+      "t": 12,
+      "window": 1,
+      "equals": "auto"
+    },
+    {
+      "kind": "state",
+      "path": "steam.concurrent",
+      "t": 12,
+      "window": 1,
+      "equals": true
+    },
+    {
+      "kind": "state",
+      "path": "stop.btns",
+      "t": 12,
+      "window": 1,
+      "equals": [
+        "brew",
+        "steam"
+      ]
+    },
+    {
+      "kind": "state",
+      "path": "stop.steam_hold",
+      "t": 12,
+      "window": 1,
+      "equals": null
+    },
+    {
+      "kind": "state",
+      "path": "activity_pending",
+      "t": 12,
+      "window": 1,
+      "equals": null
+    },
+    {
+      "kind": "word",
+      "word": 24,
+      "t": 12,
+      "window": 1,
+      "value": 1
+    },
+    {
+      "kind": "word",
+      "word": 22,
+      "t": 12,
+      "window": 1,
+      "value": 1
+    },
+    {
+      "kind": "word_hold",
+      "word": 33,
+      "t0": 6,
+      "t1": 15,
+      "min": 20480,
+      "max": 24575
+    },
+    {
+      "kind": "work_sta_seen",
+      "t0": 15,
+      "t1": 29,
+      "value": "0x7327",
+      "mask": "0x0C00"
+    },
+    {
+      "kind": "word_min_seen",
+      "word": 39,
+      "t0": 18,
+      "t1": 24,
+      "min": 150,
+      "signed": true
+    },
+    {
+      "kind": "sim_log",
+      "assert": "activity_stop",
+      "activity": "brew",
+      "reason_contains": "weight",
+      "t0": 22,
+      "t1": 32
+    },
+    {
+      "kind": "work_sta_seen",
+      "t0": 28,
+      "t1": 45,
+      "value": "0x4121"
+    },
+    {
+      "kind": "word",
+      "word": 24,
+      "t": 36,
+      "window": 1,
+      "value": 1
+    },
+    {
+      "kind": "phase",
+      "t": 36,
+      "window": 1.5,
+      "value": "STEAM"
+    },
+    {
+      "kind": "state",
+      "path": "stop.btns",
+      "t": 36,
+      "window": 1,
+      "equals": [
+        "steam"
+      ]
+    },
+    {
+      "kind": "sim_log",
+      "assert": "activity_stop",
+      "activity": "steam",
+      "reason_contains": "milk",
+      "t0": 38,
+      "t1": 60
+    },
+    {
+      "kind": "sim_log",
+      "assert": "no_write_word",
+      "word": 22,
+      "t0": 1.5,
+      "t1": 66
+    },
+    {
+      "kind": "word",
+      "word": 24,
+      "t": 63,
+      "window": 1,
+      "value": 0
+    },
+    {
+      "kind": "phase",
+      "t": 64.5,
+      "window": 1.5,
+      "value": "READY"
+    }
   ]
 }

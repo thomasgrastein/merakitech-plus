@@ -3,6 +3,31 @@
 All notable changes to Meraki+. Details (with evidence, frames and test figures) are in
 [docs/dev/UI_v6.md](docs/dev/UI_v6.md) under *CHANGES-v6.x*. All dates are 2026.
 
+## [6.20] — 2026-11-22
+**Steam while you brew.** The controller has always been able to run a latched steam session during a brew (verified on
+a real machine with the stock UI, [docs/concurrent-brew-steam.md §11](docs/concurrent-brew-steam.md#11-hardware-verification-2026-11-22--pass));
+only Meraki+'s own start guard prevented it. No frame, limit or timing changed: the steam start is the stock one.
+### Added
+- **HOLD·STEAM on the brew screen** (*HOLD·DAMP* in Danish). While a brew runs and no steam does, the action row is
+  STOP BREW (left) + HOLD·STEAM (right). Hold it 650 ms to start steam on top of the brew; a tap only explains. Once
+  steam runs, the slot is STOP STEAM. Each activity stops by itself (the shot by weight, the steam at the milk
+  temperature) or with its own STOP.
+### Changed
+- **The activity guard allows a steam start while a brew is the only activity** (pre-infusion or extraction; no steam,
+  grind or hot water running; word 24 = 0; no error; nothing in transit). Everything else stays blocked: steam during
+  grind or hot water, any start during steam, and grind / brew / water during anything. A brew start during steam is
+  not offered (the controller would accept it). No extra power or thermal guard in the UI: the controller runs only one
+  heater at a time and keeps the steam heater off during a shot until the steam boiler is 10 °C below its target.
+- During a brew STOP BREW is the left-hand 152 px pill (it was the single 216 px pill).
+### Notes
+- Self-test: new section *v6.20 steam during a brew* (10 checks); six older checks tap STOP BREW in its new place.
+  555 checks EN + DA (also as a 32-bit ARM binary). 10 / 10 mutants caught (dev workspace).
+- Simulator: the sim now accepts a brew start during steam and models the controller's heater rule during brew + steam
+  (`sim/selftest.py` 195/0). Scenarios: `concurrent_brew_steam` (rewritten: a real UI start, 37 checks),
+  `concurrent_brew_steam_stops` (35) and `concurrent_steam_blocked` (23), new; all fail against v6.19.
+- `bin/`: `merakiplus` `6c0b4cd1…`, `merakiplus_sim_arm` `70bf2555…` and the host SIM builds rebuilt (official zig
+  0.17.1); `merakiplus_snd`, `switcher`, `tinj_hold`, `keyinj`, `grab_shim.so` and `audio/` unchanged.
+
 ## [6.19] — 2026-11-21
 Two sound changes from user feedback. Display and audio only — no UART frame, guard, limit, timing, setting or helper
 changed (`bin/merakiplus_snd` is byte-identical to v6.18.1).

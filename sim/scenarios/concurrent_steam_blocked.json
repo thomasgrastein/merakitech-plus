@@ -1,0 +1,154 @@
+{
+  "name": "concurrent_steam_blocked",
+  "description": "v6.20: the relaxed guard allows steam ONLY on top of a brew. A UI steam start is still refused (toast, no word24 write) during GRIND (the MCU would stop steam anyway), during HOT WATER (the steam heater gets no slots) and while an error (E2) is active.",
+  "duration_s": 30,
+  "ui_only": true,
+  "events": [
+    {
+      "t": 1,
+      "target": "ui",
+      "cmd": "action",
+      "name": "grind"
+    },
+    {
+      "t": 2.5,
+      "target": "ui",
+      "cmd": "action",
+      "name": "steam"
+    },
+    {
+      "t": 3.5,
+      "target": "ui",
+      "cmd": "action",
+      "name": "grind_stop"
+    },
+    {
+      "t": 9,
+      "target": "ui",
+      "cmd": "action",
+      "name": "water"
+    },
+    {
+      "t": 10.5,
+      "target": "ui",
+      "cmd": "action",
+      "name": "steam"
+    },
+    {
+      "t": 11.5,
+      "target": "ui",
+      "cmd": "action",
+      "name": "water_stop"
+    },
+    {
+      "t": 17,
+      "target": "ui",
+      "cmd": "action",
+      "name": "brew"
+    },
+    {
+      "t": 21,
+      "target": "sim",
+      "event": {
+        "type": "fault",
+        "e2": 1,
+        "dur": 4
+      }
+    },
+    {
+      "t": 21.3,
+      "target": "ui",
+      "cmd": "action",
+      "name": "steam"
+    },
+    {
+      "t": 21.5,
+      "target": "runner",
+      "op": "snapshot",
+      "label": "error-during-brew"
+    }
+  ],
+  "expect": [
+    {
+      "kind": "phase",
+      "t": 2.5,
+      "window": 0.6,
+      "value": "GRIND"
+    },
+    {
+      "kind": "state",
+      "path": "toast.id",
+      "t": 2.8,
+      "window": 0.4,
+      "equals": "TX_G_BUSY"
+    },
+    {
+      "kind": "state",
+      "path": "stop.steam_hold",
+      "t": 2.5,
+      "window": 0.6,
+      "equals": null
+    },
+    {
+      "kind": "phase",
+      "t": 10.5,
+      "window": 0.6,
+      "value": "WATER"
+    },
+    {
+      "kind": "state",
+      "path": "toast.id",
+      "t": 10.8,
+      "window": 0.4,
+      "equals": "TX_G_BUSY"
+    },
+    {
+      "kind": "state",
+      "path": "stop.steam_hold",
+      "t": 10.5,
+      "window": 0.6,
+      "equals": null
+    },
+    {
+      "kind": "phase",
+      "t": 19.5,
+      "window": 1,
+      "value": "PRE"
+    },
+    {
+      "kind": "state",
+      "path": "stop.steam_hold",
+      "t": 20,
+      "window": 1,
+      "equals": "on"
+    },
+    {
+      "kind": "state",
+      "path": "toast.id",
+      "t": 21.6,
+      "window": 0.4,
+      "equals": "TX_G_ERROR"
+    },
+    {
+      "kind": "sim_log",
+      "assert": "activity_stop",
+      "activity": "brew",
+      "reason_contains": "fault",
+      "t0": 21,
+      "t1": 22
+    },
+    {
+      "kind": "sim_log",
+      "assert": "no_write_word",
+      "word": 24,
+      "t0": 0,
+      "t1": 30
+    },
+    {
+      "kind": "phase",
+      "t": 28.5,
+      "window": 1.2,
+      "value": "READY"
+    }
+  ]
+}

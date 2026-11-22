@@ -504,7 +504,7 @@ class McuSim:
                         "bit9_pulse_done": pre < 2, "flush_overlap": False}
             r[9] = 0
             r[39] = 0xFFFd                # tare ~ -3 (the puck absorbs)
-            r[33] = WS_BREW_PRE
+            r[33] = WS_BREW_PRE | (0x4020 if self.steam_ch else 0)   # v6.20: steam keeps its bits
             self.mode = "brew"
         elif kind == "water":
             target = r[17]
@@ -759,7 +759,8 @@ class McuSim:
             if self.t >= self.pending["at"]:
                 kind = self.pending["kind"]
                 self.pending = None
-                if self.mode in ("idle",) and awake:
+                if awake and (self.mode == "idle" or
+                              (self.mode == "steam" and kind == "brew")):
                     self._start_activity(kind)
         # v6.6: display steam (word24=1) is an INDEPENDENT latch path — does NOT require
         # the wand switch (STEAMLIVE §5: live wand bit0=0 throughout display steam;
@@ -782,10 +783,16 @@ class McuSim:
                 and self.steam_clear_at is None):
             # word24=1 during a running flush (latch=0) → the display latch takes over
             self.pending_steam = {"at": self.t + 0.30}
-        # primary triggers (only in idle — like the UI's guards)
-        if self.mode not in ("idle",) or self.pending:
+        # primary triggers (idle; v6.20: a BREW also during steam — brew-ctl 0x1E9C does not
+        # read the steam bits/words, docs/concurrent-brew-steam.md §3.2. Grind/water during
+        # steam stay unmodelled: their triggers are not consumed while steam runs.)
+        if self.mode not in ("idle", "steam") or self.pending:
             return
         if not awake:
+            return
+        if self.mode == "steam":
+            if r[9] != 0 and r[22] == 1 and r[3] == 0 and r[16] != 1 and r[19] != 1:
+                self.pending = {"kind": "brew", "at": self.t + 0.17}
             return
         if r[3] != 0:
             self.pending = {"kind": "grind", "at": self.t + 0.39}
@@ -942,7 +949,32 @@ class McuSim:
         self.ft[48] += self._milk_rate(self.ft[48]) * dt
         r[48] = int(self.ft[48]) & 0xFFFF
         # s-boiler (word47) + s water level (word68)
-        if sc["latch"]:
+        # v6.20: latched steam DURING A BREW follows the MCU heater task 0x3502 (docs/concurrent-
+        # brew-steam.md §3.4, hardware §11): the steam heater (work_sta bit 13) gets NO slots while
+        # the brew runs (and none during phase-controlled pre-infusion) until the steam boiler has
+        # fallen below target - 10.0 °C (target by gear word 14: 1=120, 2=125, 3=130, else 135 °C);
+        # from then on (latch r5) it runs 100 % until the target, each slot still stopped above
+        # target. The brew heater (bit 10) is off during any brew. Live: 129.8 -> 117.3 °C, bit 13
+        # first at 119.7 °C, cur1 ~1.05 k (pump) -> ~7.95 k (pump + steam heater).
+        brew = bool(self.act and self.act["kind"] == "brew")
+        heat = False
+        if sc["latch"] and brew:
+            a = self.act
+            tgt = {1: 1200, 2: 1250, 3: 1300}.get(r[14], 1350)
+            pre_inf = a["pre"] > 0 and (self.t - a["t0"]) < a["pre"]
+            if not pre_inf and self.ft[47] < tgt - 100:
+                sc["r5"] = True
+            heat = bool(sc.get("r5")) and not pre_inf and self.ft[47] < tgt
+            if heat:
+                self.ft[47] = self._approach(self.ft[47], tgt, 1.0 * dt)
+            else:
+                self.ft[47] = max(1000.0, self.ft[47] - 6.5 * dt)
+            if el < 1.5:
+                self.ft[68] = max(800.0, self.ft[68] - 230.0 * dt)
+            else:
+                self.ft[68] = self._approach(self.ft[68], 858, 2.0 * dt)
+            r[68] = max(0, int(self.ft[68]) + self.rng.randint(-12, 12))
+        elif sc["latch"]:
             if el < 2.5:
                 pass                  # live: the boiler holds ~1300 for the first ~2.5 s
             elif el < 8.5:
@@ -962,7 +994,11 @@ class McuSim:
         r[47] = max(0, int(self.ft[47]) + self.rng.randint(-3, 3))
         self.steam_consumed = True
         # current/pressure/flow
-        if sc["latch"]:
+        if sc["latch"] and brew:
+            # v6.20: the brew owns pressure/flow (word 51/52); cur1 = pump (+ steam heater)
+            if heat:
+                r[50] = 7950 + self.rng.randint(-150, 150)
+        elif sc["latch"]:
             if el < 5:
                 r[50] = 54 + self.rng.randint(-10, 20)
                 r[51] = 93 + self.rng.randint(-20, 40)
@@ -987,6 +1023,8 @@ class McuSim:
             self.ft_last[w] = r[w]
         # work_sta = union (primary bits | steam bits | maintenance pulses)
         r[33] |= 0x4020
+        if heat:
+            r[33] |= 0x2000           # v6.20: steam-boiler heater slot (bit 13)
         if self.pulse and self.t < self.pulse["until"]:
             r[33] |= self.pulse["bits"]
         # stop conditions per path (latch gating, STEAMLIVE §6.1)

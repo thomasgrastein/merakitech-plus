@@ -120,6 +120,9 @@ For an interactive browser view of the simulator, see [PLAY.md](PLAY.md).
 | `steam_auto` | 40 s | display steam (sub24 len8, latch) + wand switch → ws 0x4121 → milk ramp → **auto-stop word48≥word25 without a stop write** (word24 MCU clear +0.18 s) |
 | `steam_wand_flush` | 34 s | **v6.6:** wand flush DURING a brew → ws 0x5327 (union), word24=0/word46=1, **no auto-stop >650**, release stop, the brew weight continues, no flush writes |
 | `steam_auto_overshoot` | 60 s | **v6.6:** cold milk (116) → ramp → auto-stop 650 → **overshoot peak ~689 (+39) ~11 s after the stop**; cur1 ~7340 / word51 ~16650 during steam |
+| `concurrent_brew_steam` | 66 s | **v6.20:** UI steam start DURING a brew (pre-infusion) → `0x5327`, steam heater only below target −10 °C (bit 13, `0x7327`), brew stops by weight, steam continues and stops by milk; HOLD·STEAM → STOP STEAM |
+| `concurrent_brew_steam_stops` | 30 s | **v6.20:** STOP STEAM mid-brew (brew continues) · steam again via direct word24=1 · STOP BREW while steaming (steam continues) · STOP STEAM |
+| `concurrent_steam_blocked` | 30 s | **v6.20:** UI steam refused during grind, hot water and an E2 during a brew — no word24 write |
 | `steam_manual_stop` | 12 s | display steam + wand switch → manual stop sub24 word24=0 before the setpoint |
 | `stop_water` | 14 s | **v6.13:** WATER (auto) → manual stop sub16 word16=0 in the middle of dispensing → ACK, bits 1+3+9 cleared ≤ 0.5 s, weight held + post/drip −11 like the auto-stop, stop.ok=1 |
 | `stop_brew` | 20 s | **v6.13:** BREW → manual stop sub22 word22=0 in the middle of the extraction → ACK, valve pulse 0x0105, after-drip +12 like the auto-stop, stop.ok=1 |

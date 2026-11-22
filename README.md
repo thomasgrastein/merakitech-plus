@@ -1,7 +1,7 @@
 # Meraki+ — a community UI for the round display of MerakiTech espresso machines
 
 [![CI](https://github.com/thomasgrastein/merakitech-plus/actions/workflows/ci.yml/badge.svg)](https://github.com/thomasgrastein/merakitech-plus/actions/workflows/ci.yml)
-![version](https://img.shields.io/badge/Meraki%2B-v6.19-c9955c)
+![version](https://img.shields.io/badge/Meraki%2B-v6.20-c9955c)
 ![license](https://img.shields.io/badge/license-MIT-blue)
 ![status](https://img.shields.io/badge/status-unofficial%20%C2%B7%20experimental-red)
 
@@ -124,6 +124,11 @@ available to go back to.
   and settings and a labelled **HOLD TO START**; the icons on HOME show what they will do (*18.5 G*, *36 G*, …).
 - **Live brew view** — weight in the cup, time, flow and a **pressure estimate** (≈bar); a
   calm graph (median + EMA) and a weight dead band, so the numbers do not flicker.
+- **Steam while you brew** (v6.20) — during a shot, hold **HOLD·STEAM** next to STOP BREW to start the
+  milk steam at the same time. The controller runs both, keeps its own heater limits (only one heater at a
+  time) and stops each one by itself: the shot by weight, the steam at the milk temperature; each has its
+  own STOP. Steam pressure is a bit lower while the shot runs
+  ([details](docs/concurrent-brew-steam.md)).
 - **Center-hold gesture (optional, `--gesture`)** — hold one finger in the middle of the stock UI's
   screen for 5 seconds to switch to Meraki+ without a reboot (works from the first boot after
   installation). To go back: *gear → SYSTEM → STOCK UI → SWITCH TO ORIGINAL NOW*.
@@ -415,7 +420,7 @@ From the simulator (the same code as on the machine):
 | | | |
 |---|---|---|
 | ![](screenshots/home-ready-en.png) | ![](screenshots/page-brew.png) | ![](screenshots/brew-extraction.png) |
-| HOME, ready (English) | The BREW page (tap the cup icon) | Brewing |
+| HOME, ready (English) | The BREW page (tap the cup icon) | Brewing (STOP BREW · HOLD·STEAM) |
 | ![](screenshots/steam.png) | ![](screenshots/settings-system.png) | ![](screenshots/system-schedule.png) |
 | Steam | SYSTEM (the gear) | SYSTEM › SCHEDULE |
 | ![](screenshots/setting-brew-temp.png) | ![](screenshots/diagnostics.png) | ![](screenshots/home-ready-da.png) |

@@ -2,6 +2,11 @@
  * 480x480 screen, v6.16: feature parity (settings + activity control), its own visual
  * design system, boot-slot integration, product name + two languages — and from v6.4 a SIM build.
  *
+ * v6.20 = v6.19 + STEAM DURING A BREW (docs/concurrent-brew-steam.md §9, hardware-verified §11): act_guard() lets a latched steam
+ *  start through when a brew (pre-infusion or extraction) is the ONLY running activity (no steam bits, word 24 = 0, no grind / hot-water
+ *  bit, no error, queue idle). HOME shows HOLD·STEAM next to STOP BREW during a brew; once steam latches it is STOP STEAM (the existing
+ *  two-button layout and stop paths). Steam during grind / hot water and every other start stay blocked; no brew start during steam
+ *  is offered. The frames are unchanged (the stock steam start cmd6 sub24 len8). No new power/thermal guard: the MCU time-slices the heaters.
  * v6.19 = v6.18.1 + (1) NO READY TONE AT A POWER-ON WITH HOT BOILERS (user: jingle + both ready tones back-to-back is redundant): at every
  *  power-on (cold boot of the display, OFF -> on, sleep -> wake) a boiler whose heat stage is already 100 over the first 1.5 s counts as
  *  announced — only the jingle plays; a tone needs a real cold -> hot transition during the session (re-arm after cooling unchanged).
@@ -306,7 +311,7 @@ static int  sim_net_on=1;
 #define KBD_NAME "k62091"
 #define BL_SYSFS "/sys/class/pwm/pwmchip0/pwm2/duty_cycle"
 #define BL_EN_SYSFS "/sys/class/pwm/pwmchip0/pwm2/enable"   /* v6.14: stock uikit_os_back_light_off/on 0xC2278 = blpwm_set_enable(2,0/1) */
-#define MERAKIPLUS_VERSION "V6.19"
+#define MERAKIPLUS_VERSION "V6.20"
 
 /* ---- v6.10: pressure estimate (UI_v6.md §16) ----
  * Word 51 (SPI2 ADC channel 0xA, REGISTERMAP: pressure OR pump-drive candidate) -> bar with ONE linear anchor:
@@ -1477,6 +1482,7 @@ enum { K0=0, KT, KSUB, KLAB, KCHIP, KBTN, KBTNS, KTITLE, KPSUB, KSPL, KDL, KDV, 
  X(TX_B_STOP_BREW, K0, "STOP BREW", "STOP BRYG") \
  X(TX_B_STOP_WATER, K0, "STOP WATER", "STOP VAND") \
  X(TX_B_START, K0, "HOLD TO START", "HOLD FOR START") \
+ X(TX_B_HOLD_STEAM, K0, "HOLD\xC2\xB7" "STEAM", "HOLD\xC2\xB7" "DAMP") \
  X(TX_B_BACK, KBTN, "BACK", "TILBAGE") \
  X(TX_B_CANCEL, KBTN, "CANCEL", "ANNULLER") \
  X(TX_B_SAVE, KBTNS, "SAVE", "GEM") \
@@ -2639,7 +2645,8 @@ static int phase_active(int p){ return p>=PH_GRIND&&p<=PH_STEAM; }
  *     weight, time) + a steam marker, and the milk temperature is in the stat row.
  * phase_raw() is UNCHANGED (the state contract: steam first). phase_main() is what HOME shows as the
  * main activity: grind/brew/water take precedence over steam. The guards still use phase_raw(): any
- * activity — including a wand flush — blocks start, SAVE, SWITCH NOW and boot push. */
+ * activity — including a wand flush — blocks start, SAVE, SWITCH NOW and boot push (v6.20: except a latched steam start on top
+ * of a brew, steam_brew_ok()). */
 enum { SK_NONE=0, SK_UNKNOWN, SK_AUTO, SK_WAND };
 static struct { int kind, last_kind, wand; ms_t t0; } stm;   /* kind: ongoing steam; last_kind: the most recently finished; wand: the switch was seen */
 static int steam_bits(void){ return (reg[33]&0x4020)==0x4020; }
@@ -2674,6 +2681,10 @@ static int stop_btns(ms_t now,int k[2]){
     if(steam_stop_visible()) k[n++]=ACT_STEAM;
     return n;
 }
+/* v6.20: HOLD · STEAM — during a brew with no steam at all, the right-hand slot next to STOP BREW starts a latched steam session
+ * (hold HOLD_MS, same act_request() as everywhere). Once steam latches the slot is STOP STEAM (stop_btns). Shown even when the guard
+ * says no (dimmed; a tap says why), so the layout does not jump. */
+static int steam_hold_shown(ms_t now){ return link_up(now)&&stop_main_kind(now)==ACT_BREW&&!steam_bits(); }
 /* are the activity's work_sta bits still set? (same masks as phase_raw/phase_main) */
 static int stop_running(int kind){
     uint16_t ws=reg[33];
@@ -3588,7 +3599,7 @@ enum { V_SPLASH=0, V_MAIN, V_DETAIL, V_SYS, V_BYE, V_OFF };   /* v6.14: V_OFF = 
  * the settings lived in three lists that followed the spec's tiers, not the activity they belong to. */
 enum { PG_HOME=0, PG_GRIND, PG_BREW, PG_WATER, PG_STEAM, PG_SYS, PG_DIAG, NPAGE };
 #define PG_T0 PG_GRIND     /* first list page (page = PG_T0 + SET[].tier) */
-enum { T_NONE=0, T_ACT0, T_ACT1, T_ACT2, T_ACT3, T_STOP, T_MINUS, T_PLUS, T_SAVE, T_CANCEL, T_START, T_DIAG, T_GRAPH, T_PINFO, T_GEAR, T_BACK, T_STOPS, T_ROW0=32 };   /* v6.11: T_GEAR (HOME -> SYSTEM), T_BACK (close chevron); v6.17: T_START (a feature page's HOLD TO START), T_DIAG (HOME's error/offline hint -> DIAGNOSTICS) */
+enum { T_NONE=0, T_ACT0, T_ACT1, T_ACT2, T_ACT3, T_STOP, T_MINUS, T_PLUS, T_SAVE, T_CANCEL, T_START, T_DIAG, T_GRAPH, T_PINFO, T_GEAR, T_BACK, T_STOPS, T_STEAMH, T_ROW0=32 };   /* v6.11: T_GEAR (HOME -> SYSTEM), T_BACK (close chevron); v6.17: T_START (a feature page's HOLD TO START), T_DIAG (HOME's error/offline hint -> DIAGNOSTICS); v6.20: T_STEAMH (HOME's HOLD · STEAM during a brew) */
 static int pinfo_hit(int x,int y);   /* v6.10: tap on the chart / BAR field -> toast w. the basis for ≈BAR (defined at draw_chart) */
 static int diag_hint_shown(void);    /* v6.17: HOME's error/offline hint is on screen (the chart field is empty) -> it is the tap target for DIAGNOSTICS */
 #define SPLASH_MS 1500
@@ -3755,13 +3766,25 @@ static const char* set_unit(int i){ const Setting*s=&SET[i]; if(s->flags&(SF_TEM
 static int s16(int r){ return (int)(int16_t)reg[r]; }
 
 /* ---- activity guards (the UI is the only guard) ---- */
+/* v6.20: STEAM DURING A BREW (docs/concurrent-brew-steam.md §9, hardware-verified §11). The MCU has no brew<->steam lock: brew and steam
+ * drive disjoint outputs, its heater task never runs both heaters (the steam heater stays off during a brew until the steam boiler is 10 °C
+ * below target, then 100 %), and each activity stops on its own. So a latched steam start is allowed when a BREW (pre-infusion or
+ * extraction) is the ONLY thing running: no steam bits (no wand flush), word 24 = 0, no grind bit 6, no hot-water bit 3. The rest of
+ * act_guard() still applies (error, queue/pending/SAVE, config). Everything else stays blocked: steam during grind (the MCU stops it anyway)
+ * or hot water (the steam heater gets no slots), and grind / brew / water during anything. A brew start during latched steam is not offered
+ * (the MCU would accept it; Meraki+'s scope is steam-during-brew). */
+static int steam_brew_ok(ms_t now){
+    int p=phase_raw(now);
+    return (p==PH_PRE||p==PH_EXT)&&!(reg[33]&0x4068)&&reg[24]==0;
+}
 static const char* act_guard(int kind,ms_t now){
     if(ro_mode) return TR(TX_G_RO);
     int p=phase_raw(now);
     if(p==PH_OFFLINE) return TR(TX_G_NOLINK);
     if(p==PH_ERROR)   return TR(TX_G_ERROR);
     if(p==PH_SLEEP)   return TR(TX_G_SLEEP);
-    if(phase_active(p)) return TR(TX_G_BUSY);
+    if(phase_active(p)&&!(kind==ACT_STEAM&&steam_brew_ok(now))) return TR(TX_G_BUSY);
+    if(reg[34]||reg[35]||reg[36]) return TR(TX_G_ERROR);           /* v6.20: phase_raw puts a running brew before the error words */
     if(wq_busy()||act.pending!=ACT_NONE||sav.active) return TR(TX_G_WAIT);
     /* all config values that go into a cmd6 frame must be loaded and within spec */
     for(int i=0;i<NSET;i++){
@@ -4037,7 +4060,8 @@ static int hit_test(int x,int y,ms_t now){
     }
     if(page==PG_HOME){
         int p=phase_raw(now), sk[2], sn=stop_btns(now,sk);
-        if(sn){ for(int i=0;i<sn;i++){ Rect r=stop_hit(sn,i); if(in_r(x,y,r.x0,r.y0,r.x1-r.x0,r.y1-r.y0)) return i?T_STOPS:T_STOP; } }   /* v6.13: STOP for grind/brew/water + latched steam */
+        if(sn==1&&steam_hold_shown(now)){ Rect r=stop_hit(2,0); if(in_r(x,y,r.x0,r.y0,r.x1-r.x0,r.y1-r.y0)) return T_STOP; r=stop_hit(2,1); if(in_r(x,y,r.x0,r.y0,r.x1-r.x0,r.y1-r.y0)) return T_STEAMH; }   /* v6.20 */
+        else if(sn){ for(int i=0;i<sn;i++){ Rect r=stop_hit(sn,i); if(in_r(x,y,r.x0,r.y0,r.x1-r.x0,r.y1-r.y0)) return i?T_STOPS:T_STOP; } }   /* v6.13: STOP for grind/brew/water + latched steam */
         else if(!phase_active(p)) for(int i=0;i<4;i++) if(in_c(x,y,ACT_X[i],ACT_Y,30)) return T_ACT0+i;
         if(pinfo_hit(x,y)) return T_PINFO;
         if(diag_hint_shown()&&in_r(x,y,CX-HINT_W/2,236,HINT_W,58)) return T_DIAG;   /* v6.17: "TAP FOR DETAILS" (error / offline) */
@@ -4079,7 +4103,7 @@ static void stop_step(ms_t now){
 static void activate(int t,ms_t now){
     if(t==T_STOP||t==T_STOPS){ int sk[2]; stop_btns(now,sk); int k=sk[t==T_STOPS]; if(k!=ACT_NONE) stop_request(k,now); return; }   /* v6.13 */
     if(t>=T_ACT0&&t<=T_ACT3){ nav_open(PG_GRIND+(t-T_ACT0),now); return; }          /* v6.17: a TAP opens the feature's page (v6.6-v6.16: only a toast "HOLD THE BUTTON TO START"); the HOLD still starts */
-    if(t==T_START){ const char*g=act_guard(page-PG_GRIND,now); toast_show(g?g:TR(TX_T_HOLD_HINT),g?C_WARN:C_TXT,now); return; }   /* a tap on HOLD TO START: say what is missing */
+    if(t==T_START||t==T_STEAMH){ const char*g=act_guard(t==T_STEAMH?ACT_STEAM:page-PG_GRIND,now); toast_show(g?g:TR(TX_T_HOLD_HINT),g?C_WARN:C_TXT,now); return; }   /* a tap on HOLD TO START (v6.20: or HOLD · STEAM): say what is missing */
     if(t==T_GEAR){ nav_open(PG_SYS,now); return; }                                   /* v6.11; v6.17: -> SYSTEM */
     if(t==T_DIAG){ nav_open(PG_DIAG,now); return; }                                  /* v6.17 */
     if(t==T_BACK&&view==V_MAIN){ nav_back(now); return; }                            /* v6.17: a page's header chevron */
@@ -4714,6 +4738,7 @@ static void ui_update(ms_t now){
     int ph=p; if(p>=PH_HEAT&&!phase_active(p)&&now-act.t_done<8000) ph=PH_DONE;
     if(ph!=act.ph){ act.c_from_hi=garc.c_hi; act.c_from_lo=garc.c_lo; act.t_col=now; act.ph=ph; }
     /* pending activity: ACK result / start timeout */
+    if(act.pending==ACT_STEAM&&steam_bits()) act.pending=ACT_NONE;  /* v6.20: steam on top of a brew does not change phase_main */
     if(act.pending!=ACT_NONE){
         if(wq.seq!=act.seq&&wq.result==WR_FAIL&&!wq_busy()){ act.pending=ACT_NONE; toast_show(TR(TX_T_NOACK),C_ERR,now); }
         else if(now-act.t_req>(act.pending==ACT_STEAM?15000:3500)){ act.pending=ACT_NONE; toast_show(TR(TX_T_NOSTART),C_WARN,now); }
@@ -4748,6 +4773,10 @@ static void ui_update(ms_t now){
         if(tch.target>=T_ACT0&&tch.target<=T_ACT3){
             ui_anim=1;
             if(!tch.fired&&now-tch.t0>=HOLD_MS){ tch.fired=1; act_request(tch.target-T_ACT0,now); }
+        }
+        if(tch.target==T_STEAMH&&view==V_MAIN&&page==PG_HOME){      /* v6.20: HOLD · STEAM during a brew */
+            ui_anim=1;
+            if(!tch.fired&&now-tch.t0>=HOLD_MS){ tch.fired=1; act_request(ACT_STEAM,now); }
         }
         if(tch.target==T_START&&view==V_MAIN&&pg_feat(page)){      /* v6.17: HOLD TO START on the feature page — the same request as the icon's hold */
             ui_anim=1;
@@ -4963,10 +4992,19 @@ static void draw_home(ms_t now){
     int st_on=stm.kind!=SK_NONE, sk[2], sn=stop_btns(now,sk);   /* v6.6: steam STOP only for latched steam; v6.13: + STOP for grind/brew/water */
     float hp=0; int hk=-1;
     if(tch.down&&!tch.moved&&tch.target>=T_ACT0&&tch.target<=T_ACT3){ hk=tch.target-T_ACT0; hp=clampf((now-tch.t0)/(float)HOLD_MS,0,1); }
-    h=hi(hi(hi(hi(H0,m->ph),hk),(int)(hp*40)),act.pending); h=hi(h,pressed(T_STOP)); h=hi(h,pressed(T_STOPS)); h=hi(h,sn*25+(sk[0]+1)*5+sk[1]+1); h=hi(h,stm.kind); if(running) h=hi(h,(int)((now/66)&0x7FFFFFFF)); h=hi(h,sv(S_GRINDMODE)*4+sv(S_HOTMODE)); for(int i=0;i<NSET;i++) h=hi(h,set_oor(&SET[i]));
+    int sh=sn==1&&steam_hold_shown(now), she=sh&&!act_guard(ACT_STEAM,now), shp=pressed(T_STEAMH); float shh=(shp&&she)?clampf((now-tch.t0)/(float)HOLD_MS,0,1):0;   /* v6.20 */
+    h=hi(hi(hi(hi(H0,m->ph),hk),(int)(hp*40)),act.pending); h=hi(h,pressed(T_STOP)); h=hi(h,pressed(T_STOPS)); h=hi(hi(hi(h,sh*4+she*2+shp),(int)(shh*48)),ui_lang); h=hi(h,sn*25+(sk[0]+1)*5+sk[1]+1); h=hi(h,stm.kind); if(running) h=hi(h,(int)((now/66)&0x7FFFFFFF)); h=hi(h,sv(S_GRINDMODE)*4+sv(S_HOTMODE)); for(int i=0;i<NSET;i++) h=hi(h,set_oor(&SET[i]));
     for(int i=0;i<4;i++) h=hs(h,m->alab[i]);
     if(W_begin(W_ACT,R(72,338,336,82),h)){                        /* v6.17: 336 x 82 (STOP 216 / 2 x 152, + the icons' targets); v6.13: 296 x 64 */
-        if(sn){
+        if(sh){                                                       /* v6.20: STOP BREW (left) + HOLD · STEAM (right; the start button's look, in steam's colour) */
+            draw_pill_btn(stop_pill(2,0),TR(STOP_BTN[sk[0]]),stop_font(2),C_STOP_T,C_STOP_B,C_STOP_FG,pressed(T_STOP));
+            Rect r=stop_pill(2,1); int w=r.x1-r.x0, hh=r.y1-r.y0; float rr=hh/2.f; uint32_t ac=ph_hi(PH_STEAM);
+            rrect(r.x0,r.y0+2,w,hh,rr,rgb(0,0,0),70);
+            rrect(r.x0,r.y0,w,hh,rr,she?mix(C_SURF3,ac,150):C_SURF3,255);
+            rrect_g(r.x0+2,r.y0+2,w-4,hh-4,rr-2,shp?C_SURF3:C_SURF2,shp?C_SURF2:C_SURF,255);
+            if(shh>0){ set_clip(R(r.x0,r.y0,(int)(w*shh),hh)); rrect(r.x0+2,r.y0+2,w-4,hh-4,rr-2,mix(C_SURF2,ac,120),255); set_clip(R(72,338,336,82)); }   /* the hold fills the pill left -> right */
+            text_c((r.x0+r.x1)/2,r.y0+(hh-(int)FS[F_S].cap)/2,TR(TX_B_HOLD_STEAM),F_S,she?C_TXT:C_DIS,255);
+        } else if(sn){
             for(int i=0;i<sn;i++) draw_pill_btn(stop_pill(sn,i),TR(STOP_BTN[sk[i]]),stop_font(sn),C_STOP_T,C_STOP_B,C_STOP_FG,pressed(i?T_STOPS:T_STOP));
         } else {
             for(int i=0;i<4;i++){
@@ -6106,7 +6144,8 @@ static void sim_state_emit(ms_t now,int force){   /* force=0: only if the line's
          on?"true":"false",SKK[stm.kind],SKK[stm.last_kind],(on&&phase_active(pm)&&pm!=PH_STEAM)?"true":"false",wand_sw()?"true":"false",stm.wand?"true":"false",reg[24],steam_target(),reg[48],steam_stop_visible()?"true":"false"); }
     { int sk[2], sn=link_up(now)?stop_btns(now,sk):0;               /* v6.13: the STOP buttons (left -> right) + latest stop request */
       jb(&j,",\"stop\":{\"btns\":["); for(int i=0;i<sn;i++) jb(&j,"%s\"%s\"",i?",":"",ACT_KEY[sk[i]]);
-      jb(&j,"],\"pending\":"); if(stp.active) jb(&j,"\"%s\"",ACT_KEY[stp.kind]); else jb(&j,"null");
+      jb(&j,"],\"steam_hold\":%s",(sn==1&&steam_hold_shown(now))?(act_guard(ACT_STEAM,now)?"\"dim\"":"\"on\""):"null");   /* v6.20 */
+      jb(&j,",\"pending\":"); if(stp.active) jb(&j,"\"%s\"",ACT_KEY[stp.kind]); else jb(&j,"null");
       jb(&j,",\"last\":"); if(stp.n_req) jb(&j,"\"%s\"",ACT_KEY[stp.kind]); else jb(&j,"null");
       jb(&j,",\"req\":%ld,\"ok\":%ld,\"fail\":%ld}",stp.n_req,stp.n_ok,stp.n_fail); }
     jb(&j,",\"regs\":{"); for(unsigned k=0;k<sizeof SHOWN/sizeof SHOWN[0];k++) jb(&j,"%s\"%d\":%u",k?",":"",SHOWN[k],reg[SHOWN[k]]);
@@ -6447,7 +6486,8 @@ static void sim_dispatch(const char*line,char*out,size_t on,ms_t now){
             else { if(view==V_DETAIL||xsel==X_BOOTUI){ LT_C("minus",84,184,42); LT_C("plus",396,184,42); } LT_R("cancel",100,284,136,64); LT_R("save",244,284,136,64); }
         } else if(view==V_MAIN&&page==PG_HOME){
             int sk[2], sn=stop_btns(now,sk);                                   /* v6.13: STOP for grind/brew/water + latched steam */
-            if(sn){ for(int i=0;i<sn;i++){ Rect r=stop_hit(sn,i); LT_R(STOP_KEY[sk[i]],r.x0,r.y0,r.x1-r.x0,r.y1-r.y0); } }
+            if(sn==1&&steam_hold_shown(now)){ Rect r=stop_hit(2,0); LT_R(STOP_KEY[sk[0]],r.x0,r.y0,r.x1-r.x0,r.y1-r.y0); r=stop_hit(2,1); LT_R("steam_hold",r.x0,r.y0,r.x1-r.x0,r.y1-r.y0); }   /* v6.20 */
+            else if(sn){ for(int i=0;i<sn;i++){ Rect r=stop_hit(sn,i); LT_R(STOP_KEY[sk[i]],r.x0,r.y0,r.x1-r.x0,r.y1-r.y0); } }
             else if(!phase_active(phase_raw(now))) for(int k=0;k<4;k++) LT_C(ACT_KEY[k],ACT_X[k],ACT_Y,30);   /* tap = the feature's page, hold = start */
             if(diag_hint_shown()) LT_R("diag",CX-HINT_W/2,236,HINT_W,58);
             LT_R("gear",CX-GEAR_HW,GEAR_Y-22,2*GEAR_HW,46);
@@ -8339,7 +8379,7 @@ static void st_v617(void){
       st_check("feature page live line: BREW 'BOILER 99.9° · GROUP 70°', WATER 'WATER 99.9°' (word 40 — the row that looked like a setting in v6.16); GRIND MODE = TIME shows the reason on GRIND only; a write in transit does not flicker 'ONE MOMENT…'",v1&&v2&&g1&&g2&&bz);
       st_check("feature page offline: the live line says NO CONNECTION (amber), HOLD TO START starts nothing and says why",off&&nf); }
     /* ---- (5) something starts running while a page is open: HOME (with STOP) takes over ---- */
-    { st_home(); tap(ACT_X[ACT_GRIND],ACT_Y); st_settle(); int on=page==PG_GRIND; reg[33]=0x1307; sim_run(700); int h1=page==PG_HOME&&view==V_MAIN&&hit_test(240,372,sim_now)==T_STOP;
+    { st_home(); tap(ACT_X[ACT_GRIND],ACT_Y); st_settle(); int on=page==PG_GRIND; reg[33]=0x1307; sim_run(700); int h1=page==PG_HOME&&view==V_MAIN&&hit_test(160,372,sim_now)==T_STOP;   /* v6.20: STOP BREW is the left slot (HOLD · STEAM right) */
       st_home(); tap(CX,GEAR_Y); st_settle(); reg[33]=0x1307; sim_run(700); int s1=page==PG_SYS;
       st_home(); tap(ACT_X[ACT_BREW],ACT_Y); st_settle(); tap(240,LIST_Y0+25); st_settle(); int ed=view==V_DETAIL&&sel==S_BREWW; reg[33]=0x1307; sim_run(700); int e1=view==V_DETAIL; tap(CX,57); sim_run(900); int e2=view==V_MAIN&&page==PG_HOME;
       st_home(); reg[33]=0x1307; sim_run(400); int ic=hit_test(ACT_X[0],ACT_Y,sim_now)!=T_ACT0;
@@ -8356,7 +8396,7 @@ static void st_v617(void){
     /* ---- (7) STOP: the biggest, brightest thing under the numbers ---- */
     { Rect r1=stop_pill(1,0), r2=stop_pill(2,0), r3=stop_pill(2,1); uint32_t bg=bgpure[372*W+CX];
       float ct=st_cr(C_STOP_FG,C_STOP_T), cb=st_cr(C_STOP_FG,C_STOP_B), cbg=st_cr(C_STOP_T,bg), old=st_cr(rgb(120,40,44),bg);
-      st_home(); reg[33]=0x1307; sim_run(400); st_hitbox(T_STOP,&w,&h); int gw,gh; st_hitbox(T_GEAR,&gw,&gh);
+      st_home(); reg[33]=0x030B; sim_run(400); st_hitbox(T_STOP,&w,&h); int gw,gh; st_hitbox(T_GEAR,&gw,&gh);   /* v6.20: water — a brew now has two buttons */
       printf("       STOP: pill %d x %d (v6.16: 160 x 44), touch %d x %d · white on red %.2f / %.2f · red on background %.2f (v6.16's dark red: %.2f)\n",r1.x1-r1.x0,r1.y1-r1.y0,w,h,ct,cb,cbg,old);
       st_check("STOP: one pill 216 x 54 (v6.16: 160 x 44 — 66 % larger), two pills 152 x 54 with a gap, all inside the widget and the circle's chord; touch area >= 232 x 60 and the largest target on HOME while something runs",
                r1.x1-r1.x0==216&&r1.y1-r1.y0==54&&r2.x1-r2.x0==152&&r3.x0-r2.x1>=8&&r2.x0>=72&&r3.x1<=408&&(r1.x1-r1.x0)/2<=chord_half(STOP_PILL_Y,STOP_PILL_H)&&r3.x1-CX<=chord_half(STOP_PILL_Y,STOP_PILL_H)&&w>=232&&h>=60&&w*h>gw*gh);
@@ -8702,13 +8742,13 @@ static void st_stop(void){
       int ok=1, okw=1, oks=1;
       for(unsigned q=0;q<sizeof P/sizeof P[0];q++){
           t=st_home(); st_s0(P[q].ws,0,0x000C,0,300,t+=100); ui_frame(t); sn=stop_btns(t,sk);
-          int w,h; st_hit_size(T_STOP,240,372,t,&w,&h);
+          int br=P[q].kind==ACT_BREW, sx=br?160:240, w,h; st_hit_size(T_STOP,sx,372,t,&w,&h);   /* v6.20: during a brew STOP BREW is the left slot, HOLD · STEAM the right */
           printf("       %-17s STOP button: %s · touch area %d x %d px\n",P[q].nm,sn?TR(STOP_BTN[sk[0]]):"(none)",w,h);
-          if(!(sn==1&&sk[0]==P[q].kind&&hit_test(240,372,t)==T_STOP&&hit_test(ACT_X[0],ACT_Y,t)!=T_ACT0&&hit_test(ACT_X[2],ACT_Y,t)!=T_ACT2)) ok=0;
+          if(!(sn==1&&sk[0]==P[q].kind&&hit_test(sx,372,t)==T_STOP&&(hit_test(320,372,t)==T_STEAMH)==br&&hit_test(ACT_X[0],ACT_Y,t)!=T_ACT0&&hit_test(ACT_X[2],ACT_Y,t)!=T_ACT2)) ok=0;
           if(w<48||h<48) okw=0;
           if(strncmp(hm.sub,stops,strlen(stops))||st_has(hm.sub,"\xC2\xB7")||sub_font(&hm)!=F_S) oks=0; }
-      st_check("STOP is shown during GRIND, PRE-INF., EXTRACTION and WATER (one button, same place as STOP STEAM; no start icons)",ok);
-      st_check("touch: the STOP button's touch area is >= 48 x 48 px (232 x 60)",okw);
+      st_check("STOP is shown during GRIND, PRE-INF., EXTRACTION and WATER (one STOP button; no start icons; v6.20: during a brew STOP BREW on the left, HOLD · STEAM on the right)",ok);
+      st_check("touch: the STOP button's touch area is >= 48 x 48 px (232 x 60; brew 160 x 60)",okw);
       st_check("the subline is the auto-stop expectation and nothing else ('STOPS AT 36.0 G' / 'STOPPER VED 36.0 G' in F_S — v6.13-v6.16: 'AUTO-STOP AT 36.0 G · OR STOP' in F_XS; the STOP button is right below)",oks); }
     t=st_home(); st_s0(0x0101,0,0x000C,0,300,t+=100); ui_frame(t); sn=stop_btns(t,sk);
     st_check("idle (0101): no STOP button — the start icons are there",sn==0&&hit_test(ACT_X[0],ACT_Y,t)==T_ACT0&&hit_test(240,372,t)!=T_STOP);
@@ -8732,14 +8772,14 @@ static void st_stop(void){
     { static const struct { uint16_t ws; int kind; const char*v; short tx_s, tx_d; } P[]={{0x1307,ACT_BREW,ST_V_BREW,TX_T_STOP_BREW,TX_T_STOPPED_BREW},{0x0141,ACT_GRIND,ST_V_GRIND,TX_T_STOP_GRIND,TX_T_STOPPED_GRIND}};
       for(unsigned q=0;q<2;q++){
           t=st_home(); if(P[q].kind==ACT_BREW) reg[22]=1; else reg[6]=1;
-          st_s0(P[q].ws,0,0x000C,0,300,t+=100); ui_frame(t); t=st_tap(240,372,t);
+          st_s0(P[q].ws,0,0x000C,0,300,t+=100); ui_frame(t); t=st_tap(P[q].kind==ACT_BREW?160:240,372,t);
           int a=wq.n==1&&q_hex(0,P[q].v)&&!strcmp(toast.msg,TR(P[q].tx_s)); wq_step(t); int b=st_tx_is(P[q].v); st_ack_last(t+25); ui_frame(t+=40);
           int c=wq.n==0&&wq.result==WR_OK&&(P[q].kind==ACT_BREW?reg[22]==0:reg[6]==0)&&stp.active;
           st_s0(0x0101,0,0x000C,0,300,t+=150); ui_frame(t);
           char nm[200]; snprintf(nm,sizeof nm,"%s: tap STOP -> '%s' -> %s sent + ACK -> bits cleared -> '%s'",P[q].kind==ACT_BREW?"BREW (1307)":"GRIND (0141)",TR(P[q].tx_s),P[q].kind==ACT_BREW?"sub22":"sub6",TR(P[q].tx_d));
           st_check(nm,a&&b&&c&&!strcmp(toast.msg,TR(P[q].tx_d))&&toast.col==C_OK&&!stp.active&&act.ph==PH_DONE); } }
     /* brew: the MCU's valve pulse after stop (BREW.md §4: 0105 for 0.21 s) is not a brew — no STOP button, no new phase */
-    t=st_home(); reg[22]=1; st_s0(0x1307,0,0x000C,0,300,t+=100); ui_frame(t); t=st_tap(240,372,t); wq_step(t); st_ack_last(t+25);
+    t=st_home(); reg[22]=1; st_s0(0x1307,0,0x000C,0,300,t+=100); ui_frame(t); t=st_tap(160,372,t); wq_step(t); st_ack_last(t+25);
     st_s0(0x0101,0,0x000C,0,300,t+=150); ui_frame(t); st_s33(0x0105,t+=100); ui_frame(t); sn=stop_btns(t,sk);
     st_check("BREW: the valve pulse after stop (work_sta 0105, only bit 2) gives no STOP button and no new phase",sn==0&&act.ph==PH_DONE&&stp.n_ok==1);
     /* ---- (6) failure: no ACK -> error toast, the STOP button stays (the bits are still set) ---- */
@@ -8750,7 +8790,7 @@ static void st_stop(void){
     t=st_tap(240,372,t); wq_step(t); st_ack_last(t+20); st_s0(0x0101,0,0x000C,0,300,t+=150); ui_frame(t);
     st_check("… a second tap works: new frame, ACK, bits cleared -> 'WATER STOPPED'",!strcmp(toast.msg,TR(TX_T_STOPPED_WATER))&&stp.n_ok==1&&stp.n_req==2);
     /* ---- (7) ACK, but the bits are not cleared (e.g. a brew from a physical switch: word 22 was 0) -> after 5 s 'STOP NOT CONFIRMED' ---- */
-    t=st_home(); st_s0(0x1307,0,0x000C,0,300,t+=100); ui_frame(t); t=st_tap(240,372,t); wq_step(t); st_ack_last(t+20);
+    t=st_home(); st_s0(0x1307,0,0x000C,0,300,t+=100); ui_frame(t); t=st_tap(160,372,t); wq_step(t); st_ack_last(t+20);
     { int mid=1; for(int q=0;q<40&&t-stp.t_req<STOP_CONFIRM_MS-250;q++){   /* at most 40 rounds (10 s), even if STOP was never requested */ st_s33(0x1307,t+=250); ui_frame(t); if(!stp.active) mid=0; }
       for(int q=0;q<3;q++){ st_s33(0x1307,t+=250); ui_frame(t); }
       st_check("ACK but the bits are not cleared within 5 s: toast 'STOP NOT CONFIRMED · TRY AGAIN' (yellow) — no false 'STOPPED'",
@@ -8774,6 +8814,55 @@ static void st_stop(void){
     /* ---- (11) read-only mode ---- */
     t=st_home(); st_s0(0x030B,0,0x000C,0,300,t+=100); ui_frame(t); ro_mode=1; t=st_tap(240,372,t); ro_mode=0;
     st_check("MERAKIPLUS_READONLY=1: STOP sends nothing, the toast says why (read-only)",wq.n==0&&stp.n_req==0&&!strcmp(toast.msg,TR(TX_G_RO)));
+    sim_reset();
+}
+/* ============ v6.20: steam during a brew (docs/concurrent-brew-steam.md §9; hardware-verified §11) ============ */
+static void st_v620(void){
+    printf("== selftest: v6.20 steam during a brew (the relaxed guard, HOLD · STEAM, independent stops) ==\n");
+    ms_t t; int sk[2], sn, ok;
+    /* (1) the guard */
+    t=st_home(); reg[22]=1; st_s0(0x1107,0,0x000C,0,300,t+=100); ui_frame(t); int gp=act_guard(ACT_STEAM,t)==NULL;
+    st_s0(0x1307,0,0x000C,0,300,t+=100); ui_frame(t); int ge=act_guard(ACT_STEAM,t)==NULL;
+    int go=act_guard(ACT_BREW,t)==TR(TX_G_BUSY)&&act_guard(ACT_GRIND,t)==TR(TX_G_BUSY)&&act_guard(ACT_WATER,t)==TR(TX_G_BUSY);
+    st_check("guard: a steam start is allowed while a brew (pre-infusion 1107 or extraction 1307) is the only activity; grind / brew / water stay blocked",gp&&ge&&go);
+    { static const struct { uint16_t ws,w24; const char*nm; } B[]={{0x0141,0,"grind 0141"},{0x030B,0,"water 030B"},{0x4121,1,"latched steam 4121"},{0x4121,0,"wand 4121"},
+          {0x5327,0,"brew + wand flush 5327"},{0x5327,1,"brew + latched steam 5327"},{0x1307,1,"brew, word 24 = 1 before the bits"},{0x134F,0,"brew + grind + water bits 134F"},{0x130F,0,"brew + hot-water bit 3 130F"}};
+      ok=1; for(unsigned q=0;q<sizeof B/sizeof B[0];q++){ t=st_home(); st_s0(B[q].ws,B[q].w24,0x000C,0,300,t+=100); ui_frame(t);
+          if(act_guard(ACT_STEAM,t)!=TR(TX_G_BUSY)){ ok=0; printf("     steam not blocked: %s\n",B[q].nm); } }
+      st_check("guard: steam stays blocked (ACTIVITY IN PROGRESS) during grind, hot water, steam (latched or wand), brew + steam, and while word 24 is already set",ok); }
+    t=st_home(); reg[35]=1; st_s0(0x1307,0,0x000C,0,300,t+=100); ui_frame(t); int er=act_guard(ACT_STEAM,t)==TR(TX_G_ERROR);
+    sim_now=t; int f=st_hold(320,372,700); t=sim_now; int er2=f&&wq.n==0&&act.pending==ACT_NONE&&!strcmp(toast.msg,TR(TX_G_ERROR)); reg[35]=0;
+    t=st_home(); st_s0(0x1307,0,0x000C,0,300,t+=100); ui_frame(t); uint16_t w1[1]={(uint16_t)sv(S_BREWW)}; wq_push(23,w1,1); int wt=act_guard(ACT_STEAM,t)==TR(TX_G_WAIT); memset(&wq,0,sizeof wq);
+    st_check("guard: brew + an active error (word 35) -> ERROR (HOLD · STEAM sends nothing, the toast says why); a write in transit -> ONE MOMENT",er&&er2&&wt);
+    /* (2) HOME during a brew: STOP BREW left, HOLD · STEAM right; a tap explains, a hold starts */
+    t=st_home(); reg[22]=1; st_s0(0x1307,0,0x000C,0,300,t+=100); ui_frame(t); sn=stop_btns(t,sk); ms_t tb0=act.t_act0;
+    int lay=sn==1&&sk[0]==ACT_BREW&&steam_hold_shown(t)&&hit_test(160,372,t)==T_STOP&&hit_test(320,372,t)==T_STEAMH&&hit_test(ACT_X[3],ACT_Y,t)!=T_ACT3;
+    t=st_tap(320,372,t); int tp=wq.n==0&&!strcmp(toast.msg,TR(TX_T_HOLD_HINT));
+    st_check("HOME during a brew: STOP BREW on the left, HOLD · STEAM on the right (each 160 x 60); a TAP sends nothing and says 'KEEP HOLDING TO START'",lay&&tp);
+    toast.dur=0; sim_now=t; f=st_hold(320,372,700); t=sim_now;
+    int hs=f&&act.pending==ACT_STEAM&&wq.n==1&&wq.q[0].sub==24&&wq.q[0].len==8&&wq.q[0].w[0]==1&&wq.q[0].w[1]==(uint16_t)sv(S_STEAMT)&&page==PG_HOME;
+    st_check("HOLD · STEAM (650 ms) during the brew: the stock steam start (cmd6 sub24 len8, word 24 = 1, word 25 = target) — the same frame as HOME's steam icon",hs);
+    wq_step(t); st_ack_last(t+20); ui_frame(t+=30);
+    st_s0(0x5327,1,0x000C,0,310,t+=200); ui_frame(t); sn=stop_btns(t,sk);
+    int both=act.pending==ACT_NONE&&stm.kind==SK_AUTO&&act.ph==PH_EXT&&hm.conc&&hm.badge==TR(TX_PH_STEAM_AUTO)&&sn==2&&sk[0]==ACT_BREW&&sk[1]==ACT_STEAM&&hit_test(320,372,t)==T_STOPS&&!steam_hold_shown(t);
+    int quiet=1; for(int q=0;q<70;q++){ st_s0(0x5327,1,0x000C,0,320,t+=250); ui_frame(t); if(toast.dur&&!strcmp(toast.msg,TR(TX_T_NOSTART))) quiet=0; }
+    st_check("the MCU latches steam on top of the brew (5327, word 24 = 1): the start is confirmed (no 'NO START' toast after 15 s), EXTRACTION + STEAM·AUTO, and the slot is STOP STEAM next to STOP BREW",both&&quiet&&wq.n==0);
+    /* (3) STOP STEAM while the brew continues */
+    long n0=stp.n_ok; t=st_tap(320,372,t); int ss=wq.n==1&&q_hex(0,ST_V_STEAM)&&!strcmp(toast.msg,TR(TX_T_STOP_SENT)); wq_step(t); st_ack_last(t+20); ui_frame(t+=30);
+    st_s0(0x1307,0,0x000C,0,320,t+=200); ui_frame(t); sn=stop_btns(t,sk);
+    st_check("STOP STEAM mid-brew: word 24 = 0 (sub24 len8), steam stopped and confirmed; the brew keeps running (EXTRACTION, same brew timer) and HOLD · STEAM is back",
+             ss&&stp.n_ok==n0+1&&!strcmp(toast.msg,TR(TX_T_STOPPED_STEAM))&&act.ph==PH_EXT&&act.t_act0==tb0&&sn==1&&sk[0]==ACT_BREW&&steam_hold_shown(t)&&hit_test(320,372,t)==T_STEAMH);
+    /* (4) STOP BREW while the steam continues */
+    st_s0(0x5327,1,0x000C,0,330,t+=200); ui_frame(t); n0=stp.n_ok; t=st_tap(160,372,t); int sb=wq.n==1&&q_hex(0,ST_V_BREW)&&!strcmp(toast.msg,TR(TX_T_STOP_BREW)); wq_step(t); st_ack_last(t+20); ui_frame(t+=30);
+    st_s0(0x4121,1,0x000C,0,340,t+=200); ui_frame(t); sn=stop_btns(t,sk);
+    st_check("STOP BREW while steaming: only word 22 = 0 is sent; the brew stops, the latched steam runs on (STEAM·AUTO, one STOP STEAM, no HOLD · STEAM)",
+             sb&&stp.n_ok==n0+1&&!strcmp(toast.msg,TR(TX_T_STOPPED_BREW))&&wq.n==0&&stm.kind==SK_AUTO&&sn==1&&sk[0]==ACT_STEAM&&!steam_hold_shown(t)&&act.ph==PH_STEAM);
+    /* (5) the label fits (both languages) */
+    ok=1; for(int lg=0;lg<NLANG;lg++){ int kl=ui_lang; lang_set(lg); LAY(text_wf(TR(TX_B_HOLD_STEAM),F_S),STOP_PILL2_W-28,"HOLD · STEAM (pill 152, F_S)",TR(TX_B_HOLD_STEAM)); lang_set(kl); }
+    st_check("HOLD · STEAM / HOLD · DAMP fits its 152 px pill in both languages",ok);
+    { ms_t u=st_home(); st_s0(0x5327,0,0x000D,1,300,u+=100); ui_frame(u); int s2[2], n2=stop_btns(u,s2);
+      st_check("brew + wand flush (5327, word 24 = 0): no HOLD · STEAM (steam is already flowing) — STOP BREW alone in the middle",
+               n2==1&&s2[0]==ACT_BREW&&!steam_hold_shown(u)&&hit_test(240,372,u)==T_STOP&&hit_test(320,372,u)==T_STOP); }
     sim_reset();
 }
 static int selftest(const char*cfgsrc){
@@ -9468,6 +9557,7 @@ static int selftest(const char*cfgsrc){
     st_v617();
     st_v618(dir);                      /* v6.18 */
     st_v619();                         /* v6.19 */
+    st_v620();                         /* v6.20 */
     /* ============================ v6.15 ============================ */
     st_graph();
     printf("== selftest [%s]: %s (%d checks, %d failed) — work dir %s ==\n",LANG_CODE[base_lang],st_fail?"FAILED":"ALL OK",st_n,st_fail,dir);
