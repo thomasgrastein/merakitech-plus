@@ -1,0 +1,223 @@
+# Brewing and steaming at the same time — feasibility
+
+**Date:** 2026-11-22 · **Method:** static analysis of the MCU firmware (`MEM03_V514_260923.bin`, Nuvoton M451) and the
+stock display UI (`demo_v9`), a re-analysis of the existing live UART capture (the STEAMLIVE session, 2026-11-17), and a new
+sim scenario. **No device access:** the machine was offline (no ping, telnet port closed). The hardware part is a runbook (§8).
+This round changed no code; the only additions are this document and one sim scenario.
+
+## 1. Verdict
+
+| Question | Answer |
+|---|---|
+| Can the MCU run a full latched steam session (word 24 = 1, milk auto-stop) while a brew runs? | **Yes. There is no brew↔steam lock in the MCU**, and the heater task has a branch written for exactly this case (§3.4). |
+| Does the hardware share anything critical? | **The pump is shared, but steam does not use it.** Steam = boiler pressure + the wand solenoid (PE.6). Brew = pump + inlet valve + group valve. They use different outputs (§2). |
+| Power / thermal? | **Handled by the MCU.** Its heater task never runs both heaters at once, and it switches the brew-boiler heater off while a brew runs. During brew + steam the only heater allowed on is the steam heater, and only once the steam boiler has fallen 10 °C below its target (§3.4). Peak load ≈ steam heater + pump (§4). |
+| Does the stock UI allow it? | **The stock UI is built to show it:** `dealBrewAndSteam` / `brewAndSteamRuningPlay` play a combined brew+steam animation. Its start handlers don't check the other activity. Whether the stock touch flow lets you *reach* the steam start during a brew is unproven (§5). |
+| Does Meraki+ allow it? | **No.** `act_guard()` refuses every start while any activity runs (toast *ACTIVITY IN PROGRESS*). It sends nothing (§6). If both run anyway, Meraki+ already shows them correctly: EXTRACTION + STEAM·AUTO and two STOP buttons (sim, §7). |
+| Sim | **Allows it:** 26/26 PASS (EN and DA). Each activity stops on its own (§7). |
+| Easy to enable? | **Yes: small UI change, nothing to change in the MCU.** Relax one guard and add a "start steam" button to the brew screen (§9). Do one hardware session first (§8). |
+
+**What actually blocks it today: only Meraki+'s own activity guard.** The MCU's real locks are elsewhere: the grinder blocks
+brew and steam, and the cleaning program blocks both (§3.2).
+
+## 2. Who drives what (work_sta word 33 → outputs)
+
+The run task at `0x2782` copies each work_sta bit to one output pin (REGISTERMAP §2.9). Bits 12 and 14 drive no pin; nothing in the firmware reads bit 14.
+
+| Bit | Pin | Set by | Meaning (combined from all writers) |
+|---|---|---|---|
+| 1 | PD.13 | brew (`0x2098` `orr #0x1206`), hot water, e-boiler refill (`0x23F8` `#0x202`) | brew-boiler inlet valve |
+| 2 | PD.11 | brew only | group (brew) valve |
+| 3 | PD.10 | hot water only | hot-water outlet valve |
+| 4 | PD.12 | steam-boiler refill (`0x2384` `#0x210`) | steam-boiler inlet valve |
+| 5 | **PE.6** | **steam-ctl only** (`0x2258` `#0x4020`) | **wand solenoid** |
+| 9 | PC.1 | brew, hot water, both refills | **pump**. In the run task it is "keep current value"; while `0x2000002D` is set, the TMR23 ISR `0x9896` phase-controls it (pre-infusion). |
+| 10 | PC.3 | heater task `0x38CC` | **brew-boiler heater** (time slot) |
+| 13 | PA.7 | heater task `0x394E` | **steam-boiler heater** (time slot) |
+| 12 / 14 | — | brew / steam | status flags only |
+
+> Correction: STEAMLIVE §3 and the sim call bits 10/13 "boiler refill pulses". The heater task shows they are the **heater
+> time slots** (brew boiler / steam boiler). Refill is bits 4+9 / 1+9.
+
+So brew (1, 2, 9, 12) and steam (5, 14) share no output. Steam needs no pump: the steam boiler makes the pressure.
+
+## 3. MCU firmware evidence
+
+### 3.1 One loop, independent controllers
+The status task calls the controllers one after another every cycle: `0x28FA` grind `0x19C6` → `0x28FE` cleaning `0x1AE0` →
+`0x2904` **brew-ctl `0x1E9C`** → `0x290A` **steam-ctl `0x210E`** → `0x290E` hot water `0x1B8C`. They are not separate RTOS
+tasks, so there is no race. Each controller only changes its own bits:
+brew sets `0x1206`/`0x1006` and clears `0xEFFB`/`0xFDFD`/`~0x10`; steam sets `0x4020` and clears `0xBFDF` (bits 5+14 only).
+
+### 3.2 What each controller checks before running
+| Check | brew-ctl `0x1E9C` | steam-ctl `0x210E` |
+|---|---|---|
+| word 20 ≠ 0 (cleaning program, `0x1AE0`) | `0x1EF2`: return | `0x2138`: return |
+| grinder running (byte `0x20000028`, written by grind-ctl at `0x1ABE`) | `0x1EFE/0x1F2C`: brew aborted | `0x2148/0x2174`: steam stopped |
+| E1/E2/E3 masks from the table at `0xF130` | `0x1F04..0x1F4C` | `0x2154..0x219A` |
+| **the other activity's bits or words** | **none** | **none** |
+
+The two controllers share a RAM block at `0x20000028`, but in different fields. Brew uses +1, +5, +0xA..+0xD, +0x12.
+Steam uses +2, +6, +0xE, +0xF, +0x14, +0x28. Neither reads the other's state.
+
+### 3.3 Steam boiler refill (add_water `0x226E`)
+While the wand valve is open (`ws & 0x60`, `0x22BA`), the steam-boiler refill is paused. While a brew or hot-water valve is open (`ws & 0x0C`,
+`0x22D6`), refill bit 4 is cleared. Concurrent brew + steam therefore **defers refills until both have finished**. A steam-only session
+already behaves this way.
+
+### 3.4 Heater task `0x3502` — the designed brew+steam case
+The heater task works in 100-slot windows. It computes a brew-boiler duty r4 and a steam-boiler duty r7. If r4 + r7 ≥ 100 it shares
+the window between them (`0x383E..0x3866`). Then it runs the brew-boiler slots (bit 10), followed by the steam-boiler slots (bit 13).
+**The two heaters are never on at the same time.**
+
+* Brew-boiler heater is **off** while `ws & 0x2244` (bits 2, 6, 9, 13) (`0x35B4`, `0x389C`). That covers every brew, every grind, and every steam-heater slot.
+* Steam-boiler heater (`0x371A..0x37B6`, slot loop `0x3906..0x396C`):
+  * **brewing without steam** (bit 2 set, bit 5 clear) → duty 0.
+  * **brewing + wand valve open** (bits 2 and 5) and the pre-infusion flag `0x2000002D` clear → a latch r5: duty **100 %** once the steam
+    boiler is **below its target − 10.0 °C**. Otherwise 0. With r5 set, the slot loop ignores the brew bits (`0x391C..0x3924`). It still
+    stops each slot above the target (`0x390C`).
+  * during **phase-controlled pre-infusion** (`0x2000002D` = 1: set by the recipe setup `0x1E10` when preInfusionSwitch is on, cleared at `0x2018`
+    when the window ends) → duty 0.
+  * Target by steam gear (word 14, `0x36F6..0x3798`): 1 = 120.0 °C, 2 = 125.0 °C, 3 = 130.0 °C, other = 135.0 °C.
+* Grinding (bit 6) switches both heaters off.
+
+The r5 branch only exists for "brew and steam valve open together", which suggests the firmware authors planned for this case.
+The power budget is one heater plus the pump. The grinder can never run together with a heater.
+
+### 3.5 Steam's own stops still apply during a brew
+Steam stops at milk ≥ word 25 (`0x21C8`, latched path only), on a manual word 24 = 0 write, on the elapsed cap word 15 (`0x2238`;
+seconds from the 1 Hz RTC tick `0x8DDC → 0x17EE`; Meraki+ and stock boot-push 60), or on E1/E2/E3. Brew stops at its weight target or its own
+stop. Neither stop touches the other's bits.
+
+## 4. Live evidence (re-analysis of the STEAMLIVE capture, 12 900 CRC-OK frames)
+
+| Phase | Polls | Bit 13 (steam heater) | Bit 10 (brew heater) | cur1 word 50 min/median/max | Steam boiler word 47 | Mains word 49 |
+|---|---|---|---|---|---|---|
+| brew #1 extraction | 188 | 0 | 0 | 998 / 1008 / 1553 | 1298 → 1294 | 237–238 V |
+| display steam (alone) | 325 | 261 | 26 | 54 / 7333 / 7645 | 1298 → 1249 | 233–238 V |
+| brew #2 pre-infusion | 56 | 0 | 0 | 1465 / 1554 / 3098 | 1301 → 1300 | 238 V |
+| brew #2 extraction | 115 | 0 | 0 | 1006 / 1016 / 1701 | 1299 → 1295 | 237–238 V |
+| **wand flush during brew** (`0x5327`) | 26 | **0** | 0 | 1008 / 1024 / 1027 | **1295 → 1259** | 237 V |
+
+* During a brew **neither heater ever came on**, and cur1 ≈ 1.0 k is the pump alone. That matches §3.4.
+* During the 3.1 s flush the steam boiler fell 129.5 → 125.9 °C. That stayed above target − 10 (120 °C), so the steam heater stayed **off**,
+  exactly as the r5 rule predicts. Brew weight (216 → 279) and flow continued normally (STEAMLIVE §7).
+* Projected peak load for a latched session during a brew: steam heater (~7.3 k) + pump (~1.0 k) ≈ **8.3 k on cur1**, about 10 % above the highest value
+  seen in any captured phase (7.6 k). The units of cur1 are not verified. If they are mA, that is ≈ 8.3 A at 237 V.
+
+## 5. Stock UI (`demo_v9`)
+
+* `isExtractionOrSteamSwitchOn` `0x1481E0` = work_sta bit 12 or bit 14, or mirror word 22, 24 or 6. It is used by the sleep/power-off paths
+  (`onHandle 0xE5778`, `deal_y 0x122310`, `SleepRefresh 0x1492D4`). It does not gate activity starts.
+* **`dealBrewAndSteam` `0x10E744`** (called from the UART `onHandle` `0x10D0FC..`): if steam is active (word 24 or bit 14), it shows a steam indicator.
+  When brew bit 12 rises, it calls `videoClose`, then **`brewAndSteamRuningPlay` `0x11D304`**, then `goto_brew_page`. `brewPageDeal` `0x11CEC0` does
+  the same, and `dealBrewPage` calls `steamBrewPosColorUpdate`. **Stock has a dedicated combined brew+steam view.**
+* Start handlers in `onClick` `0x1088A4`:
+  * HOME steam icon `0x10973C`: opens the steam page if steam is idle (bit 14 clear, word 24 = 0). It does not check brew.
+  * Steam page start/stop `0x10987C..0x109900`: toggles mirror word 24, `usart_send(6,24,8)`. It does not check brew.
+  * Brew button `0x109478..`: one branch *stops steam* (word 24 = 1, word 22 = 0, bit 12 set). The brew start/stop toggle `0x109550..0x109700`
+    does not check steam.
+* **Unproven statically:** stock jumps to the brew page when a brew starts. Whether the user can then get back to the steam page during
+  the brew is the first thing the hardware test answers (§8).
+
+## 6. Meraki+ today (`src/merakiplus.c`)
+
+* `act_guard()` (`/* ---- activity guards */`): `if(phase_active(phase_raw(now))) return TR(TX_G_BUSY);`. So a steam start during a brew
+  becomes the toast *ACTIVITY IN PROGRESS* and **no frame is sent**. The same guard blocks a brew start during steam. The feature-page HOLD TO START and the
+  HOME icon both go through `act_request()`, so the result is the same either way.
+* If both run anyway (the wand path, or a write from elsewhere), Meraki+ already handles it. `phase_main()` keeps brew as the main
+  activity. `steam_track()` classifies AUTO/WAND. `stop_btns()` shows **STOP BREW + STOP STEAM** side by side. HOME shows the STEAM·AUTO chip
+  and the milk temperature (§7 screenshot). The guard comment says "any activity — including a wand flush — blocks start". That is the only obstacle.
+* SAVE, SWITCH NOW, power-off and sleep stay blocked while anything runs. Those guards should stay as they are.
+
+## 7. Sim — `sim/scenarios/concurrent_brew_steam.json` (new, `ui_only`)
+
+The scenario: brew starts (UI) → at t = 9 s the UI tries to start steam → at t = 10.5 s it writes word 24 = 1 directly, bypassing the guard. That write has the same register
+effect as `cmd6 sub24 len8` (it stands in for a UI without the guard). Cold milk (12.0 °C), target 65.0 °C.
+
+| t | UI phase / phase_main | steam | work_sta | weight w39 | milk w48 |
+|---|---|---|---|---|---|
+| 1.3 | PRE / PRE | — | `0x1107` | — | 23.0 °C |
+| 9.1 | EXT / EXT | toast *ACTIVITY IN PROGRESS*, **no word 24 write** | `0x1307` | — | |
+| 10.9 | STEAM / **EXT** | AUTO, concurrent, STOP STEAM shown | **`0x5327`** | 1.7 g | 12.0 °C |
+| 29.0 | STEAM / STEAM | brew stopped **by weight** on its own | `0x4121` | 35.2 g → 36.4 g | 34.1 °C |
+| 51.4 | READY | steam stopped at **milk ≥ word 25** on its own | `0x0101` | | 64.9 °C |
+
+**26/26 checks PASS** in EN and DA, against the real UI SIM build (`build/merakiplus_sim`, fresh `./build.sh`-equivalent host build). The
+reference client is skipped (it has no guard to test). Brew+steam screen, t = 15 s:
+
+![brew + steam in the sim](img/concurrent-brew-steam-sim.png)
+
+How the sim compares with the MCU:
+* It matches the MCU on the main point: steam is a separate channel (`steam_ch`) that can start on top of a brew, and the bits are combined.
+* **Simplification 1:** primary activities only start in `idle` mode. A **brew start during latched steam is ignored** by the sim, but the MCU
+  would accept it (§3.2). The sim needs this before Meraki+ allows that direction.
+* **Simplification 2:** the steam-boiler/heater model has no heater-gating rule. During the overlap the sim uses the steam-only curve (≈ 124.7 °C).
+  The real machine runs the steam boiler **unheated until target − 10 °C** (§3.4), so its pressure will sag more (§10).
+
+## 8. Hardware test runbook (to run when the machine is on; user present)
+
+Purpose: confirm on the real machine that a latched steam session runs alongside a brew, and measure the load and the steam-boiler sag.
+Meraki+ cannot start it today, so **use the stock UI**. Its frames are the stock frames, and Meraki+ sends nothing.
+
+**Preparation**
+1. Machine on and fully hot (both boilers ready, no E-code). Portafilter dosed, cup on the scale, jug with ~200 ml **cold** milk, probe in the
+   jug, wand in the milk. Drip tray empty.
+2. Meraki+: SYSTEM › STOCK UI › SWITCH TO ORIGINAL NOW (the stock UI takes over until the next switch/boot).
+3. Capture, read-only, as in STEAMLIVE §1: over telnet to `<display-ip>`, attach `strace -f -tt -yy -e trace=read,write -s 4096` to the stock UI
+   process (the `/dev/ttyS1` and `/dev/input/event0` fds), and take a framebuffer grab before and after.
+   Note the PID and config md5 before and after; both must be unchanged. **No register writes, no touch injection.**
+
+**Steps (all physical taps by the user)**
+1. t0: start a normal brew from the stock UI.
+2. As soon as extraction starts (the pump sound changes, about 7 s in), try to start steam: from the brew screen go back to HOME → steam icon → start.
+   Note every screen and whether steam starts (a wand hiss and the steam animation).
+3. Let both run without touching anything. The brew should stop by weight and the steam at the milk target (65 °C). Note the order.
+4. If stock offers no way to start steam during the brew, note that, and as a fallback hold the wand during extraction for ≥ 10 s
+   (momentary path; already proven for 3 s). This still measures the heater rule and the sag.
+
+**Abort at once** (STOP on the screen for both; last resort: power key or mains switch) if any of these happen:
+any E1/E2/E3 on screen (words 34/35/36 ≠ 0) · steam boiler above 150 °C or below 110 °C · a breaker trips or lights dim ·
+unusual noise or smell · steam runs past its 60 s cap without stopping.
+
+**Analysis (offline)**
+* Decode with `workspace/artifacts/uart_live_v3/decode_uart_v3.py`. Per phase, tabulate as in §4: words 22, 24, 25, 33, 39, 44, 46,
+  47, 48, 49, 50, 52, 58, 62, 63 and 34–36.
+* **Pass:** work_sta `0x5327` with **word 24 = 1** during the brew. Brew weight keeps rising and stops by weight (word 22 → 0). Steam continues
+  as `0x4121` and auto-stops at word 48 ≥ word 25 (word 24 → 0 set by the MCU). Words 34/35/36 stay 0 throughout.
+* **Measure:** steam-boiler sag during the overlap. When does bit 13 first appear (expected: word 47 < target − 100)? Peak cur1 (expected ≈ pump +
+  steam heater) and the mains dip on word 49. Brew-boiler temperature after the shot, and steam duration compared with a steam-only session.
+
+## 9. Recommendation
+
+**Enable "steam during a brew" in Meraki+, behind one hardware confirmation run (§8).** The MCU supports it, protects the
+power budget itself, and stops each activity on its own. Proposed change (not implemented):
+
+1. `act_guard(ACT_STEAM)`: allow it when the **only** running activity is a brew (`phase_main` ∈ {PRE, EXT}). Steam bits must be clear
+   (no flush running), word 24 = 0, no error, link up, write queue idle, nothing pending. **Everything else stays blocked**: steam during grind (the MCU would
+   stop it anyway), steam during hot water (the steam heater gets no slots, §3.4), and grind/water during anything.
+2. A way to start it: on the brew screen the right-hand button slot is free until steam is latched. Show **HOLD · STEAM** there. It turns into
+   STOP STEAM once latched; the layout and both STOP paths already exist.
+3. Optional hint while the steam boiler is still recovering (word 47 < target − 5 °C): *"Steam pressure is lower during a shot"*. Information only,
+   not a block.
+4. Brew during latched steam: the MCU allows it as well. Do it only after the sim learns it (§7, simplification 1).
+5. Tests: change the new scenario from the `set_reg` bypass to a real UI start. Assert the `sub24 len8` write, the two STOP buttons, and the independent
+   stops. Add a negative case (steam during grind/water still toasts). Add selftest rows for the relaxed guard.
+
+**No extra power or thermal guard is needed in the UI.** Heater time-slicing, the grinder lockout, the E3 over-temperature cut-off and the 60 s
+steam cap are all in the MCU and apply regardless of the UI. Meraki+'s role is to show both activities and keep both STOP buttons working,
+which it already does.
+
+**Effort:** about half a day (guard + button + scenario + selftest), plus one hardware session. The MCU needs no changes, and the frames are
+unchanged (the same `sub24 len8` stock sends).
+
+## 10. Risks and open points
+
+* **Steam quality during the overlap:** the steam heater is off until the boiler is 10 °C below target (130 → 120 °C at gear 3; roughly
+  1.7 → 1 bar gauge, from the steam table). The first part of the milk heats more slowly; after the brew ends the normal regulation returns. Rough
+  estimate (not measured): up to ~25 s at lower pressure. The test in §8 measures it.
+* **Steam-boiler water:** refill is deferred while steam or a brew runs (§3.3), as in normal steaming. A long overlap uses only the stored water.
+* **The 60 s steam cap** (word 15) can end a slow session that starts cold during a brew. That is safe; the user can start it again.
+* **Pre-infusion window:** a steam start during phase-controlled pre-infusion gets no steam heat until the window ends (§3.4).
+* **Electrical:** the projected peak (≈ steam heater + pump) is an inference. cur1's units are unverified, so §8 should confirm the real peak and the mains dip.
+* **Stock navigation** during a brew is unproven (§5).

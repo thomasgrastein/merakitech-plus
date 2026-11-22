@@ -404,6 +404,7 @@ description (including the gesture, the watchdog race and the OTA table) is in
 | [docs/calibration.md](docs/calibration.md) | Pressure estimate, graph and weight conditioning |
 | [docs/presets-spec.md](docs/presets-spec.md) | *Planned:* presets (named recipe sets) — model, own file, UI, NDEF tag format; stock's preset system reversed |
 | [docs/nfc-plan.md](docs/nfc-plan.md) | *Planned:* the NFC reader reversed (bus, chip, stock tag format and flow) and the phased NFC plan |
+| [docs/concurrent-brew-steam.md](docs/concurrent-brew-steam.md) | *Feasibility:* brewing and steaming at the same time — MCU/stock/Meraki+ evidence, sim result, hardware runbook |
 | [docs/dev/](docs/dev/) | Developer notes (full UI spec with changelog, parity analysis) |
 | [sim/README.md](sim/README.md) | The simulator and the E2E tests |
 
