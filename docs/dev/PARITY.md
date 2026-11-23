@@ -122,7 +122,7 @@ Confidence: **H**=high (unambiguous code + live), **M**=medium (code, not live-v
 * **Brew weight** [0x12be5c]: `atoi × 10`. roller 10..99 ([0x12c754]).
 * **Steam target** [0x12bf80]: `atoi × 10` (or GetCelsius). roller 45..70 °C / 110..160 °F ([0x12c9bc/0x12cab4]).
 * **Hot water weight** [0xfbf0c]: `roller_sel × 10`. `roller_step_create(30,500,10)` [0xfc194] → 30,40,…,500 g.
-* **Steam gear** [0xdd028]: `sel 0..3 → word14 = 1..4` (cmp #3, 4 cases). Options "Gentle\nMild\nMedium\nStrong".
+* **Steam gear** [0xdd028]: `sel 0..3 → word14 = 1..4` (compared with 3, 4 cases). Options "Gentle\nMild\nMedium\nStrong".
 * **Head temp** [0xeb8a0]: `word114 = idx*10 + 30` → 30,40,50,… °C.
 * **Pre-inf pressure** [0xeb374]: `model+0x5c = idx + 3` → word112 low byte.
 * **Pre-inf time** [0xeb5b4]: `model+0x60 = idx + 5` → word113 high byte.

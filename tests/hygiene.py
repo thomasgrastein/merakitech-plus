@@ -12,6 +12,8 @@
     text or binaries — except inside the "legacy-compat" block of tools/merakiplus.py
   * bin/merakiplus_snd NEEDs libpthread.so.0 and its source dlopen()s libpthread.so.0 RTLD_GLOBAL before libmi_common.so
     (v6.18.1: the display's libmi_common.so uses sem_post & co. without NEEDing libpthread — docs/audio.md §3)
+  * no quoted ARM instructions (disassembly listings or fragments) in Markdown/text docs: stock firmware behaviour is
+    described in prose or pseudocode with flash/RAM addresses only
 """
 import hashlib
 import json
@@ -181,6 +183,21 @@ src = (ROOT / "src/merakiplus_snd.c").read_text(encoding="utf-8")
 ip, ic = src.find('dlopen("libpthread.so.0", RTLD_NOW | RTLD_GLOBAL)'), src.find('dlopen("libmi_common.so"')
 if ip < 0 or ic < 0 or ip > ic or src.count("pthread_global();") < 2:
     fail("src/merakiplus_snd.c: libpthread.so.0 must be dlopen()ed RTLD_GLOBAL before libmi_common.so (mi_load + mp3_play)")
+
+# 7. no quoted vendor disassembly in docs: an ARM mnemonic followed by a register / immediate / memory operand
+ASM = re.compile(r"(?<![\w.-])(?:ldr|str)(?:b|h|sb|sh|d)?(?:\.w)?\s+(?:r\d|\[)"
+                 r"|(?<![\w.-])(?:orrs?|eors?|ands|bics?|cmp|cmn|tst|teq|movs?|movw|movt|mvns?|adds?|subs?|rsbs?"
+                 r"|lsls?|lsrs?|asrs?|mul|push|pop|ldm\w*|stm\w*)(?:\.w)?\s+(?:r\d|sp|lr|pc|ip|sb|#|\{)"
+                 r"|(?<![\w.-])(?:bl|blx|bx|b(?:eq|ne|hs|lo|hi|ls|ge|lt|gt|le|cs|cc|mi|pl))\s+(?:0x)?[0-9a-f]{3,}\b"
+                 r"|\[(?:r\d{1,2}|sb|fp|ip|sp|pc)\s*[,+]", re.I)
+for p in files:
+    rel = p.relative_to(ROOT).as_posix()
+    if p.suffix not in (".md", ".txt"):
+        continue
+    for i, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1):
+        m = ASM.search(line)
+        if m:
+            fail(f"{rel}:{i}: looks like quoted ARM disassembly ({m.group(0)!r}) — describe it in prose/pseudocode")
 
 print("HYGIENE: " + ("OK" if not fails else f"{len(fails)} problem(s)"))
 sys.exit(1 if fails else 0)

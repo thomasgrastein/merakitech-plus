@@ -30,7 +30,7 @@ The run task at `0x2782` copies each work_sta bit to one output pin (REGISTERMAP
 
 | Bit | Pin | Set by | Meaning (combined from all writers) |
 |---|---|---|---|
-| 1 | PD.13 | brew (`0x2098` `orr #0x1206`), hot water, e-boiler refill (`0x23F8` `#0x202`) | brew-boiler inlet valve |
+| 1 | PD.13 | brew (`0x2098` sets `0x1206`), hot water, e-boiler refill (`0x23F8` sets `0x202`) | brew-boiler inlet valve |
 | 2 | PD.11 | brew only | group (brew) valve |
 | 3 | PD.10 | hot water only | hot-water outlet valve |
 | 4 | PD.12 | steam-boiler refill (`0x2384` `#0x210`) | steam-boiler inlet valve |

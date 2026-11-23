@@ -22,7 +22,7 @@
 
 | Parameter | Value | Source (display) | Source (MCU) |
 |---|---|---|---|
-| Baud rate | **57600** | `set_opt(fd, 57600, 8, 'N', 1)` @ `0x146790` | `UART_Open(UART1, 57600)` @ `0x2C2A` (`mov.w r1,#0xE100`) |
+| Baud rate | **57600** | `set_opt(fd, 57600, 8, 'N', 1)` @ `0x146790` | `UART_Open(UART1, 57600)` @ `0x2C2A` (baud constant `0xE100` = 57600) |
 | Data bits | 8 | `set_opt` CS8 | UART_Open WLS=8 |
 | Parity | None (`'N'`=78) | `set_opt` clear PARENB | UART_Open |
 | Stop bits | 1 | `set_opt` clear CSTOPB | UART_Open |
@@ -230,7 +230,7 @@ The display also polls the whole register file itself with cmd 3 queries: `(sub0
 |---|---|---|---|
 | Display `fuart_thread` | **10 ms** (`usleep(10000)`) | read ≤ 32 bytes → ring buffer → parse; TX arbitration | `0x146D2C` |
 | Display `uartRxProcess` | **60 ms** (LVGL timer) | update the UI/mirror from parsed frames | `lv_timer_create(...,60)` @ `0x1467F0` |
-| Display read queries | **100 ms** (every 10th loop) | cmd 3, rotating (sub0,len56)/(sub33,len7)/(sub56,len56)/(sub33,len7) | `0x146A94` (cmp #9) + switch @ `0x146B14` |
+| Display read queries | **100 ms** (every 10th loop) | cmd 3, rotating (sub0,len56)/(sub33,len7)/(sub56,len56)/(sub33,len7) | `0x146A94` (loop counter compared with 9) + switch @ `0x146B14` |
 | Display cmd 6 retransmit | 10 ms, up to **20 times** (200 ms) | until the cmd 0x86 ACK | retry=20 @ `0x146E30`; ACK clear @ `0x146650` |
 | MCU status task | **10 ms** (`rt_thread_delay(10)`, tick=1 ms) | RX parse + sensor loop | `0x2A38` |
 | MCU status broadcast | **100 ms** (active) / **200 ms** (idle) | cmd 0x83 sub32 len80 | counter 10/20 @ `0x270E/0x2738`, send @ `0x2744` |
@@ -437,14 +437,14 @@ while True:
 | `verSendBuf` | `0x1A6040` | `AA 55 09 …` |
 | `mcu_ota_container` | `0x1A61D0` | initial `CC DD …` |
 
-**`usart_send` frame construction (excerpt):**
+**`usart_send` frame construction** (`0x146D78..0x146E2C`), as pseudocode:
 ```
-146d78: strh r2,[r3,#2]      ; buf_tx[2..3] = cmd (16-bit, but [3] is overwritten by sub)
-146d9c: strb r2,[r3,#3]      ; buf_tx[3] = sub
-146dac: strb r2,[r3,#4]      ; buf_tx[4] = len (words)
-146de8: bl   memcpy          ; buf_tx+5 ← machine+0xFE8+2·sub, 2·len bytes
-146e04: bl   CRC_GetModbus16 ; crc over buf_tx[0 .. 4+2·len]
-146e2c: strh r2,[r3]         ; buf_tx[5+2·len] = crc (LE)
+buf_tx[2..3] = cmd            # 16-bit store; byte [3] is overwritten by sub next
+buf_tx[3]    = sub
+buf_tx[4]    = len            # in 16-bit words
+memcpy(buf_tx + 5, machine + 0xFE8 + 2*sub, 2*len)
+crc = CRC_GetModbus16(buf_tx, 5 + 2*len)        # over buf_tx[0 .. 4+2*len]
+buf_tx[5+2*len .. 6+2*len] = crc                 # little-endian
 ```
 
 ### 10.2 MEM03_V514_260923.bin (MCU, raw Cortex-M, flash base 0x0)
@@ -458,8 +458,8 @@ while True:
 | flash size probe | `0x914E` | ISP read `0x20000`/`0x40000` → 128/256 K |
 | UART_Open | `0x8908` | UART1=`0x40071000`, UART3=`0x40073000`; MFP GPE_MFPH=0x11 |
 | baud computation | `0x86C2` | clk/(div+1) / baud; DIV16/DIV8 |
-| board init (UART) | `0x2C2A` | `mov.w r1,#0xE100`(57600); `UART_Open(UART1,…)` |
-| RX parser (normal+OTA) | `0x9AAC` | 19-state TBB machine @ `0x9AD8`; header AA/CC |
+| board init (UART) | `0x2C2A` | baud constant `0xE100` (57600); `UART_Open(UART1,…)` |
+| RX parser (normal+OTA) | `0x9AAC` | 19-state jump-table state machine @ `0x9AD8`; header AA/CC |
 | cmd dispatch | `0x9C28` | cmd 3→`0x9A3A`, 6→`0x99C6`, 8→`0x9C88`, 9→`0x9E12` |
 | status builder (cmd 0x83) | `0x9A3A` | `AA 55 83 sub len` + register words + CRC |
 | write ACK (cmd 0x86) | `0x99C6` | writes the register file + ACK |
@@ -476,24 +476,13 @@ while True:
 | clock table | `0xF2B8` | {12 MHz, PLL, 32768, 22.1184 MHz} |
 | RT-Thread banner | `0xCD70` | build "Sep 23 2026" (`0xCD94`) |
 
-**MCU cmd 6 write + ACK (excerpt @ `0x9C54`):**
-```
-9c54: ldrb r1,[r3,#3]      ; sub
-9c56: ldrb r2,[r3,#4]      ; len
-9c58: adds r0,r1,r2
-9c5a: cmp  r0,#0x21        ; sub+len < 33 ?
-9c5c: bhs  9c68            ; otherwise the extended write band (words 112..114) special case
-9c5e: adds r3,r4,#5        ; payload
-9c62: bl   99c6            ; write the register file + send the cmd 0x86 ACK
-```
+**MCU cmd 6 write + ACK** (dispatch at `0x9C54`): the handler takes `sub` (frame byte 3) and `len` (frame byte 4).
+If `sub + len < 33` it passes the payload (frame byte 5 onwards) to `0x99C6`, which writes the register file and
+sends the cmd 0x86 ACK. Otherwise it falls through to the extended write band (words 112..114) special case; see
+[registermap.md §3](registermap.md#3-write-handler-cmd-6--semantics).
 
-**MCU status broadcast (excerpt @ `0x2744`):**
-```
-2744: movs r2,#0x50        ; len = 80 words
-2746: movs r1,#0x20        ; sub = 32
-2748: ldr  r0,[pc,#0x160]  ; UART1 handle
-274a: bl   9a3a            ; send AA 55 83 20 50 <words 32..111> CRC
-```
+**MCU status broadcast** (`0x2744`): the status task calls the status builder `0x9A3A` on the UART1 handle with
+`sub = 32` (`0x20`) and `len = 80` (`0x50`) words, i.e. it sends `AA 55 83 20 50 <words 32..111> CRC`.
 
 ---
 

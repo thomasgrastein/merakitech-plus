@@ -200,7 +200,7 @@ WATER SHORTCUT, CLEANING REMINDER, AUTO TIME, PAUSE TIME → **SYSTEM › STOCK 
 | WATER SHORTCUT | `hotWaterShortcut` | 0..1 | OFF / ON | 2 | **PROVEN** |
 | DAYLIGHT SAVING | `sumtime` | 0..1 | OFF / ON | 2 | **PROVEN** |
 | CLEANING REMINDER | `clearTip` | 0..1 | OFF / ON | 2 | **PROVEN** |
-| TIME FORMAT | `timemode` | 0..1 | **0 = 12-HOUR / 1 = 24-HOUR** (corrected in v6.16) | 3 | **PROVEN** [`update_time` 0xD5944: `eor model[0x59], #1` at 0xD5970] |
+| TIME FORMAT | `timemode` | 0..1 | **0 = 12-HOUR / 1 = 24-HOUR** (corrected in v6.16) | 3 | **PROVEN** [`update_time` 0xD5944: `model[0x59]` is XORed with 1 at 0xD5970] |
 | AUTO TIME | `Automatically` | 0..1 | OFF / ON | 3 | **PROVEN** |
 | TIME ZONE | `timeZone` | — | `UTC+01:00` (v6.16: the stock label; the detail shows the place names) | 3 | **LOCKED** (set in the stock UI; table 0x1A5890 copied in v6.16) |
 | **PRE-HEAT** (v6.16) | *(none — `/new_customer/merakiplus/schedule`)* | 0..1 | OFF / ON | — | merakiplus's own; the alarm goes out as the stock cmd8 alarm ([time-scheduling.md](../time-scheduling.md)) |
@@ -1072,9 +1072,9 @@ code path.
 
 | Activity | Stop frame (cmd6, CRC-16/MODBUS LE) | MCU firmware: what controls the activity | The MCU's own auto-stop | The stock UI's stop call | Bits cleared |
 |---|---|---|---|---|---|
-| **WATER** (auto, merakiplus's start) | `aa 55 06 10 01 00 00 c0 0f` — sub16 len1, word 16 = 0 | hot water ctl `0x1B8C`: `active = (word19 \| word16) != 0`, recomputed every round (`0x1C44..0x1C4E`); active → `work_sta \|= 0x20A` (`0x1C8A`) | weight stop `0x1C80`: `strh r4,[r6,#0x20]` (word 16 = 0) | `hotWaterStartStop` `0x11468C`: mirror word 16 = 0, `usart_send(6,16,1)` | bit 3 always (`0x1C9A`); bits 1+9 when the boiler refill is idle (`[0x2000002B] == 9`, `0x1CA2`) |
+| **WATER** (auto, merakiplus's start) | `aa 55 06 10 01 00 00 c0 0f` — sub16 len1, word 16 = 0 | hot water ctl `0x1B8C`: `active = (word19 \| word16) != 0`, recomputed every round (`0x1C44..0x1C4E`); active → `work_sta \|= 0x20A` (`0x1C8A`) | weight stop `0x1C80`: writes word 16 = 0 | `hotWaterStartStop` `0x11468C`: mirror word 16 = 0, `usart_send(6,16,1)` | bit 3 always (`0x1C9A`); bits 1+9 when the boiler refill is idle (`[0x2000002B] == 9`, `0x1CA2`) |
 | WATER (manual mode) | `aa 55 06 13 01 00 00 c0 4b` — sub19 len1, word 19 = 0 | the same (`word19 \| word16`) | — | `hotWaterStartStop` `0x114720`: `usart_send(6,19,1)` | as above |
-| **BREW** | `aa 55 06 16 01 00 00 c0 87` — sub22 len1, word 22 = 0 | brew ctl `0x1E9C`: on every **change** of word 22, `running = (word22 != 0)` (`0x1F94..0x1FC6`) | weight stop `0x1F92`: `strh r5,[r6,#0x2c]` (word 22 = 0) | home `onClick` `0x109694`: mirror word 22 flipped to 0, `usart_send(6,5,18)` (the whole block) | bits 2+12 in the 1st round (`0x20C4`, `& 0xEFFB`), valve pulse on bit 2 after 10 rounds (`0x20D2`); bits 1+9 when the refill is idle (`0x20F0`) |
+| **BREW** | `aa 55 06 16 01 00 00 c0 87` — sub22 len1, word 22 = 0 | brew ctl `0x1E9C`: on every **change** of word 22, `running = (word22 != 0)` (`0x1F94..0x1FC6`) | weight stop `0x1F92`: writes word 22 = 0 | home `onClick` `0x109694`: mirror word 22 flipped to 0, `usart_send(6,5,18)` (the whole block) | bits 2+12 in the 1st round (`0x20C4`, `& 0xEFFB`), valve pulse on bit 2 after 10 rounds (`0x20D2`); bits 1+9 when the refill is idle (`0x20F0`) |
 | **GRIND** | `aa 55 06 06 01 00 00 c4 47` — sub6 len1, word 6 = 0 | grind ctl `0x19C6`: the grinder runs while word 6 ≠ 0 (`0x1AA2`: `work_sta \|= 0x40`, otherwise `&= ~0x40`) | weight `0x1A68`, timeout `0x1A72`, error `0x1A3E`/`0x1A8C`: all `word 6 = 0` | home `onClick` `0x10928C`: mirror word 6 = 0, `usart_send(6,6,1)` (the start branch `0x109278` sends `sub3 len4`) | bit 6 |
 | STEAM (unchanged since v6) | `aa 55 06 18 08 00 00 8a 02 00 … 00 0c f7` — sub24 len8, word 24 = 0 | steam ctl `0x210E` | word 48 ≥ word 25 | (SESSION.md §10.3) | bits 5+14 |
 
@@ -1087,7 +1087,7 @@ overwrite a recipe value with a stale mirror.
 **Words 9 and 3 are not stop words.** Word 9 (brew/water) and word 3 (grind) are tare triggers that
 the MCU consumes and resets within 10 ms of the start (`0x1ED2`, `0x19F2`). Writing them to 0 during
 an activity does nothing. *(REGISTERMAP §2.2 calls word 6 "tare" and word 7 "run". The byte offsets
-`[r6,#6]` = word 3 and `[r6,#0xc]` = word 6 show that word 3 is the tare trigger and word 6 the run
+`6` = word 3 and `0xC` = word 6 (relative to word 0) show that word 3 is the tare trigger and word 6 the run
 flag.)*
 
 **Safe in the middle of a run?** Yes, for all three. The stock UI offers the same stop (the water,

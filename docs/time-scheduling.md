@@ -21,16 +21,16 @@ marked *MCU*. Strings in `demo_v9`'s read-only data are at file offset = VA − 
 
 * `model_data_init` 0xCEF40: `model[0x59] = (getTimeMode() != 0)` (store at 0xCEF94). `getTimeMode` 0xD2064 reads the
   config key `timemode` (string at 0x16539C).
-* `update_time` 0xD5944:
+* `update_time` 0xD5944 loads `model[0x59]`, XORs it with 1 at 0xD5970 (the step v6.1 missed) and branches on
+  the result (0xD5978/0xD597C), as pseudocode:
   ```
-  d596c  ldrb r3, [r3, #0x59]   ; model[0x59]
-  d5970  eor  r3, r3, #1        ; <- missed in v6.1
-  d5978  cmp  r3, #0
-  d597c  beq  0xd5a70           ; timemode == 1 -> sprintf("%02d:%02d")          (0x165D94)
-                                ; timemode == 0 -> hour > 12: hour-12, "… P.M." (0x165D74)
-                                ;                  hour == 12: 12, "… P.M."
-                                ;                  hour == 0:  12, "… A.M."    (0x165D84)
-                                ;                  else hour, "… A.M."
+  if model[0x59] == 1:                   # 24 h
+      sprintf("%02d:%02d")               # format at 0x165D94
+  else:                                  # 12 h
+      if   hour > 12:  hour - 12, "… P.M."   # format at 0x165D74
+      elif hour == 12: 12,        "… P.M."
+      elif hour == 0:  12,        "… A.M."   # format at 0x165D84
+      else:            hour,      "… A.M."
   ```
 * The settings switch is labelled **"24-Hour Format"** (0x171F60); its click handler (0xFCD60) toggles
   `model[0x59]`, draws the switch ON when it is 1 (`switch_update`) and saves it with `setTimeMode` (0xFCDEC).

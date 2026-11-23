@@ -17,7 +17,7 @@ has not been run on a 120 V machine.
 | **`set_voltage`** (word 67) is a config byte in the controller's data flash, with value 120 or 220 | config load/save `0x7A2` (index 1 → config[0x3C], "set.voltage = %d") |
 | A blank config defaults to **120** | config init `0x950`: version byte ≠ 3 → `set_voltage = 120` |
 | **Boot check** (power-on only): the measured mains voltage (word 49) must lie in a window that depends on `set_voltage` | `0xA8F6`, called from the init task `0x2C86`: 120 → **85–135 V**, 220 → **170–265 V** |
-| Failure = more than 30 consecutive out-of-window samples (100 ms each, within the first ~5 s) → **E1 bit 0** | `0xA94E` `orr #1` into word 34 |
+| Failure = more than 30 consecutive out-of-window samples (100 ms each, within the first ~5 s) → **E1 bit 0** | `0xA94E` sets bit 0 of word 34 |
 | After E1 at boot, the init task returns **without starting the `run`, `boiler_heat` and `head_heat` tasks**: no heating, no relays. The `status` task (display link) still runs, so the error is shown | `0x2C50..0x2C7C`, `0x2D08 → 0x2E1C` |
 | If `set_voltage` is neither 120 nor 220 (a corrupt value), the firmware picks 120 or 220 from the measured voltage and saves it | `0xA934..0xA980` |
 | A missing or failed metering IC (chip ID ≠ `0x705321`) → word 36 (E3) bit 13 (`0x2000`), same lockout | `0xA986..0xA99C` |
