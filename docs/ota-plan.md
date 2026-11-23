@@ -2,7 +2,9 @@
 
 Status: **phases 1a and 1b implemented** (v6.21: hardened companion installer, launcher, release directories and
 automatic rollback — see [Phase 1a — implemented](#phase-1a--implemented-2026-11-22) and
-[Phase 1b — implemented](#phase-1b--implemented-2026-11-22)); phases 2–4 are a plan, not implemented. It builds on the vendor A/B mechanism described in
+[Phase 1b — implemented](#phase-1b--implemented-2026-11-22)); **1a + the 1b ordinary update and trial rollback
+hardware-verified 2026-11-23** (v6.22, reference machine; power-cut/pre-Wi-Fi tests pending — see "Hardware results"
+under phase 1b). Phases 2–4 are a plan, not implemented. It builds on the vendor A/B mechanism described in
 [boot.md](boot.md) and refines its §7 (vendor OTA interaction).
 Confidence: **H** = proven from code or an on-device observation; **M** = strong inference; **L** = guess.
 
@@ -535,12 +537,13 @@ Deviations from the plan text above, all deliberate:
 - **Probe P10 (new, read-only)** for the next hardware session: `stat -c %X /dev/ttyS1; date +%s` twice a few
   seconds apart while Meraki+ runs (confirms the atime signal and the `stat` applet), and `printf abc | sha256sum`
   (P2). Until then the installer degrades to warnings, never to a false success.
-- Hardware: the "one ordinary update on the user's machine" is pending (the machine was offline).
+- Hardware: the "one ordinary update on the user's machine" — **done 2026-11-23** (v6.22, first `rel/`-layout install;
+  see the phase 1b "Hardware results" table).
 
 ### Phase 1b — implemented (2026-11-22)
 
-Shipped as **v6.21** (the first release with the phase 1a installer too). Not yet verified on hardware (see the end of
-this section).
+Shipped as **v6.21** (the first release with the phase 1a installer too). **Partially hardware-verified on the
+reference machine 2026-11-23 with v6.22** (ordinary update + trial rollback; see "Hardware results" below).
 
 | Item | Implementation |
 |---|---|
@@ -600,13 +603,33 @@ Deviations from the plan text above, all deliberate:
 Next hardware session (user present; §13 decision 5; together with phase 0 probes P1–P10):
 
 1. Ordinary update to v6.21 with `./install.sh` (idle machine): migration, launcher selftest on the display, watchdog
-   activation, healthy marker, commit; `./install.sh status`.
-2. **Clear the boot flag first** (user-approved write), so every power cycle returns to stock.
+   activation, healthy marker, commit; `./install.sh status`. — **done 2026-11-23 with v6.22** (see below).
+2. **Clear the boot flag first** (user-approved write), so every power cycle returns to stock. — **done** (flag cleared
+   before the rollback test; still cleared at session end — safe: next boot is stock).
 3. Canary releases built for the test (not published): one that exits at once → 3 starts → rollback; one that crashes
-   before Wi-Fi with the flag set → stock fallback brings Wi-Fi back (telnet reachable).
+   before Wi-Fi with the flag set → stock fallback brings Wi-Fi back (telnet reachable). — **exit-canary done**;
+   pre-Wi-Fi canary built but **pending** (user away).
 4. Power cuts **performed by the user** at announced points (during a trial start, right after a commit); any
-   injected long power-button press needs explicit approval per session.
+   injected long power-button press needs explicit approval per session. — **pending** (user away; the one staging
+   window completed without a cut).
 5. Restore the flag; revisit the vendor OTA block decision (§13 decision 6) before stock runs during these tests.
+   — flag restore **pending** with the runbook in the session report; decision 6 revisited and unchanged (no block).
+
+#### Hardware results (2026-11-23, reference machine, v6.22)
+
+Session report: `ONDEVICE-v622-HW-SESSION.md` in the development workspace (evidence `ondevice/v622_hw_session/`).
+The machine auto-powered-off (15 min idle) while the owner was away; the destructive power-cut tests were stopped on
+the owner's instruction and are pending a user-attended session. End state is safe: boot flag cleared (next boot =
+stock A), v6.22 committed and healthy in `rel/`, config byte-identical to baseline, backups intact, `/tmp` wiped by
+the power-off. Two unreferenced test release directories remain on flash (harmless; the launcher only starts what the
+state names; GC removes them on the next install) — removal is in the report's restore runbook.
+
+| Test | Result |
+|---|---|
+| Ordinary update (first `rel/` install) | **PASS.** Flat v6.20 migrated to `rel/6.20-42cd7b9d` (rollback target); `rel/6.22-1e586718` staged (md5 + SHA-256, MANIFEST last, sync, one rename); state `pending` written tmp→sync→rename→sync; launcher uploaded, **selftest 8/8 on the display**, synced, renamed over `/new_customer/demo_v9`; watchdog exec-reload (no reboot); same PID healthy after 59 s (controller link live); installer committed `current=6.22`, `previous=6.20`; switcher refreshed (release-path classification) and restarted; slot A / demo.sh / config / backups untouched. |
+| Trial rollback (flag cleared) | **PASS.** A deliberately broken canary (`TESTEXIT-<sha8>`, exits at once; built for the test, never published, removed afterwards) staged with the installer's own `install_release` and set `pending`; activated by the running v6.22's exec-reload when idle. The launcher wrote `tries` 1→2→3 to flash before each exec; the vendor watchdog supplied the restarts; the 4th start rolled back: `last=rolled_back:TESTEXIT-<sha8>:crashloop`, `pending` cleared, v6.22 running and healthy again. SYSTEM showed the amber *"V6.22 · VTESTEXIT FAILED"* line (fb). No power cycle was needed. |
+| Pre-Wi-Fi crash → stock fallback | **PENDING.** Canary built (crashes after ~4 s, before Wi-Fi); the test needs the flag set and a user power cycle. Design: state `current`/`previous` → two crash-canary dirs, boot, crash-storm demotion current→previous→stock, telnet returns via stock Wi-Fi, then restore. |
+| Power-cut replay (staging / trial) | **PENDING.** The staging window (full v6.22 set re-staged under a TEST name) completed without a cut — the owner was not at the machine. The container replay tests (96 installer states, launcher oplog prefixes) remain the exhaustive evidence; hardware confirms the real UBIFS in the next session. |
 
 ### Phase 1b — launcher, release directories, auto-rollback (3–4 d) — the original plan
 

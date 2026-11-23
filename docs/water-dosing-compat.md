@@ -2,8 +2,9 @@
 
 Status: **implemented in v6.22 (2026-11-22)** — gate + manual hot water, per the maintainer decisions in
 [§10](#10-decisions-resolved-by-the-maintainer); implementation, tests and deviations in [§11](#11-implementation-v622).
-Not yet installed on the reference machine (next hardware session, §11.5). §1–§9 are the research as written before
-the decisions; where they differ (display-side limits, `T_MAN`, strings), §10/§11 win.
+**Installed and live-verified on the reference machine (2026-11-23, §11.5):** manual start/stop frames confirmed on
+controller 5.1.4, AUTO dose stopped by the controller at 40.4 g for a 40.0 g target. §1–§9 are the research as written
+before the decisions; where they differ (display-side limits, `T_MAN`, strings), §10/§11 win.
 Addresses are in the controller firmware `MEM03_V514_260923.bin` (powerMcu **5.1.4**, flash base `0x0`) and
 in the stock display app `demo_v9` (build **1.1.1-69**, symbols kept; VMA = file offset + 0x10000). Neither
 binary is in this repository. Register words are as in [registermap.md](registermap.md); frames as in
@@ -49,9 +50,9 @@ Register base `r6 = 0x20000F96` (word 0); per-activity state `r5 = 0x20000028`.
 So **auto** = word 16 plus a weight stop at word 17. **Manual** = word 19 with **no stop condition** except the
 conflict/error cancels: it runs until the display writes word 19 = 0. The controller has no manual timeout.
 
-*Open detail:* the static threshold is target + 1.5 g, but the live capture saw the stop when word 39 read
-40.5 / 41.0 g for a 40.0 g target. Poll sampling (~100 ms at ~6.5 g/s) explains part of it; the rest is
-unresolved. It does not change the design: the stop is in the controller and is weight-based.
+*Open detail — resolved by the 2026-11-23 live dose (§11.4/§11.5):* the static threshold is target + 1.5 g on the
+internal raw scale value; the broadcast word 39 and the final physical weight overshoot by only +0.4…+1.0 g
+(40.4 g final for a 40.0 g target). The stop is in the controller and is weight-based; the design is unchanged.
 
 ### 1.2 Word 20 and the boiler refill (`0x226E`)
 
@@ -384,17 +385,23 @@ hygiene + bin/ drift OK; all built with the official zig 0.17.1 ([CHANGELOG](../
 
 ### 11.4 Deviations and open points
 
-* **Weight stop threshold unresolved:** the controller code stops at word 39 > target + 1.5 g (`0x1C64..0x1C84`), the
-  2026-11-16 capture saw 40.5 / 41.0 g for a 40.0 g target (§1.1). It is controller-side; per decision 2 Meraki+ adds no
-  display-side stop, so the difference does not affect the UI.
+* **Weight stop threshold — live measurement (2026-11-23):** the controller code stops at word 39 > target + 1.5 g
+  (`0x1C64..0x1C84`), but that comparison reads the **internal raw scale value** (`[0x200010DC+6]`), which is not on the
+  wire. A live 40.0 g dose stopped with the broadcast word 39 at 40.6 g and a final scale reading of **40.4 g (+0.4 g)**
+  after the drip settled; the 2026-11-16 capture saw 40.5 / 41.0 g. The broadcast/final overshoot is consistently
+  +0.4…+1.0 g (poll sampling ~100 ms at ~6 g/s, after-drip, conditioning); the internal threshold crossing cannot be
+  measured remotely. It is controller-side; per decision 2 Meraki+ adds no display-side stop, so the difference does not
+  affect the UI.
 * **The manual frame on ≤ 5.1.2 is not hardware-tested.** It is the stock 1.1.1-69 legacy page's frame (the field-proven
   path for every older controller), but no ≤ 5.1.2 controller was available. Risk: if an old controller treated a lone
   word 19 differently, manual water would not start (fail-safe: nothing runs) — STOP (word 19 = 0) is the stock stop.
-* **Manual on a 5.1.4 controller uses `sub19 len1`, not stock's new-panel frame.** The 1.1.1-69 hot water panel starts
-  MANUAL on a > 5.1.2 controller with the whole `sub9 len11` block (word 9 = 1, word 16 = 0, word 19 = 1,
-  `0x113D94`). Meraki+ sends the legacy page's `sub19 len1` on every controller (the decision's "same frames stock sends
-  to older controllers"). By the controller code (`active = word19 | word16`, recomputed every 10 ms cycle) both start
-  the same; **to verify on the 5.1.4 machine** (§11.5).
+* **Manual on a 5.1.4 controller uses `sub19 len1`, not stock's new-panel frame — hardware-confirmed (2026-11-23).**
+  The 1.1.1-69 hot water panel starts MANUAL on a > 5.1.2 controller with the whole `sub9 len11` block (word 9 = 1,
+  word 16 = 0, word 19 = 1, `0x113D94`). Meraki+ sends the legacy page's `sub19 len1` on every controller (the decision's
+  "same frames stock sends to older controllers"). On the reference machine the lone word 19 = 1 started water exactly
+  like the block does (work_sta `0x030B`, scale tared, ~6.1 g/s); STOP sent word 16 = 0 + word 19 = 0 (the dosing
+  controller's stop path), both ACK'd, bits cleared. Both start paths work on 5.1.4, as the controller code predicts
+  (`active = word19 | word16`, recomputed every 10 ms cycle).
 * **Scale fault blocks every start**, including manual: the error words (34/35/36) block starts since v6.0, and v6.22
   keeps that (the stock legacy page would still offer manual water). Fail-safe; the page says *SCALE FAULT: NO WEIGHT
   STOP* and the live line *ERROR*.
@@ -402,15 +409,26 @@ hygiene + bin/ drift OK; all built with the official zig 0.17.1 ([CHANGELOG](../
   `"V5.1.4a"` or a 4-part version would be manual-only in Meraki+ but dosing in the stock UI. Deliberate (decision 1:
   fail-safe).
 
-### 11.5 Next hardware session (not done in this round)
+### 11.5 Hardware session (2026-11-23, reference machine — done unless marked)
 
-1. **Install v6.22** — needs separate approval (this round's approval covers the release only).
-2. **P9a** words 80..95 live (Meraki+ log or a passive tap of one sub56 reply): `V5.1.4` + identical copy; check
-   *DIAGNOSTICS → CONTROLLER* shows *V5.1.4 · AUTO + MANUAL*.
-3. **P9b** `md5sum /customer/mcu.bin /customer/mcu_tmp.bin` for the record (§3.5).
-4. **P9c** the sanitized config grep (never print the whole file) — no controller-version key.
-5. **P9d** pull the older stock app from slot B (`boot/demo_v9.vendor`) to the dev workspace, never into this repo.
-6. **Manual water live on the 5.1.4 machine:** WATER MODE = MANUAL → HOLD TO START → `sub19 len1 [1]` on the wire,
-   work_sta `0x030B`, water runs past the HOT WATER weight, no stop from the display for > 90 s, STOP WATER → word 16 = 0
-   + word 19 = 0 → bits cleared. AUTO still stops by weight with no frame from the display.
-7. The OTA phase 1b items already pending (ordinary update, flag-cleared rollback / power-cut tests).
+Session report: `ONDEVICE-v622-HW-SESSION.md` in the development workspace (evidence `ondevice/v622_hw_session/`).
+
+1. **Install v6.22 — done.** Real `install.sh --persist --gesture`: first `rel/`-layout install migrated the running
+   v6.20 into `rel/6.20-42cd7b9d` (rollback target), staged `rel/6.22-1e586718`, launcher selftest 8/8 on the display,
+   watchdog exec-reload (no reboot), healthy after 59 s, committed (`current=6.22`, `previous=6.20`). Sound helper
+   `--check` rc=0; slot A, demo.sh, config and backups untouched.
+2. **P9a — done.** Passive tap: 83/83 `sub56 len56` replies carry `V5.1.4` in words 80..87 and an identical copy in
+   88..95 (0 CRC errors). *DIAGNOSTICS → CONTROLLER* shows *V5.1.4 · AUTO + MANUAL*.
+3. **P9b — done.** `/customer/mcu.bin` and `mcu_tmp.bin` are absent on the reference machine (download cache only, §3.5).
+4. **P9c — done.** Sanitized config grep: only asset versions + `softversion`; no controller-version key.
+5. **P9d — done.** The older stock display app (`boot/demo_v9.vendor`, md5 `3b63e13f…`) pulled to the development
+   workspace `artifacts/`, never into this repo.
+6. **Manual + AUTO water live — done.** MANUAL: `sub19 len1 [1]` (`aa 55 06 13 01 01 00 c1 db`) started water on 5.1.4,
+   work_sta `0x030B`, ~40 s run with no display stop or timeout (only keep-awake writes), STOP = word 16 = 0 + word 19 = 0,
+   bits cleared, E1/E2/E3 = 0. (The run was ~40 s by owner choice instead of >90 s; the absence of any timeout is
+   code-proven — decision 2 removed it and the selftest covers 120 s of silence.) AUTO: `sub9 len11` (word 16 = 1,
+   word 17 = 400) ACK'd, **controller self-stop after 6.65 s with no stop frame from the display**; final scale reading
+   **40.4 g for a 40.0 g target (+0.4 g)**, word 39 at stop 40.6 g (§11.4). Config restored byte-identical to the
+   pre-session baseline by the UI saves themselves (stock serialization round-trips exactly).
+7. **OTA phase 1b — partial.** Ordinary update + trial rollback verified (see [ota-plan.md](ota-plan.md) phase 1b
+   hardware results); the pre-Wi-Fi crash fallback and power-cut replays are **pending** a user-attended session.
