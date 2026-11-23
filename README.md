@@ -403,6 +403,15 @@ sends (with the same limits, CRC and acknowledgement). The risk lies mainly in t
 software — see the disclaimer. No guarantees are given.
 </details>
 
+<details><summary><b>Does it work on 120 V / 60 Hz (US/Canada)?</b></summary>
+
+Meraki+ does not depend on the mains voltage; that is decided by the machine. A 100–120 V machine
+(sold by the US/CA store) runs normally on 120 V / 60 Hz. A 220–240 V machine stops at power-on with
+an E1 mains-voltage error. The machine is not dual-voltage. One caveat: the ≈BAR pressure estimate is
+anchored on a 230 V machine and reads about 25 % high on a 120 V machine. Details, firmware evidence
+and what to check: [docs/mains-voltage.md](docs/mains-voltage.md).
+</details>
+
 <details><summary><b>Does it work on Gen 2?</b></summary>
 
 Unknown. Run `--dry-run` — the installer stops without changes if the display is not recognized.
@@ -445,6 +454,7 @@ description (including the gesture, the watchdog race and the OTA table) is in
 | [docs/concurrent-brew-steam.md](docs/concurrent-brew-steam.md) | *Feasibility:* brewing and steaming at the same time — MCU/stock/Meraki+ evidence, sim result, hardware runbook |
 | [docs/ota-plan.md](docs/ota-plan.md) | *Planned:* secure updates — storage/tooling/vendor-OTA inventory, signed manifests, boot launcher with automatic rollback, phases and tests |
 | [docs/water-dosing-compat.md](docs/water-dosing-compat.md) | Hot water by weight needs controller firmware > 5.1.2 — how the stock UI detects it (words 80..87), how Meraki+ gates it and its manual hot water (v6.22) |
+| [docs/mains-voltage.md](docs/mains-voltage.md) | 120 V / 60 Hz vs 230 V / 50 Hz — the controller's `set_voltage` modes, the E1 boot check, vendor specs, the pressure-estimate caveat |
 | [docs/dev/](docs/dev/) | Developer notes (full UI spec with changelog, parity analysis) |
 | [sim/README.md](sim/README.md) | The simulator and the E2E tests |
 
