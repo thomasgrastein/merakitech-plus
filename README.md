@@ -359,9 +359,15 @@ Without `--persist` the machine starts the original UI. With `--persist`: see th
 - **Rollback:** since v6.21 a crashing or unhealthy new version is rolled back automatically on the
   display (previous version → original UI), without a computer or network.
   Meraki+ also shows a notice on screen (SYSTEM and a toast) when it finds a manufacturer update.
-- **Planned:** signed Meraki+ updates and an opt-in update check — see [docs/ota-plan.md](docs/ota-plan.md)
-  (phases 1a + 1b, the hardened installer and the launcher with rollback, are done; signing and
-  on-device download are not implemented yet).
+- **Signed releases:** from v6.23, every release carries `manifest.json` + `manifest.sig` — all files
+  with SHA-256, signed offline by the maintainer with an Ed25519 key that CI and GitHub never see, after
+  a byte-for-byte rebuild. `./install.sh` checks the signature and every file on your computer before
+  it changes anything on the display, and refuses older signed releases than the display already had
+  (`--allow-downgrade` to do it on purpose; `--require-signed` to refuse unsigned installs). Check a
+  download yourself: `python3 tools/merakiplus.py verify-release <dir>`. Details and the key:
+  [docs/signing.md](docs/signing.md).
+- **Planned:** an opt-in update check on the display itself — see [docs/ota-plan.md](docs/ota-plan.md)
+  (phases 1a, 1b and 2 are done; on-device download is not implemented yet).
 - **Meraki+ itself** opens no new network ports and contacts no servers. Its only network function
   is bringing up the display's Wi-Fi at boot from slot B (the same configuration the stock UI uses;
   the password is never logged).

@@ -1,0 +1,135 @@
+{
+ "assets": [
+  {
+   "name": "MD5SUMS",
+   "sha256": "40c35591ff2bc52330965b7520bd09c9d9ee60b15d4d174e321a75e5c872afed",
+   "size": 556
+  },
+  {
+   "name": "SHA256SUMS",
+   "sha256": "3c9bb2fb3ced43abdbd5ae73d25393222e26a264697aa8a3d25456b97f2ace87",
+   "size": 908
+  },
+  {
+   "name": "grab_shim.so",
+   "sha256": "c02f61b53ec4613f04950966bcfab7e7aa2ad53dfe1035eae22a542861d268d7",
+   "size": 852
+  },
+  {
+   "name": "merakiplus",
+   "sha256": "6283c35df24b67b753abd8b00207ce497c570b52d82dc004eedf900ef9b5749b",
+   "size": 320680
+  },
+  {
+   "name": "merakiplus_boot",
+   "sha256": "4cbcc5fb20469ba25b79ee1523b4639a2a81af84e96b996e97d2af0d535fd8ed",
+   "size": 68124
+  },
+  {
+   "name": "merakiplus_sim-linux-x86_64",
+   "sha256": "a41d453931c51ed3f00ee807efebe36cac24dd154d2a3ea6f32a0a699c16de50",
+   "size": 387952
+  },
+  {
+   "name": "merakiplus_sim-macos-arm64",
+   "sha256": "cb40763614ee86e036dd547d676c71dc099b3328a294902ecfc63c310bcd82b2",
+   "size": 334296
+  },
+  {
+   "name": "merakiplus_sim_arm",
+   "sha256": "bd303e251b6d6c37b95ea8bc40e517ed38af5e544afe9f342ee51a7d3221c2fb",
+   "size": 364856
+  },
+  {
+   "name": "merakiplus_snd",
+   "sha256": "84c06c507a04d0c06ae9250a60405f10bcf05b105e481144869180fd30d479cb",
+   "size": 8912
+  },
+  {
+   "name": "ready_extract.wav",
+   "sha256": "f8dbf35ce5789480cfe183bc2002a01984b219719cef0f0f0b08ddc0ef537499",
+   "size": 25644
+  },
+  {
+   "name": "ready_steam.wav",
+   "sha256": "85bd297c597f9239829cb5db1dc67fc6ce6dbef910a7972555ad0826377f91f1",
+   "size": 24044
+  },
+  {
+   "name": "start.wav",
+   "sha256": "4633a9ecd800119732886e5255f404d76eb9743dda3ebdd2c270d5106650ff01",
+   "size": 45484
+  },
+  {
+   "name": "switcher",
+   "sha256": "6af721e297e8d13dedc9ad9c14bf39d925eb7d4cc7ae9fab49f99b428873d5bf",
+   "size": 79988
+  }
+ ],
+ "base_url": "https://github.com/thomasgrastein/merakitech-plus/releases/download/v6.23/",
+ "channel": "stable",
+ "commit": "95f7c5ca162c1ba296a302d7a89abc29e5b7f527",
+ "format": 1,
+ "platform": [
+  {
+   "name": "grab_shim.so",
+   "sha256": "c02f61b53ec4613f04950966bcfab7e7aa2ad53dfe1035eae22a542861d268d7",
+   "size": 852,
+   "src": "grab_shim.so"
+  },
+  {
+   "name": "launcher",
+   "sha256": "4cbcc5fb20469ba25b79ee1523b4639a2a81af84e96b996e97d2af0d535fd8ed",
+   "size": 68124,
+   "src": "merakiplus_boot"
+  },
+  {
+   "name": "switcher",
+   "sha256": "6af721e297e8d13dedc9ad9c14bf39d925eb7d4cc7ae9fab49f99b428873d5bf",
+   "size": 79988,
+   "src": "switcher"
+  }
+ ],
+ "product": "merakiplus",
+ "release": [
+  {
+   "mode": "755",
+   "name": "demo_v9",
+   "sha256": "6283c35df24b67b753abd8b00207ce497c570b52d82dc004eedf900ef9b5749b",
+   "size": 320680,
+   "src": "merakiplus"
+  },
+  {
+   "mode": "755",
+   "name": "merakiplus_snd",
+   "sha256": "84c06c507a04d0c06ae9250a60405f10bcf05b105e481144869180fd30d479cb",
+   "size": 8912,
+   "src": "merakiplus_snd"
+  },
+  {
+   "mode": "644",
+   "name": "audio/ready_extract.wav",
+   "sha256": "f8dbf35ce5789480cfe183bc2002a01984b219719cef0f0f0b08ddc0ef537499",
+   "size": 25644,
+   "src": "ready_extract.wav"
+  },
+  {
+   "mode": "644",
+   "name": "audio/ready_steam.wav",
+   "sha256": "85bd297c597f9239829cb5db1dc67fc6ce6dbef910a7972555ad0826377f91f1",
+   "size": 24044,
+   "src": "ready_steam.wav"
+  },
+  {
+   "mode": "644",
+   "name": "audio/start.wav",
+   "sha256": "4633a9ecd800119732886e5255f404d76eb9743dda3ebdd2c270d5106650ff01",
+   "size": 45484,
+   "src": "start.wav"
+  }
+ ],
+ "released": "2026-11-23",
+ "seq": 1,
+ "tag": "v6.23",
+ "version": "6.23"
+}

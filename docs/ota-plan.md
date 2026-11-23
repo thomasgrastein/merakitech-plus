@@ -4,7 +4,9 @@ Status: **phases 1a and 1b implemented** (v6.21: hardened companion installer, l
 automatic rollback — see [Phase 1a — implemented](#phase-1a--implemented-2026-11-22) and
 [Phase 1b — implemented](#phase-1b--implemented-2026-11-22)); **1a + the 1b ordinary update and trial rollback
 hardware-verified 2026-11-23** (v6.22, reference machine; power-cut/pre-Wi-Fi tests pending — see "Hardware results"
-under phase 1b). Phases 2–4 are a plan, not implemented. It builds on the vendor A/B mechanism described in
+under phase 1b); **phase 2 implemented 2026-11-23** (signed release manifests, offline Ed25519 key, v6.23 is the
+first signed release — see [Phase 2 — implemented](#phase-2--implemented-2026-11-23) and [signing.md](signing.md)).
+Phases 3–4 are a plan, not implemented. It builds on the vendor A/B mechanism described in
 [boot.md](boot.md) and refines its §7 (vendor OTA interaction).
 Confidence: **H** = proven from code or an on-device observation; **M** = strong inference; **L** = guess.
 
@@ -661,6 +663,43 @@ state names; GC removes them on the next install) — removal is in the report's
   canonicalisation.
 - Hardware: one signed update via the companion.
 - Risk: low; key handling is the main human risk.
+
+### Phase 2 — implemented (2026-11-23)
+
+Tooling, installer, CI and docs; **no shipped binary changed** (no version bump). Details, runbook and threat model:
+[signing.md](signing.md).
+
+| Item | Implementation |
+|---|---|
+| Key | Ed25519, generated on the maintainer's Mac with OpenSSL 3 (`tools/sign_release.py keygen`): `~/.merakiplus/signing_ed25519.pem`, PKCS#8 encrypted with scrypt + AES-256-CBC, mode 600; warm backup of the encrypted file in the maintainer's cloud drive, cold USB copy recommended, passphrase kept separately (§13 decision 2). Key id `26f673cde8584ba0`. Public key pinned in `keys/merakiplus-release.pub`, `tools/merakiplus.py` `TRUSTED_KEYS` and `src/merakiplus_upd_keys.h` (`tests/hygiene.py` keeps them equal and rejects private keys in the tree). |
+| Manifest | `manifest.json`, format 1, canonical JSON (sorted keys, indent 1, ASCII, no escapes/floats, ≤ 64 KiB): `assets` (every release asset incl. the SIM builds and both sum files: size + SHA-256), `release` (the release-directory set), `platform` (launcher, switcher, shim), `seq`, `version`, `tag`, `commit`, `released`, `base_url` (pinned to the tag). `manifest.sig` in signify format. |
+| Signing | `tools/sign_release.py sign <tag>`: download all assets → `seq` = highest re-verified signed seq + 1 → rebuild the tagged source in a temporary worktree with the official zig 0.17.1 + own cache → byte compare (fresh build = committed `bin/` at the tag = asset; the non-reproducible ones = committed; WAVs = `audio/`; sums recomputed) → manifest → sign (passphrase prompt) → verify with the pinned keys and the device verifier → `--upload` → re-download + `verify-release`. |
+| Companion | `install.sh` verifies the signed manifest of `v<VERSION>` (from `--bin-dir` or the GitHub release) on the computer before anything changes on the display: signature, format, every installed file listed with the same size + SHA-256, `seq ≥ max_seq` of the display. Records `max_seq` in `ota/state` (the deployed launcher keeps unknown keys). Unsigned or unreachable → a warning and the pinned table as before; `--require-signed` makes it an abort; `--allow-downgrade`. New `merakiplus.py verify-release DIR`. |
+| Device verifier | `src/merakiplus_upd.c` (CLI, strict JSON subset parser with canonical re-serialization, file hashing) + `src/merakiplus_crypto.zig` (Ed25519 + SHA-256 from the Zig standard library). Static ARMv7 ~96 KB, reproducible. `verify` / `sha256` / `keys` / `--selftest` (RFC 8032 + SHA-256 vectors). **Built and tested, not shipped.** |
+| CI | `release.yml` publishes `manifest.unsigned.json` (no `seq`, never trusted; the signer cross-checks it) and refuses a re-run whose assets no longer match an existing signed manifest. CI never has the key. `ci.yml` runs `tests/test_upd.py`. |
+| First signature | **v6.23 signed as seq 1** (all 13 assets matched a local official-zig rebuild byte for byte); `manifest.json` + `manifest.sig` uploaded to the published release (assets, notes and the Latest flag unchanged). The pair is kept as `tests/fixtures/release-v6.23/`. |
+| Tests | `tests/test_upd.py` (118 checks incl. 32 cases run by both verifiers, ARM32 container with `--arm`), installer scenario *2: signed release manifest* (12 checks), `build.sh` selftest, hygiene. |
+
+Deviations from the plan text above, all deliberate:
+
+- **No on-device verification yet.** The plan has companion installs verify "on the computer **and** on the device"
+  in phase 2. The device verifier exists and is tested (host + ARM32), but shipping it is a shipped-binary change
+  that needs a release decision and a hardware check, and the machine was off. It ships with phase 3 (or a release
+  that stages it into `rel/<x>/` first). Until then the installer verifies on the computer, and the display checks
+  md5 (+ SHA-256 where available) after every upload, as since phase 1a.
+- **Zig standard library instead of Monocypher** for Ed25519/SHA-256: no third-party crypto source in the repository;
+  the toolchain is already the trust base of every binary. The CLI is C like the launcher.
+- **`merakiplus_upd` has no `stage` / `commit-pending` yet** — only `verify` and `sha256`. Staging and the state
+  commit stay in the installer (phase 1b) until phase 3 moves them on the device.
+- **OpenSSL holds the private key** (encrypted PKCS#8) instead of a signify secret-key file; the public key and
+  signature files are signify-format. The key number is derived (SHA-256(pk)[:8]), not random.
+- **No `requires` / `min_from_seq` in format 1.** Nothing needs them yet. When phase 3 adds them as fields a verifier
+  must enforce, they come with `format: 2`, so that format-1 verifiers refuse such a manifest instead of ignoring the
+  new field.
+- **No separate cold backup key**: the maintainer keeps backup copies of the one encrypted key (signing.md §3 covers
+  loss and rotation). The verifiers accept several keys, so one can be added later.
+- **Release directory names** stay `<version>-<sha8>`; `seq` lives in the manifest and `max_seq` in `ota/state`.
+- Hardware ("one signed update via the companion"): **pending**, next hardware session (with probes P1–P10).
 
 ### Phase 3 — on-device check + fetch with consent (5–7 d)
 

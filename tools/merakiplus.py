@@ -7,6 +7,7 @@ Normally used through ./install.sh and ./revert.sh. Python 3.8+, standard librar
     merakiplus.py scan                          find the display on your /24 (telnet fingerprint)
     merakiplus.py install --ip ADDR [--persist] [--gesture] [--dry-run] [--yes]
     merakiplus.py revert  --ip ADDR [--purge]  [--dry-run] [--yes]
+    merakiplus.py verify-release DIR            check a downloaded release against its signed manifest
 
 How it talks to the display: the vendor firmware runs an unauthenticated root telnet
 server on port 23. Commands are sent over that; files are pushed with the display's own
@@ -45,6 +46,7 @@ import datetime
 import gzip
 import hashlib
 import ipaddress
+import json
 import os
 import pathlib
 import random
@@ -558,7 +560,7 @@ def get_binary(name, args, out, sub="bin"):
     want = (AUDIO_MD5 if sub == "audio" else BIN_MD5)[name]
     want256 = (AUDIO_SHA256 if sub == "audio" else BIN_SHA256)[name]
     cands = []
-    if getattr(args, "bin_dir", None) and sub == "bin":
+    if getattr(args, "bin_dir", None):                           # a downloaded release: binaries + WAVs side by side
         cands.append(pathlib.Path(args.bin_dir) / name)
     cands.append(repo_root() / sub / name)
     for p in cands:
@@ -588,6 +590,321 @@ def check_arm_elf(data, name, shared=False):
     et = int.from_bytes(data[16:18], "little")
     if et != (3 if shared else 2):
         raise Abort(f"{name}: unexpected ELF type {et}")
+
+
+# ============================================================ signed release manifests (docs/signing.md, OTA phase 2)
+# A release carries manifest.json (every asset with size + SHA-256, a monotonic `seq`) and manifest.sig (Ed25519 over the
+# exact manifest bytes, signify format). It is signed OFFLINE by the maintainer (tools/sign_release.py); CI cannot sign.
+# The trusted public keys are pinned here, in src/merakiplus_upd_keys.h and in keys/ (tests/hygiene.py keeps them equal).
+# key id (hex of the signify key number) -> Ed25519 public key (hex)
+TRUSTED_KEYS = {
+    "26f673cde8584ba0": "f16f17c0b8576b95931c0593b924c81748ad10668dfac9fecfa8e7404aa0bc1d",   # primary, generated 2026-11-23 (docs/signing.md)
+}
+RELEASE_DL = "https://github.com/" + REPO + "/releases/download/{tag}/{name}"
+MANIFEST_MAX = 65536                                      # bytes; the device verifier has the same limit
+SEQ_MAX = 2**31 - 1
+_SAFE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9._+-]{0,63}\Z")
+_HEX64 = re.compile(r"[0-9a-f]{64}\Z")
+_VER = re.compile(r"\d{1,4}\.\d{1,4}(?:\.\d{1,4})?\Z")
+
+# --- Ed25519 verification (RFC 8032 §5.1.7, cofactorless; the Python standard library has no Ed25519) ---
+_P = 2**255 - 19
+_L = 2**252 + 27742317777372353535851937790883648493
+_D = -121665 * pow(121666, _P - 2, _P) % _P
+_SQRTM1 = pow(2, (_P - 1) // 4, _P)
+
+
+def _ed_add(a, b):                                        # extended twisted Edwards coordinates (X, Y, Z, T)
+    x1, y1, z1, t1 = a
+    x2, y2, z2, t2 = b
+    pa, pb = (y1 - x1) * (y2 - x2) % _P, (y1 + x1) * (y2 + x2) % _P
+    pc, pd = t1 * 2 * _D * t2 % _P, z1 * 2 * z2 % _P
+    e, f, g, h = pb - pa, pd - pc, pd + pc, pb + pa
+    return (e * f % _P, g * h % _P, f * g % _P, e * h % _P)
+
+
+def _ed_mul(s, p):
+    q = (0, 1, 1, 0)
+    while s:
+        if s & 1:
+            q = _ed_add(q, p)
+        p = _ed_add(p, p)
+        s >>= 1
+    return q
+
+
+def _ed_x(y, sign):
+    if y >= _P:
+        return None
+    x2 = (y * y - 1) * pow(_D * y * y + 1, _P - 2, _P) % _P
+    if x2 == 0:
+        return None if sign else 0
+    x = pow(x2, (_P + 3) // 8, _P)
+    if (x * x - x2) % _P:
+        x = x * _SQRTM1 % _P
+    if (x * x - x2) % _P:
+        return None
+    return _P - x if (x & 1) != sign else x
+
+
+def _ed_decode(b):
+    if len(b) != 32:
+        return None
+    y = int.from_bytes(b, "little")
+    sign, y = y >> 255, y & ((1 << 255) - 1)
+    x = _ed_x(y, sign)
+    return None if x is None else (x, y, 1, x * y % _P)
+
+
+def _ed_encode(p):
+    x, y, z, _ = p
+    zi = pow(z, _P - 2, _P)
+    x, y = x * zi % _P, y * zi % _P
+    return (y | ((x & 1) << 255)).to_bytes(32, "little")
+
+
+_ED_GY = 4 * pow(5, _P - 2, _P) % _P
+_ED_G = (_ed_x(_ED_GY, 0), _ED_GY, 1, _ed_x(_ED_GY, 0) * _ED_GY % _P)
+
+
+def ed25519_verify(pk, msg, sig):
+    """True only for a valid RFC 8032 Ed25519 signature `sig` (64 bytes) of `msg` under public key `pk` (32 bytes)."""
+    if len(pk) != 32 or len(sig) != 64:
+        return False
+    a, r = _ed_decode(pk), _ed_decode(sig[:32])
+    s = int.from_bytes(sig[32:], "little")
+    if a is None or r is None or s >= _L:
+        return False
+    k = int.from_bytes(hashlib.sha512(sig[:32] + pk + msg).digest(), "little") % _L
+    return _ed_encode(_ed_mul(s, _ED_G)) == _ed_encode(_ed_add(r, _ed_mul(k, a)))
+
+
+# --- signify-format keys / signatures, canonical manifest ---
+class SigError(Abort):
+    """A signed manifest was rejected. kind: signature | format | older | asset."""
+
+    def __init__(self, kind, msg):
+        super().__init__(msg)
+        self.kind = kind
+
+
+def signify_blob(text, kind_len):
+    """The base64 line of a signify .pub (kind_len 42) or .sig (74) file -> (key id hex, payload bytes)."""
+    lines = text.split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
+    if len(lines) != 2 or not lines[0].startswith("untrusted comment: "):
+        raise SigError("signature", "not a signify file (expected 'untrusted comment:' + one base64 line)")
+    try:
+        raw = base64.b64decode(lines[1].strip(), validate=True)
+    except ValueError:
+        raise SigError("signature", "bad base64 in signify file")
+    if len(raw) != kind_len or raw[:2] != b"Ed":
+        raise SigError("signature", f"not an Ed25519 signify blob ({len(raw)} bytes)")
+    return raw[2:10].hex(), raw[10:]
+
+
+def manifest_bytes(obj):
+    """Canonical serialization (the exact bytes that are signed): sorted keys, 1-space indent, ASCII, final newline."""
+    return (json.dumps(obj, sort_keys=True, indent=1, ensure_ascii=True, separators=(",", ": ")) + "\n").encode()
+
+
+def _strict_json(data):
+    def pairs(kv):
+        keys = [k for k, _ in kv]
+        if len(set(keys)) != len(keys):
+            raise ValueError("duplicate key")
+        return dict(kv)
+
+    def no_const(c):
+        raise ValueError(f"constant {c} not allowed")
+
+    def no_float(f):
+        raise ValueError("floats are not allowed")
+    return json.loads(data.decode("ascii"), object_pairs_hook=pairs, parse_constant=no_const, parse_float=no_float)
+
+
+def _plain_strings(v):
+    """Every key and string value is printable ASCII without '"' or '\\' (keeps the device's JSON parser trivial)."""
+    if isinstance(v, str):
+        return all(" " <= c <= "~" and c not in "\"\\" for c in v)
+    if isinstance(v, dict):
+        return all(_plain_strings(k) and _plain_strings(x) for k, x in v.items())
+    if isinstance(v, list):
+        return all(_plain_strings(x) for x in v)
+    return True
+
+
+def check_manifest(data, signed=True):
+    """Parse + validate manifest bytes (format 1). Returns the dict. Raises SigError('format', …)."""
+    def bad(msg):
+        raise SigError("format", "manifest: " + msg)
+    if len(data) > MANIFEST_MAX:
+        bad(f"larger than {MANIFEST_MAX} bytes")
+    try:
+        m = _strict_json(data)
+    except (ValueError, UnicodeDecodeError) as e:
+        bad(f"not strict JSON ({e})")
+    if not isinstance(m, dict) or not _plain_strings(m):
+        bad("not an object of plain ASCII strings")
+    if manifest_bytes(m) != data:
+        bad("not in canonical form")
+    isint = lambda v: isinstance(v, int) and not isinstance(v, bool)
+    if m.get("format") != 1:
+        bad(f"unsupported format {m.get('format')!r}")
+    if m.get("product") != "merakiplus" or m.get("channel") != "stable":
+        bad("wrong product/channel")
+    ver = m.get("version")
+    if not isinstance(ver, str) or not _VER.match(ver) or m.get("tag") != "v" + ver:
+        bad("bad version/tag")
+    if signed and not (isint(m.get("seq")) and 1 <= m["seq"] <= SEQ_MAX):
+        bad("seq missing or out of range")
+    if not signed and "seq" in m:
+        bad("an unsigned manifest carries no seq")
+    if not (isinstance(m.get("commit"), str) and re.fullmatch(r"[0-9a-f]{40}", m["commit"])):
+        bad("bad commit")
+    if not (isinstance(m.get("released"), str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", m["released"])):
+        bad("bad released date")
+    if m.get("base_url") != RELEASE_DL.format(tag=m["tag"], name=""):
+        bad("base_url does not pin this repository's tag")
+    assets = {}
+    if not isinstance(m.get("assets"), list) or not m["assets"]:
+        bad("no assets")
+    for e in m["assets"]:
+        if not (isinstance(e, dict) and isinstance(e.get("name"), str) and _SAFE.match(e["name"])
+                and not e["name"].startswith("manifest") and isint(e.get("size")) and 0 <= e["size"] <= SEQ_MAX
+                and isinstance(e.get("sha256"), str) and _HEX64.match(e["sha256"]) and e["name"] not in assets):
+            bad(f"bad asset entry {e!r}")
+        assets[e["name"]] = e
+    for sect in ("release", "platform"):
+        names = set()
+        if not isinstance(m.get(sect), list) or not m[sect]:
+            bad(f"no {sect} section")
+        for e in m[sect]:
+            n = e.get("name") if isinstance(e, dict) else None
+            if not (isinstance(n, str) and n not in names and len(n) <= 128
+                    and all(_SAFE.match(c) for c in n.split("/"))):
+                bad(f"bad {sect} entry {e!r}")
+            names.add(n)
+            a = assets.get(e.get("src"))
+            if a is None or a["size"] != e.get("size") or a["sha256"] != e.get("sha256"):
+                bad(f"{sect} entry {n} does not match its asset {e.get('src')!r}")
+            if sect == "release" and e.get("mode") not in ("644", "755"):
+                bad(f"bad mode for {n}")
+    return m
+
+
+def verify_manifest(data, sig_text, keys=None, max_seq=None):
+    """Signature first (Ed25519 by a trusted key), then the format, then anti-downgrade (seq >= max_seq).
+    Returns the manifest dict with '_keyid' added."""
+    keys = TRUSTED_KEYS if keys is None else keys
+    if len(data) > MANIFEST_MAX:
+        raise SigError("format", "manifest too large")
+    keyid, sig = signify_blob(sig_text, 74)
+    if keyid not in keys:
+        raise SigError("signature", f"signed by an unknown key (id {keyid})")
+    if not ed25519_verify(bytes.fromhex(keys[keyid]), data, sig):
+        raise SigError("signature", f"BAD SIGNATURE (key id {keyid}) — manifest was modified or not signed by us")
+    m = check_manifest(data, signed=True)
+    if max_seq is not None and m["seq"] < max_seq:
+        raise SigError("older", f"OLDER VERSION REFUSED: v{m['version']} has seq {m['seq']}, "
+                                f"the display already accepted seq {max_seq}")
+    m["_keyid"] = keyid
+    return m
+
+
+def verify_assets(m, files):
+    """files: asset name -> bytes. Every given file must be listed with the same size + SHA-256."""
+    byname = {e["name"]: e for e in m["assets"]}
+    for n, b in files.items():
+        e = byname.get(n)
+        if e is None:
+            raise SigError("asset", f"{n} is not listed in the signed manifest")
+        if e["size"] != len(b) or e["sha256"] != sha256b(b):
+            raise SigError("asset", f"{n} does not match the signed manifest (sha256 {sha256b(b)[:16]}…, "
+                                    f"signed {e['sha256'][:16]}…)")
+
+
+def fetch_signed_manifest(args, o):
+    """(manifest bytes, sig text) for v<VERSION>: from --bin-dir when it holds them, else the GitHub release.
+    None when the release has no signed manifest (or it cannot be reached)."""
+    if getattr(args, "bin_dir", None) and (pathlib.Path(args.bin_dir) / "manifest.json").is_file():
+        d = pathlib.Path(args.bin_dir)
+        if not (d / "manifest.sig").is_file():
+            raise SigError("signature", f"{d}/manifest.json has no manifest.sig next to it")
+        o.say(f"  signed manifest: {d}/manifest.json")
+        return (d / "manifest.json").read_bytes(), (d / "manifest.sig").read_text(encoding="ascii", errors="replace")
+    got = []
+    for name in ("manifest.json", "manifest.sig"):
+        url = RELEASE_DL.format(tag="v" + VERSION, name=name)
+        try:
+            with urllib.request.urlopen(url, timeout=30) as r:
+                got.append(r.read(MANIFEST_MAX + 1))
+        except Exception as e:
+            o.debug(f"signed manifest: {url}: {e}")
+            return None
+    o.say(f"  signed manifest: {RELEASE_DL.format(tag='v' + VERSION, name='manifest.json')}")
+    return got[0], got[1].decode("ascii", errors="replace")
+
+
+def check_signed_release(args, o, files, max_seq):
+    """Verify the installed files against the release's signed manifest (computer side). Returns the manifest or None
+    (unsigned / unreachable: a warning, or an abort with --require-signed). Never touches the display."""
+    try:
+        got = fetch_signed_manifest(args, o)
+        if got is None:
+            msg = (f"no signed manifest found for v{VERSION} (offline, or the release is not signed yet) — the files "
+                   "were checked against this installer's pinned SHA-256 table only")
+            if args.require_signed:
+                raise Abort(msg.split(" — ")[0] + " and --require-signed was given. Nothing was changed.")
+            o.warn(msg)
+            return None
+        m = verify_manifest(got[0], got[1],
+                            max_seq=None if args.allow_downgrade or max_seq is None else max_seq)
+        if m["version"] != VERSION:
+            raise SigError("format", f"the signed manifest is for v{m['version']}, this installer installs v{VERSION}")
+        verify_assets(m, files)
+    except SigError as e:
+        raise Abort(f"signed release check FAILED ({e.kind}): {e}. Nothing was changed."
+                    + (" Use --allow-downgrade to install an older release on purpose." if e.kind == "older" else ""))
+    o.ok(f"signed manifest v{m['version']} (seq {m['seq']}, key id {m['_keyid']}): signature valid, "
+         f"all {len(files)} files match")
+    if max_seq is not None and m["seq"] < max_seq:
+        o.warn(f"DOWNGRADE on purpose (--allow-downgrade): seq {max_seq} -> {m['seq']}")
+    return m
+
+
+def cmd_verify_release(o, args):
+    """verify-release DIR: a downloaded release (manifest.json + manifest.sig + assets) — no display needed."""
+    d = pathlib.Path(args.dir)
+    try:
+        m = verify_manifest((d / "manifest.json").read_bytes(), (d / "manifest.sig").read_text(encoding="ascii",
+                            errors="replace"), max_seq=args.max_seq)
+    except OSError as e:
+        raise Abort(f"cannot read the manifest: {e}")
+    except SigError as e:
+        raise Abort(f"REJECTED ({e.kind}): {e}")
+    o.ok(f"manifest.sig: valid Ed25519 signature by key id {m['_keyid']}")
+    o.ok(f"manifest: v{m['version']} seq {m['seq']} commit {m['commit'][:12]} released {m['released']}")
+    missing, bad = [], []
+    for e in m["assets"]:
+        p = d / e["name"]
+        if not p.is_file():
+            missing.append(e["name"])
+            continue
+        b = p.read_bytes()
+        if len(b) != e["size"] or sha256b(b) != e["sha256"]:
+            bad.append(e["name"])
+        else:
+            o.ok(f"{e['name']}: {e['size']} bytes, sha256 {e['sha256'][:16]}…")
+    for n in bad:
+        o.warn(f"{n}: DOES NOT MATCH the signed manifest")
+    for n in missing:
+        o.say(f"  [-]  {n}: not in {d}")
+    if bad or (missing and not args.partial):
+        raise Abort(f"{len(bad)} file(s) differ, {len(missing)} missing" +
+                    ("" if bad else " (use --partial when you downloaded only some assets)"))
+    o.say(f"VERIFIED: {len(m['assets']) - len(missing)} file(s) match the signed manifest of v{m['version']}.")
 
 
 # ============================================================ release directories (v6.21, docs/ota-plan.md §5)
@@ -744,6 +1061,8 @@ def print_status(o, st):
         o.say(f"  releases           : current {ota.get('current') or '-'}, previous {ota.get('previous') or '-'}"
               + (f", TRIAL {ota['pending']} (started {ota.get('tries', '0')}x)" if ota.get("pending") else "")
               + f"   [on flash: {', '.join(st['rels']) or 'none'}]")
+        if ota.get("max_seq"):
+            o.say(f"  signed releases    : newest accepted seq {ota['max_seq']} (older ones need --allow-downgrade)")
         if ota.get("last", "").startswith("rolled_back:"):
             r = ota["last"].split(":")
             o.say(f"  last rollback      : {r[1]} ({r[2] if len(r) > 2 else '?'}) — the launcher went back automatically")
@@ -996,6 +1315,10 @@ def cmd_install(dev, o, args):
         check_arm_elf(extra["switcher"], "switcher")
         extra["grab_shim.so"] = get_binary("grab_shim.so", args, o)
         check_arm_elf(extra["grab_shim.so"], "grab_shim.so", shared=True)
+    # OTA phase 2: the release's signed manifest (Ed25519, offline key) must list every file we install
+    max_seq = int(st["ota"]["max_seq"]) if st["ota"].get("max_seq", "").isdigit() else None
+    signed = check_signed_release(args, o, {"merakiplus": merakiplus, "merakiplus_snd": snd, "merakiplus_boot": boot,
+                                            **sounds, **extra}, max_seq)
     rel = rel_name(VERSION, merakiplus)
     rel_exe = f"{REL_DIR}/{rel}/demo_v9"
     files = [("demo_v9", merakiplus), ("merakiplus_snd", snd)] + [("audio/" + n, b) for n, b in sounds.items()]
@@ -1077,6 +1400,8 @@ def cmd_install(dev, o, args):
         new_ota.update(pending=rel, tries="0")                    # a trial: the launcher rolls it back if it never gets healthy
         if new_ota.get("current") == rel:
             new_ota["current"] = ota.get("previous", "")          # (re-trial of a build that is current: keep a real fallback)
+    if signed:                                                    # anti-downgrade record (docs/signing.md)
+        new_ota["max_seq"] = str(signed["seq"] if args.allow_downgrade else max(signed["seq"], max_seq or 0))
     if new_ota != st["ota"]:
         dev.w(f"rm -f {dev.d(OTA_HEALTHY)}")
         write_ota_state(dev, new_ota)
@@ -1471,7 +1796,12 @@ def main(argv=None):
                    help="also install the center-hold gesture switcher (adds ONE line to /customer/demo.sh)")
     p.add_argument("--no-activate", action="store_true", help="install only; do not start Meraki+ now")
     p.add_argument("--ref", default=os.environ.get("MERAKIPLUS_REF", "main"), help="git ref to download bin/ from")
-    p.add_argument("--bin-dir", help="use binaries from this directory (sha256 + md5 checked)")
+    p.add_argument("--bin-dir", help="use binaries from this directory (sha256 + md5 checked; a signed manifest.json + "
+                                     "manifest.sig in it is used instead of downloading them)")
+    p.add_argument("--require-signed", action="store_true",
+                   help="refuse to install unless the release's signed manifest verifies (docs/signing.md)")
+    p.add_argument("--allow-downgrade", action="store_true",
+                   help="allow a signed release older than the newest one this display accepted")
     p.add_argument("--health-seconds", type=int, default=HEALTH_S, help=argparse.SUPPRESS)   # tests
     p.add_argument("--reload-wait", type=int, default=45, help=argparse.SUPPRESS)              # tests
     p = sub.add_parser("revert", help="restore the stock UI and remove Meraki+")
@@ -1481,6 +1811,10 @@ def main(argv=None):
     common(p)
     p = sub.add_parser("scan", help="find displays on the local network")
     p.add_argument("--subnet")
+    p = sub.add_parser("verify-release", help="verify a downloaded release (manifest.json + manifest.sig + assets)")
+    p.add_argument("dir", help="directory with manifest.json, manifest.sig and the downloaded assets")
+    p.add_argument("--max-seq", type=int, help="refuse a release older than this seq (anti-downgrade)")
+    p.add_argument("--partial", action="store_true", help="only some assets were downloaded (missing ones are OK)")
     args = ap.parse_args(argv)
 
     logfile = None
@@ -1492,6 +1826,9 @@ def main(argv=None):
     try:
         if args.cmd == "scan":
             cmd_scan(o, args)
+            return 0
+        if args.cmd == "verify-release":
+            cmd_verify_release(o, args)
             return 0
         ip = resolve_ip(o, args)
         args.ip = ip

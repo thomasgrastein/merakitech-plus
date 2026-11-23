@@ -21,6 +21,11 @@ sys.path.insert(0, str(ROOT / "tools"))
 sys.path.insert(0, str(HERE))
 import merakiplus as mp          # noqa: E402
 import mock_device as md         # noqa: E402
+import sigtest                   # noqa: E402
+
+# hermetic: the installer looks for the release's signed manifest on GitHub; here it finds none unless a test
+# passes a --bin-dir that holds one (signed with a throwaway TEST key, see the "phase 2" scenario)
+mp.RELEASE_DL = "file:///nonexistent-merakiplus-test/{tag}/{name}"
 
 FAILS = []
 HOST_LAUNCHER = ROOT / "build" / "merakiplus_boot_host"
@@ -652,6 +657,86 @@ def no_activate(srv, root):
     check("1b: status shows the trial", f"TRIAL {REL}" in out, out[-600:])
 
 
+def signed_install(srv, root):
+    """OTA phase 2: the installer verifies the release's signed manifest on the computer before touching the display."""
+    import shutil
+    tmp = pathlib.Path(tempfile.mkdtemp(prefix="merakiplus-sig-"))
+    key, other = sigtest.TestKey(tmp, "test"), sigtest.TestKey(tmp, "other")
+    saved = dict(mp.TRUSTED_KEYS)
+    mp.TRUSTED_KEYS.clear()
+    mp.TRUSTED_KEYS.update(key.trusted())
+    try:
+        good = tmp / "good"
+        data, _ = sigtest.signed_release(good, key, seq=5)
+
+        def variant_dir(name, mdata=None, sigt=None):
+            d = tmp / name
+            shutil.copytree(good, d)
+            if mdata is not None:
+                (d / "manifest.json").write_bytes(mdata)
+            if sigt is not None:
+                (d / "manifest.sig").write_text(sigt)
+            return d
+
+        before = tree_digest(root)
+        rc, out = run(srv, root, "install", "--require-signed")
+        check("2: --require-signed without a signed manifest: refused, display untouched",
+              rc == 1 and "--require-signed" in out and tree_digest(root) == before, out[-400:])
+        bad = variant_dir("tampered", data.replace(b'"seq": 5', b'"seq": 6'))
+        rc, out = run(srv, root, "install", "--bin-dir", str(bad))
+        check("2: tampered manifest (old signature): refused, display untouched",
+              rc == 1 and "BAD SIGNATURE" in out and tree_digest(root) == before, out[-400:])
+        wk = variant_dir("wrongkey", sigt=other.sign(data))
+        rc, out = run(srv, root, "install", "--bin-dir", str(wk))
+        check("2: manifest signed by an untrusted key: refused, display untouched",
+              rc == 1 and "unknown key" in out and tree_digest(root) == before, out[-400:])
+        nosig = variant_dir("nosig")
+        (nosig / "manifest.sig").unlink()
+        rc, out = run(srv, root, "install", "--bin-dir", str(nosig))
+        check("2: manifest without manifest.sig: refused", rc == 1 and "no manifest.sig" in out
+              and tree_digest(root) == before, out[-400:])
+        mis = tmp / "mismatch"                                   # validly signed, but lists another sound helper
+        sigtest.make_dist(mis, tweak=lambda d: (d / "merakiplus_snd").write_bytes(b"\x7fELF other"))
+        mdata = sigtest.sr.build_manifest(mis, mp.VERSION, "0" * 40, "2026-11-23",
+                                          [p.name for p in mis.iterdir()], 5)
+        shutil.copy(ROOT / "bin" / "merakiplus_snd", mis / "merakiplus_snd")
+        (mis / "manifest.json").write_bytes(mdata)
+        (mis / "manifest.sig").write_text(key.sign(mdata))
+        rc, out = run(srv, root, "install", "--bin-dir", str(mis))
+        check("2: a file that differs from the signed manifest: refused, display untouched",
+              rc == 1 and "merakiplus_snd does not match the signed manifest" in out and tree_digest(root) == before,
+              out[-400:])
+
+        rc, out = run(srv, root, "install", "--bin-dir", str(good), "--require-signed")
+        check("2: signed release: verified on the computer, installed, max_seq recorded on the display",
+              rc == 0 and "signature valid, all" in out and ota(root).get("max_seq") == "5"
+              and [e for _, e in ui(root)] == [REL_EXE], (out[-600:], ota(root)))
+        rc, out = run(srv, root, "status")
+        check("2: status shows the newest accepted seq", "newest accepted seq 5" in out, out[-500:])
+        rc, out = run(srv, root, "install", "--bin-dir", str(good))
+        check("2: re-install of the same signed release (seq == max_seq) is fine", rc == 0 and ota(root).get("max_seq") == "5")
+
+        old = tmp / "old"
+        sigtest.signed_release(old, key, seq=3)
+        before = tree_digest(root)
+        rc, out = run(srv, root, "install", "--bin-dir", str(old))
+        check("2: older signed release (seq 3 < 5): OLDER VERSION REFUSED, display untouched",
+              rc == 1 and "OLDER VERSION REFUSED" in out and "--allow-downgrade" in out and tree_digest(root) == before,
+              out[-400:])
+        rc, out = run(srv, root, "install", "--bin-dir", str(old), "--allow-downgrade")
+        check("2: --allow-downgrade installs it on purpose and resets max_seq",
+              rc == 0 and "DOWNGRADE on purpose" in out and ota(root).get("max_seq") == "3", (out[-400:], ota(root)))
+        rc, out = run(srv, root, "install")
+        check("2: unsigned install (no manifest reachable): warning, installed, max_seq kept",
+              rc == 0 and "no signed manifest found" in out and ota(root).get("max_seq") == "3", out[-400:])
+        rc, out = run(srv, root, "revert")
+        check("2: revert removes the OTA state (incl. max_seq)", rc == 0 and not ota(root))
+    finally:
+        mp.TRUSTED_KEYS.clear()
+        mp.TRUSTED_KEYS.update(saved)
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 if __name__ == "__main__":
     scenario("fresh machine running stock from slot A", "stock_a", stock_a)
     scenario("machine running a vendor update from slot B", "vendor_b", vendor_b)
@@ -669,5 +754,6 @@ if __name__ == "__main__":
     scenario("1b: migration of a v6.20 install (--persist --gesture) + installer power-cut replay + revert", "stock_a", migrate_v620)
     scenario("1b: update by exec-reload, deferral while busy, older releases collected", "stock_a", update_reload)
     scenario("1b: --no-activate leaves a trial for the next start", "stock_a", no_activate)
+    scenario("2: signed release manifest (verify, tamper, wrong key, downgrade, --require-signed)", "stock_a", signed_install)
     print(f"\nINSTALLER TESTS: {'ALL PASS' if not FAILS else str(len(FAILS)) + ' FAIL: ' + ', '.join(FAILS)}")
     sys.exit(1 if FAILS else 0)

@@ -35,6 +35,9 @@ say "host: merakiplus_boot_host (the launcher, for tests/test_launcher.py and th
 zig cc -O2 $WERR -o build/merakiplus_boot_host src/merakiplus_boot.c
 say "host: merakiplus_snd_selftest (sound helper against a mock MI_AO) + audio/ check"
 zig cc -DSND_SELFTEST -O2 $WERR -o build/merakiplus_snd_selftest src/merakiplus_snd.c
+say "host: merakiplus_upd_host (signed release manifest verifier, docs/signing.md; crypto = Zig std via merakiplus_crypto.zig)"
+zig build-obj src/merakiplus_crypto.zig -O ReleaseSmall -fsingle-threaded -femit-bin=build/merakiplus_crypto_host.o
+zig cc -O2 $WERR -o build/merakiplus_upd_host src/merakiplus_upd.c build/merakiplus_crypto_host.o
 
 if [ "$MODE" != host ]; then
   say "device (ARMv7 static): merakiplus, merakiplus_sim_arm"
@@ -42,6 +45,10 @@ if [ "$MODE" != host ]; then
   zig cc $ARM -DMERAKIPLUS_SIM -o build/merakiplus_sim_arm src/merakiplus.c
   say "device (ARMv7 static): merakiplus_boot (the launcher, installed as /new_customer/demo_v9)"
   zig cc $ARM $WERR -o build/merakiplus_boot src/merakiplus_boot.c
+  say "device (ARMv7 static): merakiplus_upd (manifest verifier; built + tested, not shipped yet — docs/signing.md)"
+  zig build-obj src/merakiplus_crypto.zig -target arm-linux-musleabihf -mcpu cortex_a7 -O ReleaseSmall -fstrip -fsingle-threaded \
+    -femit-bin=build/merakiplus_crypto_arm.o
+  zig cc $ARM $WERR -o build/merakiplus_upd src/merakiplus_upd.c build/merakiplus_crypto_arm.o
   say "device (ARMv7 static): switcher, tinj_hold, keyinj, tinj, fbpage, evprobe"
   zig cc $ARM $WERR -o build/switcher boot/switcher.c
   say "device (ARMv7, glibc 2.28 like the display, dynamic): merakiplus_snd (dlopens the display's libmi_sys.so + libmi_ao.so)"
@@ -77,10 +84,12 @@ print("   grab_shim.so: no DT_NEEDED, no undefined symbols")
 PY
 fi
 
-say "self-tests (switcher gesture/mode logic, grab shim, sound helper, launcher)"
+say "self-tests (switcher gesture/mode logic, grab shim, sound helper, launcher, manifest verifier)"
 rm -rf build/boot_selftest
 ./build/merakiplus_boot_host --selftest build/boot_selftest > build/merakiplus_boot_selftest.log 2>&1 || { cat build/merakiplus_boot_selftest.log; echo "build.sh: launcher selftest FAILED" >&2; exit 1; }
 printf '   merakiplus_boot_host: %s\n' "$(tail -n 1 build/merakiplus_boot_selftest.log)"
+./build/merakiplus_upd_host --selftest > build/merakiplus_upd_selftest.log 2>&1 || { cat build/merakiplus_upd_selftest.log; echo "build.sh: manifest verifier selftest FAILED" >&2; exit 1; }
+printf '   merakiplus_upd_host: %s\n' "$(tail -n 1 build/merakiplus_upd_selftest.log)"
 for t in switcher_selftest grab_shim_selftest merakiplus_snd_selftest; do
   a=; [ "$t" = merakiplus_snd_selftest ] && a=audio
   ./build/$t $a > build/$t.log 2>&1 || { cat build/$t.log; echo "build.sh: $t FAILED" >&2; exit 1; }

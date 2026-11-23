@@ -29,6 +29,13 @@ firmware, which Meraki+ uses but did not create and cannot fix; please report th
 manufacturer. Until fixed, isolate the machine on its own network/VLAN and block inbound access (see
 the README section *Security and OTA*).
 
+## Release signatures
+
+From v6.23, releases carry `manifest.json` + `manifest.sig` (Ed25519, signed offline by the maintainer; CI cannot
+sign). The public key is [`keys/merakiplus-release.pub`](keys/merakiplus-release.pub) (key id `26f673cde8584ba0`).
+A release asset that does not match its signed manifest, or a signature by any other key, is not ours — please
+report it. Key custody, rotation and the threat model: [docs/signing.md](docs/signing.md).
+
 ## Supported versions
 
 Only the [latest release](https://github.com/thomasgrastein/merakitech-plus/releases/latest) receives

@@ -3,6 +3,22 @@
 All notable changes to Meraki+. Details (with evidence, frames and test figures) are in
 [docs/dev/UI_v6.md](docs/dev/UI_v6.md) under *CHANGES-v6.x*. All dates are 2026.
 
+## Unreleased — signed releases (OTA phase 2, tooling only)
+No device binary changed. Details: [docs/signing.md](docs/signing.md), [docs/ota-plan.md](docs/ota-plan.md#phase-2--implemented-2026-11-23).
+### Added
+- **Signed release manifests.** `manifest.json` (every asset with size + SHA-256, a monotonic `seq`, tag and commit)
+  + `manifest.sig` (Ed25519, signify format), signed **offline** by the maintainer with `tools/sign_release.py` after
+  a byte-for-byte rebuild of the tag with the official zig. CI cannot sign; it publishes `manifest.unsigned.json` for
+  comparison and refuses to replace assets under an existing signed manifest. **v6.23 is signed** (seq 1; the two
+  files were added to the published release).
+- **Installer:** verifies the release's signed manifest on the computer before any change on the display, records the
+  newest accepted `seq` on the display and refuses older signed releases (`--allow-downgrade`); `--require-signed`;
+  `merakiplus.py verify-release DIR` for downloads; `--bin-dir` also takes the WAVs and a signed manifest.
+- **Device verifier** `merakiplus_upd` (C + Zig standard library crypto), built and tested on the host and as a static
+  ARMv7 binary in an arm32v7 container — not shipped yet (phase 3).
+- Tests: `tests/test_upd.py` (118 checks), installer scenario *2: signed release manifest*, hygiene check that the
+  pinned keys agree and that no private key is in the tree.
+
 ## [6.23] — 2026-11-23
 **Auto off: 30 minutes by default, like the stock UI.** Until now Meraki+'s AUTO OFF was *off* unless you turned it
 on, so a machine left alone stayed on and hot; the stock UI always switches off after 30 minutes without use. The

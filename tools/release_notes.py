@@ -60,6 +60,9 @@ git clone https://github.com/{REPO}.git && cd merakitech-plus
 
 ### Assets
 Our own builds only (zig 0.17.1; provenance in [`bin/README.md`](https://github.com/{REPO}/blob/main/bin/README.md)). `{args.device_name}` is the device binary (static ARMv7, musl); `merakiplus_snd` (from 6.18) is the sound helper (ARMv7, loads the display's own audio libraries at run time; the sounds themselves are in `audio/`); `switcher` + `grab_shim.so` are the optional gesture switcher (`--gesture`); `start.wav`, `ready_extract.wav`, `ready_steam.wav` are our own sounds; the `*_sim*` files are simulator builds for running `sim/` without a device. Checksums: `SHA256SUMS` (from 6.20) and `MD5SUMS`; the installer checks every file against its own pinned SHA-256 and md5 tables. Releases are maintained automatically by CI (`.github/workflows/release.yml`), which verifies the committed `bin/` against fresh builds before publishing.
+
+### Signature
+`manifest.json` + `manifest.sig` (from 6.23) list every asset with size and SHA-256 and carry an **Ed25519 signature made offline by the maintainer** after a byte-for-byte local rebuild — CI cannot sign. They are added after publication; until then the release is unsigned. `manifest.unsigned.json` is CI's unsigned copy, for comparison only. Check a download with `python3 tools/merakiplus.py verify-release <dir>`; `install.sh` checks it automatically. Key and process: [`docs/signing.md`](https://github.com/{REPO}/blob/main/docs/signing.md).
 """
     print(body + "\n" + footer)
 

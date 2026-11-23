@@ -21,6 +21,9 @@ name: Release
 # release asset (UI, sound helper, launcher (1b), switcher, grab_shim.so, the three WAVs), listed in both
 # MD5SUMS (kept for older scripts) and SHA256SUMS; tests/hygiene.py checks that the
 # installer's pinned tables (BIN_MD5/BIN_SHA256/AUDIO_MD5/AUDIO_SHA256) match the files.
+# OTA phase 2 (docs/signing.md): CI also publishes manifest.unsigned.json but can NEVER sign. The maintainer signs
+# offline with tools/sign_release.py (rebuild + byte compare first) and uploads manifest.json + manifest.sig. A re-run
+# for an already signed release refuses to replace assets that no longer match the signed manifest.
 #
 # Auth: GITHUB_TOKEN only (contents: write below). No other credentials anywhere.
 
@@ -152,6 +155,8 @@ jobs:
         run: python3 boot/test_switcher.py
       - name: Launcher (vendor-watchdog model + power-cut replay)
         run: python3 tests/test_launcher.py
+      - name: Signed release manifests (both verifiers, signing tool, workflow manifest step)
+        run: python3 tests/test_upd.py
       - name: Installer / revert against the mock display
         run: python3 tests/test_installer.py
       - name: Assemble release assets + notes (committed bin/, drift-checked above)
@@ -162,8 +167,26 @@ jobs:
           files="merakiplus merakiplus_snd merakiplus_boot switcher grab_shim.so start.wav ready_extract.wav ready_steam.wav merakiplus_sim_arm merakiplus_sim-linux-x86_64 merakiplus_sim-macos-arm64"
           cp bin/merakiplus bin/merakiplus_snd bin/merakiplus_boot bin/switcher bin/grab_shim.so audio/*.wav bin/merakiplus_sim_arm bin/merakiplus_sim-linux-x86_64 bin/merakiplus_sim-macos-arm64 dist/
           (cd dist && md5sum $files > MD5SUMS && sha256sum $files > SHA256SUMS)
+          # OTA phase 2 (docs/signing.md): an UNSIGNED manifest for comparison. CI has no signing key; the maintainer
+          # signs offline (tools/sign_release.py sign) and uploads manifest.json + manifest.sig afterwards.
+          COMMIT="$GITHUB_SHA"
+          RELEASED="$(TZ=UTC git log -1 --format=%cd --date=format-local:%Y-%m-%d)"
+          python3 tools/sign_release.py manifest --dir dist --version "$VERSION" --commit "$COMMIT" --released "$RELEASED" --assets $files MD5SUMS SHA256SUMS --out dist/manifest.unsigned.json
           python3 tools/release_notes.py "$VERSION" > dist/notes.md
           cat dist/MD5SUMS dist/SHA256SUMS
+      - name: Signed-release guard (never replace assets under an existing signed manifest)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.check.outputs.tag }}
+        run: |
+          if gh release view "$TAG" --json assets --jq '.assets[].name' 2>/dev/null | grep -qx manifest.json; then
+            gh release download "$TAG" -p manifest.json -p manifest.sig -D dist
+            python3 tools/merakiplus.py verify-release dist
+            rm -f dist/manifest.json dist/manifest.sig
+            echo "== $TAG is signed and the rebuilt assets match its signed manifest"
+          else
+            echo "== $TAG has no signed manifest (yet)"
+          fi
       - name: Upload release assets
         uses: actions/upload-artifact@v4
         with:
@@ -203,7 +226,7 @@ jobs:
           set -eu
           title="Meraki+ ${TAG}"
           if [ "$PRERELEASE" = "true" ]; then flag="--prerelease"; else flag="--latest"; fi
-          assets="dist/merakiplus dist/merakiplus_snd dist/merakiplus_boot dist/switcher dist/grab_shim.so dist/start.wav dist/ready_extract.wav dist/ready_steam.wav dist/merakiplus_sim_arm dist/merakiplus_sim-linux-x86_64 dist/merakiplus_sim-macos-arm64 dist/MD5SUMS dist/SHA256SUMS"
+          assets="dist/merakiplus dist/merakiplus_snd dist/merakiplus_boot dist/switcher dist/grab_shim.so dist/start.wav dist/ready_extract.wav dist/ready_steam.wav dist/merakiplus_sim_arm dist/merakiplus_sim-linux-x86_64 dist/merakiplus_sim-macos-arm64 dist/MD5SUMS dist/SHA256SUMS dist/manifest.unsigned.json"
           if gh release view "$TAG" --json tagName >/dev/null 2>&1; then
             echo "== release $TAG exists -> edit notes + replace assets (no duplicate)"
             gh release edit "$TAG" --title "$title" --notes-file dist/notes.md "$flag"

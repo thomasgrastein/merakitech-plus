@@ -199,5 +199,27 @@ for p in files:
         if m:
             fail(f"{rel}:{i}: looks like quoted ARM disassembly ({m.group(0)!r}) — describe it in prose/pseudocode")
 
+# 8. signing keys (docs/signing.md): the same public keys in keys/*.pub, tools/merakiplus.py TRUSTED_KEYS and
+#    src/merakiplus_upd_keys.h; never a private key anywhere in the tree
+sys.path.insert(0, str(ROOT / "tools"))
+import merakiplus as _mp  # noqa: E402
+_pubs = {}
+for p in sorted((ROOT / "keys").glob("*.pub")):
+    try:
+        kid, pk = _mp.signify_blob(p.read_text(encoding="ascii"), 42)
+        if hashlib.sha256(pk).digest()[:8].hex() != kid:
+            fail(f"{p.name}: key id is not SHA-256(public key)[:8]")
+        _pubs[kid] = pk.hex()
+    except Exception as e:  # noqa: BLE001
+        fail(f"keys/{p.name}: not a signify Ed25519 public key ({e})")
+_hdr = dict(re.findall(r'\{"([0-9a-f]{16})", "([0-9a-f]{64})"\}', (ROOT / "src/merakiplus_upd_keys.h").read_text()))
+if not _pubs or _pubs != _mp.TRUSTED_KEYS or _hdr != _mp.TRUSTED_KEYS:
+    fail(f"signing keys differ: keys/ {sorted(_pubs)}, TRUSTED_KEYS {sorted(_mp.TRUSTED_KEYS)}, "
+         f"src/merakiplus_upd_keys.h {sorted(_hdr)}")
+for p in files:
+    if p.suffix not in (".png", ".gz", ".wav") and not p.relative_to(ROOT).as_posix().startswith("bin/") and \
+            re.search(rb"-----BEGIN[ ][A-Z ]*PRIVATE[ ]KEY-----|untrusted[ ]comment:[^\n]*secret[ ]key", p.read_bytes()):
+        fail(f"{p.relative_to(ROOT)}: contains a private key")
+
 print("HYGIENE: " + ("OK" if not fails else f"{len(fails)} problem(s)"))
 sys.exit(1 if fails else 0)
