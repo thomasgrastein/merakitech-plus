@@ -206,7 +206,7 @@ WATER SHORTCUT, CLEANING REMINDER, AUTO TIME, PAUSE TIME → **SYSTEM › STOCK 
 | **PRE-HEAT** (v6.16) | *(none — `/new_customer/merakiplus/schedule`)* | 0..1 | OFF / ON | — | merakiplus's own; the alarm goes out as the stock cmd8 alarm ([time-scheduling.md](../time-scheduling.md)) |
 | **PRE-HEAT AT** (v6.16) | *(same file)* | 00:00..23:55, step 5 min | per TIME FORMAT | — | merakiplus's own |
 | **REPEAT** (v6.16) | *(same file)* | 0..3 | ONCE / EVERY DAY / MON-FRI / SAT-SUN | — | merakiplus's own (stock: Never / Everyday / Workday / Weekend) |
-| **AUTO OFF** (v6.16) | *(same file)* | 0..4 | OFF / 15 / 20 / 30 / 60 MIN | — | merakiplus's own (stock: fixed 30 min; `sleepModeSetting`'s table is 15/20/30/60) |
+| **AUTO OFF** (v6.16) | *(same file)* | 0..4 | OFF / 15 / 20 / 30 / 60 MIN (default 30 MIN since v6.23) | — | merakiplus's own (stock: fixed 30 min; `sleepModeSetting`'s table is 15/20/30/60) |
 
 ### 4.4 What is still estimated or locked
 | Row | What is uncertain | How the UI shows it | Why it is justifiable |
@@ -2257,7 +2257,7 @@ In addition: the RX counters are `uint32_t` (wrap around in a well-defined way),
 1. **TIME FORMAT fixed:** stock `update_time` 0xD5944 XORs `model[0x59]` (= `timemode != 0`) with 1 before the test (0xD5970) — `timemode = 1` is **24 h**, `0` is 12 h with A.M./P.M.; the stock switch "24-Hour Format" is ON for 1. v6.1 missed the `eor`; `OPT_TIME` is now `{12-HOUR, 24-HOUR}`, so SAVE writes what stock expects (config path unchanged).
 2. **Clock:** HOME's top line (`W_CLOCK`, replaces the wordmark while the clock is valid) and DIAGNOSE → TIME · SCHEDULE. Local time = SoC UTC + stock zone table 0x1A5890 (136 entries, copied) + 1 h when `sumtime` and the region's DST window (EU / US / Levant / AU / NZ rules; stock's window is date-only and only exists after its HTTP sync). Format byte-identical to `update_time`. A clock before 2025 = not set: wordmark, NOT SET, no alarm. merakiplus never sets the clock. TIME ZONE (locked) shows the stock label and the place names.
 3. **Planned pre-heat:** SYSTEM rows PRE-HEAT, PRE-HEAT AT (5-min steps), REPEAT (once / every day / Mon–Fri / Sat–Sun) in merakiplus's own file `/new_customer/merakiplus/schedule`. **Power-off** sends the next occurrence as the cmd8 alarm exactly like stock `performSleepActions` 0x148324 → `powerOffSend(day, hour, minute)`; no schedule → 0/0/0 (v6.14). **Pre-arm** (documented addition): while ON the same frame is sent when the alarm differs from what the current MCU session holds (start, MCU restart / wake, schedule change, daily roll-over); disarm = 0/0/0 once; never while turning off / off; no schedule = no new traffic. A one-shot switches itself off a minute after its time. HOME's swipe hint shows `⏰ PRE-HEAT · THU 06:30` while planned.
-4. **Auto off (optional, default off):** 15 / 20 / 30 / 60 min without touch, button or an active phase → the same power-off as the button (with the alarm); a 30-s warning toast (a touch dismisses it). Stock: a fixed 30 min (`SleepRefresh` 0x149268); `sleepMode`/`sleepModeSetting` are never read by stock and are not written by merakiplus.
+4. **Auto off (optional, default off — v6.23: default 30 min, see CHANGES-v6.23):** 15 / 20 / 30 / 60 min without touch, button or an active phase → the same power-off as the button (with the alarm); a 30-s warning toast (a touch dismisses it). Stock: a fixed 30 min (`SleepRefresh` 0x149268); `sleepMode`/`sleepModeSetting` are never read by stock and are not written by merakiplus.
 5. **cmd8 time = stock local time** (v6.14 sent the SoC's UTC).
 6. **SIM:** state JSON `clock` + `sched`; env `MERAKIPLUS_SIM_CLOCK`, `MERAKIPLUS_SCHEDFILE`; ctrl `clock`; `save` accepts `preheat`, `preheat_at`, `preheat_repeat`, `auto_off`. `run_e2e.py` (additive): scenario keys `ui_env` / `ui_only`, expect kind `state`, `time_sync_seen` with `alarm` / `max_count` / `count: 0`. `mcu_sim.py`: a CPU reset clears the cmd8 alarm (MCU RAM).
 7. **Verification (local dev iteration, §15):**
@@ -2500,6 +2500,26 @@ the UI rules in [ui-guide.md §21](../ui-guide.md#21-hot-water-dosing-gate--manu
 6. **Self-test** section *v6.22 water dosing gate* (13 checks); `frame_trig_audit` knows word 19. **Previews** 106–112.
    **SIM:** state `water`, scenarios `dosing_*` (sim/CONTRACT.md addendum v6.22).
 7. **Verification:** UI self-test **582 / 0** EN and DA (also 32-bit ARMv7); `sim/selftest.py` 204/0; full E2E **51/51 EN** and **51/51 DA** (`dosing_version_detect` 28, `dosing_gated_old_mcu` 44, `dosing_scale_fault` 34 checks), quick E2E 5/5; installer suite 140/140, launcher tests (96 power-cut states), switcher 55/0, hygiene + bin/ drift OK (official zig 0.17.1). Not yet on a machine.
+
+## CHANGES-v6.23
+
+**Auto off 30 min by default, like stock** ([time-scheduling.md §5.1](../time-scheduling.md#51-default-and-migration-v623),
+[safety.md §3](../safety.md#3-where-meraki-differs-from-the-stock-ui)). Maintainer decision after the legal/safety review.
+
+1. **Default:** `AO_DEF` = index 3 (30 min). `sch` starts with it, `sched_load()` resets to it, `SET[S_AUTOOFF].def` = 3,
+   and `sched_step()` falls back to it for an out-of-range row value.
+2. **Parsing (`sched_load`):** `autooff=` must be exactly `0|15|20|30|60` (`strtol` + end check); anything else — empty,
+   `off`, `45`, `0x` — leaves the default. `autooff=0` stays an explicit OFF. `sched_save()` is unchanged and always writes
+   the key, so the first save of any SCHEDULE row materialises the shown value.
+3. **Migration:** no file → 30; v6.16–v6.22 files always carry the key → their value is kept (an `autooff=0` written as a
+   side effect of saving another row cannot be told apart from a deliberate OFF → kept OFF, documented). The reference
+   machine's file (`autooff=15`) is one of the self-test cases. The installer does not touch the file.
+4. **Self-test** (section *v6.16 time & scheduling*): 13-case migration matrix, SYSTEM row 30 MIN with no file, explicit
+   OFF survives a save of another row, default written as `autooff=30`, explicit OFF stays on for 61 min idle, default
+   powers off at 30:00 (warning 29:30); the "bad values" check now expects 30. **SIM:** `schedule_prewarm` asserts
+   `sched.auto_off = 30` / `sched.file = default` before the first save and `30` / `file` after it (mode `all`).
+5. **Unchanged:** frames, frame policy, `config.json`, the power-off sequence, strings (OPT_AUTOOFF already has 30 MIN).
+6. **Verification:** UI self-test **588 / 0** EN and DA (also 32-bit ARMv7); mutants: default back to off → 4 checks fail, the old `atoi` parsing → the matrix fails. `schedule_prewarm` 41/41 (39/41 vs the v6.22 SIM); full E2E **51/51 EN** and **51/51 DA**, quick 5/5; `sim/selftest.py` 204/0; installer 140/140, launcher (96 power-cut states), switcher 55/0; hygiene + bin/ drift OK (official zig 0.17.1). Not yet on a machine.
 
 ## Appendix A — string table (id / EN / DA)
 
@@ -2890,8 +2910,8 @@ the UI rules in [ui-guide.md §21](../ui-guide.md#21-hot-water-dosing-gate--manu
 | `TX_DV_YES` | diag-value | `YES` | `JA` |
 | `TX_DV_NO` | diag-value | `NO` | `NEJ` |
 | `TX_DV_MAINS` | - | `%u V · %u HZ` | `%u V · %u HZ` |
-| `TX_DV_VERSION` | - | `MERAKI+ V6.22` | `MERAKI+ V6.22` |
-| `TX_DV_VERSION_RO` | - | `MERAKI+ V6.22 RO` | `MERAKI+ V6.22 RO` |
+| `TX_DV_VERSION` | - | `MERAKI+ V6.23` | `MERAKI+ V6.23` |
+| `TX_DV_VERSION_RO` | - | `MERAKI+ V6.23 RO` | `MERAKI+ V6.23 RO` |
 
 **Other**
 

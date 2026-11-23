@@ -1,7 +1,7 @@
 # Meraki+ — a community UI for the round display of MerakiTech espresso machines
 
 [![CI](https://github.com/thomasgrastein/merakitech-plus/actions/workflows/ci.yml/badge.svg)](https://github.com/thomasgrastein/merakitech-plus/actions/workflows/ci.yml)
-![version](https://img.shields.io/badge/Meraki%2B-v6.22-c9955c)
+![version](https://img.shields.io/badge/Meraki%2B-v6.23-c9955c)
 ![license](https://img.shields.io/badge/license-MIT-blue)
 ![status](https://img.shields.io/badge/status-unofficial%20%C2%B7%20experimental-red)
 
@@ -143,8 +143,8 @@ available to go back to.
   installation). To go back: *gear → SYSTEM → STOCK UI → SWITCH TO ORIGINAL NOW*.
 - **The power button** is honored — but see the [hardware limitation](#the-power-button-hardware-limitation).
 - **Clock, planned pre-heat and auto off** — the time on HOME (12/24 h as in the stock UI), a daily /
-  weekday / one-time **pre-heat** that wakes the machine through the controller's own alarm, and an
-  optional **auto off** after 15–60 minutes without use. See [Clock and pre-heat](#clock-and-pre-heat).
+  weekday / one-time **pre-heat** that wakes the machine through the controller's own alarm, and
+  **auto off** after 30 minutes without use by default, like stock (15 / 20 / 60 or off selectable). See [Clock and pre-heat](#clock-and-pre-heat).
 - **Sounds: a start jingle and one ready tone per boiler** — you hear when the **brew boiler** is ready and,
   with a different tone, when the **steam boiler** is (the stock UI plays one sound once both are). Meraki+'s own
   short tones, at the stock *volume*; *SYSTEM → DISPLAY · SOUND* turns them off, picks which boiler announces itself,
@@ -272,8 +272,10 @@ requires a clone of the repository.
   Sat–Sun). When the machine is switched off, the next pre-heat is handed to the controller as its wake alarm —
   the same way the stock UI does it — and the controller wakes and heats at that time. HOME shows the next
   pre-heat while it is planned. Meraki+'s schedule is separate from the stock UI's schedules.
-- **Auto off:** *SYSTEM → SCHEDULE → AUTO OFF* (off / 15 / 20 / 30 / 60 min). After that long without a touch or an
-  activity the machine switches off (a warning appears 30 s before; touch the screen to stay on).
+- **Auto off:** *SYSTEM → SCHEDULE → AUTO OFF* (off / 15 / 20 / 30 / 60 min; **30 min by default**, like the stock
+  UI — since v6.23). After that long without a touch or an activity the machine switches off (a warning appears 30 s
+  before; touch the screen to stay on). An install that already had AUTO OFF saved as *off* keeps it off
+  ([details](docs/time-scheduling.md#51-default-and-migration-v623)).
 
 Details: [docs/time-scheduling.md](docs/time-scheduling.md).
 

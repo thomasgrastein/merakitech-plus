@@ -529,3 +529,11 @@ The contract and ADDENDUM v6.4/v6.5/v6.6 (UI work stream) are unchanged. Full do
 * **merakiplus SIM build, state JSON `water`:** `mcu_ver` (the string as reported, upper case, `""` when empty/not polled), `ver_state` (`none | ok | bad | copy`), `ver_dosing` (version > 5.1.2), `dosing` (+ no scale fault), `scale_fault`, `start` (`auto | manual` — what the next start sends), `run_manual` (the running/last water run is MANUAL), `rows` (rows on the WATER page: 2 or 0), `fault_n`, `fault_stops` (word 16 = 0 frames sent on a scale fault), `diag_ver` (DIAGNOSTICS › CONTROLLER › FIRMWARE as drawn), `diag_wd` (`TX_DV_WD_AUTO | TX_DV_WD_MAN | TX_DV_WD_FAULT`). ctrl `action water` sends the manual frame when `start` is `manual`; `water_stop` on a controller not > 5.1.2 sends word 19 = 0 only.
 * **Scenarios** (all `ui_only`): `dosing_version_detect` (18 s, 28 checks: V5.1.4 → dosing, DIAGNOSTICS values, WATER page 2 rows, the unchanged AUTO frame, weight stop, no word 19 write), `dosing_gated_old_mcu` (36 s, 44 checks: V5.1.2 → no rows, HOLD TO START → `sub19 [1]`, runs past the target with no stop, STOP → `sub19 [0]`, no word 16 / sub9 write ever; at runtime empty → manual, copy mismatch → manual, V5.1.4 → 2 rows; config `hotWaterMode` stays 1, no config write), `dosing_scale_fault` (34 s, 34 checks: AUTO dose stopped by a scale fault, manual only + `TX_DV_WD_FAULT`, start refused with `TX_G_ERROR`, dosing again after the fault; MANUAL on V5.1.2 keeps running through a 0x0400 fault, STOP = `sub19 [0]`). All three fail against the v6.21 SIM build.
 * `--quick` is unchanged.
+
+## ADDENDUM v6.23 — auto off default 30 min (state.sched.auto_off)
+
+**Date:** 2026-11-23 · **Applies to:** `sim/scenarios/schedule_prewarm.json` (additive expectations only). The contract above is unchanged.
+
+* **merakiplus SIM build, state JSON `sched`:** `auto_off` is **30** when the sandbox has no schedule file (v6.16–v6.22: 0); `file` is `default` until the first SAVE.
+* **`schedule_prewarm`:** + 4 state checks (mode `all`): `sched.auto_off = 30` and `sched.file = "default"` in [1.0, 1.8] s, `sched.auto_off = 30` and `sched.file = "file"` in [4.5, 6.0] s. They fail against a v6.22 SIM build (39/41).
+* No runner, `mcu_sim.py` or scenario timing change. Scenarios last ≤ 80 s, far below the 30-min auto off, so no other scenario is affected.

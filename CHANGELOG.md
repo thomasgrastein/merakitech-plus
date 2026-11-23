@@ -3,6 +3,34 @@
 All notable changes to Meraki+. Details (with evidence, frames and test figures) are in
 [docs/dev/UI_v6.md](docs/dev/UI_v6.md) under *CHANGES-v6.x*. All dates are 2026.
 
+## [6.23] — 2026-11-23
+**Auto off: 30 minutes by default, like the stock UI.** Until now Meraki+'s AUTO OFF was *off* unless you turned it
+on, so a machine left alone stayed on and hot; the stock UI always switches off after 30 minutes without use. The
+default is now 30 minutes. **An explicit choice is kept:** if your schedule file already says *off* (or 15 / 20 / 60),
+nothing changes. Details: [docs/time-scheduling.md §5.1](docs/time-scheduling.md#51-default-and-migration-v623),
+[docs/safety.md §3](docs/safety.md#3-where-meraki-differs-from-the-stock-ui).
+### Changed
+- **AUTO OFF default = 30 min** (*SYSTEM → SCHEDULE → AUTO OFF*, still selectable: off / 15 / 20 / 30 / 60). The
+  setting is read from Meraki+'s own file `/new_customer/merakiplus/schedule`:
+  - no file, no `autooff=` line, or a value that is not exactly 0 / 15 / 20 / 30 / 60 → **30 min** (an empty or
+    garbled value is no longer read as 0);
+  - `autooff=0` → **off** (an explicit choice), `autooff=15/20/30/60` → unchanged.
+- **Updating from v6.16–v6.22:** never saved a SCHEDULE row → you now get 30 min. Saved any SCHEDULE row → the file
+  already holds your AUTO OFF value and it is kept — **including *off*, even if you never touched AUTO OFF itself**
+  (Meraki+ cannot tell that apart from a deliberate *off*). To get the stock behaviour, set AUTO OFF to *30 MIN*.
+  The installer does not rewrite the file.
+- No UART frame, frame-policy rule or `config.json` handling changed; the power-off sequence is the existing one.
+### Verification
+- UI self-test **588 / 0** EN and DA (6 new checks: the 13-case migration matrix, the SYSTEM row showing 30 MIN with
+  no file, explicit OFF surviving a save of another row, the default written as `autooff=30` on the first save,
+  explicit OFF staying on through 61 min idle, the default powering off at 30:00 with the warning at 29:30). Setting
+  the default back to off fails 4 of them; going back to the old lenient parsing fails the migration matrix.
+  The 588 / 0 also holds as a 32-bit ARMv7 binary (EN + DA). `schedule_prewarm` asserts `sched.auto_off = 30` before
+  and after the first save (41/41; 39/41 against the v6.22 SIM). Full E2E **51/51 EN** and **51/51 DA**, quick E2E 5/5,
+  `sim/selftest.py` 204/0, installer suite 140/140, launcher tests (96 power-cut states), switcher 55/0, hygiene +
+  bin/ drift OK (official zig 0.17.1). Details: [docs/dev/UI_v6.md CHANGES-v6.23](docs/dev/UI_v6.md#changes-v623).
+- **Not yet on a machine.**
+
 ## [6.22] — 2026-11-22
 **Hot water: the controller-version gate + manual hot water.** Hot water *by weight* (AUTO: the controller stops at
 the set weight) exists only on controllers with firmware **> 5.1.2**. Meraki+ now reads the controller's firmware

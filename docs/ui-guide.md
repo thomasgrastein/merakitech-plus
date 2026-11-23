@@ -145,7 +145,7 @@ WATER SHORTCUT, CLEANING REMINDER, AUTO TIME, PAUSE TIME → **SYSTEM › STOCK 
 | AUTO TIME | `Automatically` | 0..1 | OFF / ON | 3 | **PROVEN** |
 | TIME ZONE | `timeZone` | — | `UTC+01:00` + place names (v6.16) | 3 | **LOCKED** (set in the stock UI) |
 | PRE-HEAT · PRE-HEAT AT · REPEAT (v6.16) | *(none — `/new_customer/merakiplus/schedule`)* | off/on · 00:00–23:55 · once / every day / Mon–Fri / Sat–Sun | the next occurrence is sent as the controller's wake alarm | — | Meraki+'s own ([time-scheduling.md](time-scheduling.md)) |
-| AUTO OFF (v6.16) | *(same file)* | off / 15 / 20 / 30 / 60 min | power-off after that long without touch or activity | — | Meraki+'s own (stock: fixed 30 min) |
+| AUTO OFF (v6.16) | *(same file)* | off / 15 / 20 / 30 / 60 min (default 30 since v6.23) | power-off after that long without touch or activity | — | Meraki+'s own (stock: fixed 30 min); no file / no valid value → 30, explicit `autooff=0` stays off ([time-scheduling.md §5.1](time-scheduling.md#51-default-and-migration-v623)) |
 
 ### 4.4 What is still estimated or locked
 | Row | What is uncertain | How the UI shows it | Why it is justifiable |

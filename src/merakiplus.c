@@ -2,6 +2,11 @@
  * 480x480 screen, v6.16: feature parity (settings + activity control), its own visual
  * design system, boot-slot integration, product name + two languages — and from v6.4 a SIM build.
  *
+ * v6.23 = v6.22 + AUTO OFF 30 MIN BY DEFAULT, like stock (docs/time-scheduling.md §5.1, docs/safety.md §3). The schedule file's
+ *  autooff key now means: absent / no file / not one of 0|15|20|30|60 -> 30 min (was OFF); any valid value -> exactly that value,
+ *  so an explicit autooff=0 stays OFF and 15/20/60 stay as they are. Files written by v6.16..v6.22 always carry the key, so an
+ *  existing install keeps its auto off setting unchanged; only installs that never saved a SCHEDULE row (no file) get 30 min.
+ *  Nothing else changes (frame policy, protocol, config.json untouched).
  * v6.22 = v6.21 + WATER DOSING GATE + MANUAL HOT WATER (docs/water-dosing-compat.md §10-§11). Hot water by weight (AUTO: the controller
  *  stops at word 17) exists only on controllers > 5.1.2. The controller's firmware string (words 80..87, copy 88..95 — already in the
  *  sub56 len56 poll) is parsed with the stock rule (mcu_has_hot_water_weight_ui 0x10885C: > 5.1.2); empty / not polled / garbage / copy
@@ -36,8 +41,8 @@
  *  HOME's top line now shows the local time (SoC UTC + stock zone table 0x1A5890 + DST when sumtime is on), DIAGNOSE a TIME · SCHEDULE
  *  block; (3) no planned pre-heat — a schedule (on/off, hh:mm, once / every day / Mon-Fri / Sat-Sun) whose next occurrence goes out as
  *  the cmd8 alarm with the power-off frame exactly as stock (performSleepActions 0x148324 -> powerOffSend 0x14700C(day, hour, minute))
- *  and is pre-armed while on; the MCU's sleep task wakes on it (reset -> heating; the display cold-boots -> boot push). Plus optional
- *  AUTO OFF after 15/20/30/60 min without touch or activity (stock: fixed 30 min, SleepRefresh 0x149268). Schedule + auto off live in
+ *  and is pre-armed while on; the MCU's sleep task wakes on it (reset -> heating; the display cold-boots -> boot push). Plus
+ *  AUTO OFF after 15/20/30/60 min or off (v6.23: 30 min unless the user chose otherwise) without touch or activity (stock: fixed 30 min, SleepRefresh 0x149268). Schedule + auto off live in
  *  merakiplus's own file /new_customer/merakiplus/schedule; config.json gets only timemode/sumtime as before. The cmd8 date/time is now stock's
  *  local time (v6.14 sent the SoC's UTC).
  * v6.15 = v6.14 + the HOME graph RESETS WHEN AN ACTIVITY STARTS (UI_v6.md "CHANGES-v6.15" + §14.7). User bug: grind/brew/water start
@@ -318,7 +323,7 @@ static int  sim_net_on=1;
 #define KBD_NAME "k62091"
 #define BL_SYSFS "/sys/class/pwm/pwmchip0/pwm2/duty_cycle"
 #define BL_EN_SYSFS "/sys/class/pwm/pwmchip0/pwm2/enable"   /* v6.14: stock uikit_os_back_light_off/on 0xC2278 = blpwm_set_enable(2,0/1) */
-#define MERAKIPLUS_VERSION "V6.22"
+#define MERAKIPLUS_VERSION "V6.23"
 
 /* ---- v6.10: pressure estimate (UI_v6.md §16) ----
  * Word 51 (SPI2 ADC channel 0xA, REGISTERMAP: pressure OR pump-drive candidate) -> bar with ONE linear anchor:
@@ -2236,7 +2241,7 @@ static Setting SET[NSET]={
  [S_PREHEAT]  ={0,                    TX_SL_PREHEAT,   TX_NONE,  4,0,    0,   1,  1, 0,K_ENUM,OPT_OFFON, M_NONE,SF_OWN,                   0,   1,TX_SN_PREHEAT,0},
  [S_PHAT]     ={0,                    TX_SL_PHAT,      TX_NONE,  4,0,    0,1435,  5, 0,K_NUM, 0,         M_NONE,SF_OWN|SF_HHMM,         390,1435,TX_SN_PHAT,0},
  [S_PHREP]    ={0,                    TX_SL_PHREP,     TX_NONE,  4,0,    0,   3,  1, 0,K_ENUM,OPT_REPEAT,M_NONE,SF_OWN,                   1,   3,TX_SN_PHREP,0},
- [S_AUTOOFF]  ={0,                    TX_SL_AUTOOFF,   TX_NONE,  4,0,    0,   4,  1, 0,K_ENUM,OPT_AUTOOFF,M_NONE,SF_OWN,                  0,   4,TX_SN_AUTOOFF,0},
+ [S_AUTOOFF]  ={0,                    TX_SL_AUTOOFF,   TX_NONE,  4,0,    0,   4,  1, 0,K_ENUM,OPT_AUTOOFF,M_NONE,SF_OWN,                  3,   4,TX_SN_AUTOOFF,0},   /* v6.23: def 3 = 30 min (AO_DEF) */
  /* ---- v6.18: sound — merakiplus's OWN file (/new_customer/merakiplus/sound), not config.json, no MCU word. The volume is the stock
   *      config "volume" (S_VOL, shared with the stock UI, which caps it at 70 like merakiplus) ---- */
  [S_SOUND]    ={0,                    TX_SL_SOUND,     TX_NONE,  4,0,    0,   2,  1, 0,K_ENUM,OPT_SOUND, M_NONE,SF_SND,                   1,   2,TX_SN_SOUND,0},
@@ -2285,7 +2290,7 @@ static int set_oor(const Setting*s){ return s->loaded && !(s->flags&SF_SENSOR) &
  *    the sleep task 0x2F52 compares RTC day/hour/minute with the alarm once per second and, if day+hour+minute != 0 and they match,
  *    resets the CPU (0x326) = wake: word 0 starts as 1 (heating), and on this hardware the display gets power again = cold boot.
  * merakiplus: the clock on HOME + DIAGNOSE (SoC UTC + zone + DST, 12/24 h per timemode), a pre-heat schedule (one entry: on/off, time,
- * once / every day / Mon-Fri / Sat-Sun) and auto off (off / 15 / 20 / 30 / 60 min) in merakiplus's own file; the alarm goes out with
+ * once / every day / Mon-Fri / Sat-Sun) and auto off (off / 15 / 20 / 30 / 60 min; v6.23: 30 min when unset, like stock) in merakiplus's own file; the alarm goes out with
  * the power-off frame exactly as stock (pw_off_begin), and — a documented addition — is PRE-ARMED with the same frame while the
  * machine is on, so a power-off merakiplus does not see (the button's kernel cut, §19) still wakes it. Never while off/turning off. */
 enum { DR_NONE=0, DR_US, DR_EU, DR_LEV, DR_AU, DR_NZ };
@@ -2474,16 +2479,19 @@ static const short WD_TX[7]={TX_WD_SUN,TX_WD_MON,TX_WD_TUE,TX_WD_WED,TX_WD_THU,T
 /* ---- the schedule file: merakiplus's OWN settings (not config.json, not the stock UI's /customer/config.bin) ----
  * Text, one "key=value" per line: preheat=0|1, at=HH:MM, repeat=once|daily|mon-fri|sat-sun, autooff=0|15|20|30|60,
  * once_at=<UTC seconds of the one-shot occurrence, 0 = none>. Unknown lines are ignored, a bad value -> its default.
+ * v6.23: the auto off default is 30 min (AO_DEF, stock's fixed value). "Unset" = no file, no autooff line or a bad value -> 30;
+ * an explicit autooff=0 is the user's choice and stays OFF. sched_save always writes the key, so a saved value never changes.
  * Written atomically like the language file (tmp + fsync + re-read/compare + rename + fsync of the directory). */
 static char sched_path[256]="/new_customer/merakiplus/schedule";
 static const char*const REP_KEY[4]={"once","daily","mon-fri","sat-sun"};
 static const unsigned char REP_MASK[4]={0x00,0x7F,0x3E,0x41};   /* bit k = weekday k (0 = Sunday), stock's Sun..Sat flags; 0 = one-shot */
 static const int AO_MIN[5]={0,15,20,30,60};
+#define AO_DEF 3   /* v6.23: index of 30 min — the default when the file has no (valid) autooff value, like stock's fixed 30 min */
 enum { SCS_DEFAULT=0, SCS_FILE, SCS_SESSION };
-static struct { int on,hm,rep,ao,src; int64_t once_at; } sch={0,390,1,0,SCS_DEFAULT,0};
+static struct { int on,hm,rep,ao,src; int64_t once_at; } sch={0,390,1,AO_DEF,SCS_DEFAULT,0};
 static int sched_val(int i){ return i==S_PREHEAT?sch.on:(i==S_PHAT?sch.hm:(i==S_PHREP?sch.rep:sch.ao)); }
 static void sched_load(void){
-    sch.on=0; sch.hm=390; sch.rep=1; sch.ao=0; sch.once_at=0; sch.src=SCS_DEFAULT;
+    sch.on=0; sch.hm=390; sch.rep=1; sch.ao=AO_DEF; sch.once_at=0; sch.src=SCS_DEFAULT;
     char b[512]; int fd=open(sched_path,O_RDONLY); if(fd<0) return;
     int n=(int)read(fd,b,sizeof b-1); close(fd); if(n<=0) return; b[n]=0; sch.src=SCS_FILE;
     for(char*l=strtok(b,"\r\n");l;l=strtok(NULL,"\r\n")){
@@ -2491,7 +2499,7 @@ static void sched_load(void){
         if(!strcmp(l,"preheat")) sch.on=atoi(e)==1;
         else if(!strcmp(l,"at")){ int h,m; if(sscanf(e,"%d:%d",&h,&m)==2&&h>=0&&h<24&&m>=0&&m<60&&m%5==0) sch.hm=h*60+m; }
         else if(!strcmp(l,"repeat")){ for(int k=0;k<4;k++) if(!strcmp(e,REP_KEY[k])) sch.rep=k; }
-        else if(!strcmp(l,"autooff")){ int v=atoi(e); for(int k=0;k<5;k++) if(v==AO_MIN[k]) sch.ao=k; }
+        else if(!strcmp(l,"autooff")){ char*z; long v=strtol(e,&z,10); if(z!=e&&!*z) for(int k=0;k<5;k++) if(v==AO_MIN[k]) sch.ao=k; }   /* v6.23: strict — "", "x" are NOT an explicit 0 */
         else if(!strcmp(l,"once_at")) sch.once_at=strtoll(e,NULL,10);
     }
     if(sch.once_at<0) sch.once_at=0;
@@ -4450,7 +4458,8 @@ static void pw_step(ms_t now){
  * ONE-SHOT: once its occurrence (once_at) is a minute in the past it is switched off and saved (stock: deal_preheat_data at start).
  * AUTO OFF: no touch, no button and no activity (any active phase, not only brew/steam/grind) for N minutes -> the same power-off as
  * the button (pw_off_begin: cmd8 w. the alarm, 80 ms, cmd6 sub0 len2 [0,0]); a toast warns 30 s before. Only when the power-off
- * itself would be allowed (link, word 0 = 1, not read-only, no SAVE in flight). Stock: fixed 30 min (SleepRefresh 0x149268). */
+ * itself would be allowed (link, word 0 = 1, not read-only, no SAVE in flight). Stock: fixed 30 min (SleepRefresh 0x149268);
+ * v6.23: 30 min is also merakiplus's default (AO_DEF) — OFF only when the user chose OFF. */
 #define ARM_GAP_MS   5000
 #define AO_WARN_MS  30000
 static ms_t idle_t0=0; static int ao_warned=0; static long ao_n=0;
@@ -4473,7 +4482,7 @@ static void sched_step(ms_t now){
     }
     /* auto off */
     if(pw.state!=PW_ON||pw_busy()||phase_active(phase_raw(now))||act.pending!=ACT_NONE||pw.key_down){ idle_kick(now); return; }
-    int mins=AO_MIN[SET[S_AUTOOFF].val>=0&&SET[S_AUTOOFF].val<5?SET[S_AUTOOFF].val:0];
+    int mins=AO_MIN[SET[S_AUTOOFF].val>=0&&SET[S_AUTOOFF].val<5?SET[S_AUTOOFF].val:AO_DEF];
     if(!mins||view==V_SPLASH||view==V_BYE||sav.active||ro_mode||!link_up(now)||!reg_seen[0]||reg[0]!=1){ if(!mins) ao_warned=0; return; }
     ms_t left=(ms_t)mins*60000-(now-idle_t0);
     if(left<=AO_WARN_MS&&!ao_warned){ ao_warned=1; toast_show(TR(TX_T_AUTOOFF_SOON),C_WARN,now); toast.dur=AO_WARN_MS; ui_kick=1; }
@@ -8837,8 +8846,38 @@ static void st_time(const char*dir){
       sch.on=0; sch.hm=0; sch.rep=0; sch.ao=0; settings_load();
       st_check("reload: the file gives the rows back (PRE-HEAT ON, 06:35, MON-FRI, 30 MIN)",sch.on==1&&sch.hm==395&&sch.rep==2&&sch.ao==3&&SET[S_PHAT].val==395&&SET[S_AUTOOFF].val==3&&sch.src==SCS_FILE);
       put_bytes(sched_path,"preheat=7\nat=25:99\nrepeat=hourly\nautooff=45\n",44); settings_load();
-      st_check("bad values -> defaults (pre-heat OFF, 06:30, EVERY DAY, auto off OFF) — never a surprise alarm",sch.on==0&&sch.hm==390&&sch.rep==1&&sch.ao==0);
+      st_check("bad values -> defaults (pre-heat OFF, 06:30, EVERY DAY, auto off 30 MIN since v6.23) — never a surprise alarm",sch.on==0&&sch.hm==390&&sch.rep==1&&sch.ao==AO_DEF);
       unlink(sched_path); settings_load(); st_check("no file -> defaults, source DEFAULT",sch.on==0&&sch.src==SCS_DEFAULT);
+      /* v6.23: auto off default 30 min like stock; an explicit choice (incl. OFF) in the file is kept — the migration matrix */
+      { static const struct { const char*file; int ao; const char*what; } M[]={
+          {NULL,3,"no file (never saved a SCHEDULE row)"},
+          {"preheat=0\nat=06:30\nrepeat=daily\nautooff=0\nonce_at=0\n",0,"v6.16..v6.22 file with autooff=0 (explicit OFF)"},
+          {"preheat=1\nat=06:35\nrepeat=mon-fri\nautooff=15\nonce_at=0\n",1,"v6.22 file autooff=15"},
+          {"preheat=0\nat=06:30\nrepeat=daily\nautooff=15\nonce_at=0\n",1,"the reference machine's file after the v6.22 hardware session: autooff=15 stays 15"},
+          {"preheat=0\nat=06:30\nrepeat=daily\nautooff=20\nonce_at=0\n",2,"autooff=20"},
+          {"preheat=0\nat=06:30\nrepeat=daily\nautooff=30\nonce_at=0\n",3,"autooff=30"},
+          {"preheat=0\nat=06:30\nrepeat=daily\nautooff=60\nonce_at=0\n",4,"autooff=60"},
+          {"preheat=1\nat=07:00\nrepeat=daily\n",3,"file without an autooff line (unset)"},
+          {"autooff=\n",3,"autooff= (empty: not an explicit 0)"},
+          {"autooff=off\n",3,"autooff=off (not a number)"},
+          {"autooff=0x\n",3,"autooff=0x (trailing garbage)"},
+          {"autooff=45\n",3,"autooff=45 (not an option)"},
+          {"",3,"empty file"}};
+        int ok=1, keep_on=1;
+        for(unsigned k=0;k<sizeof M/sizeof M[0];k++){
+            unlink(sched_path); if(M[k].file) put_bytes(sched_path,M[k].file,(int)strlen(M[k].file)); settings_load();
+            if(sch.ao!=M[k].ao||SET[S_AUTOOFF].val!=M[k].ao){ ok=0; printf("     %s: ao=%d row=%d (want %d)\n",M[k].what,sch.ao,SET[S_AUTOOFF].val,M[k].ao); }
+            if(k==2&&!(sch.on==1&&sch.hm==395&&sch.rep==2)) keep_on=0; }
+        st_check("v6.23 auto off migration: no file / no autooff line / bad value -> 30 MIN (stock); explicit 0 (OFF) / 15 / 20 / 30 / 60 kept exactly (13 cases); the other rows untouched",ok&&keep_on);
+        unlink(sched_path); settings_load(); char vb[48]; set_fmt(S_AUTOOFF,SET[S_AUTOOFF].val,vb,sizeof vb);
+        st_check("no file: the SYSTEM > SCHEDULE > AUTO OFF row shows 30 MIN (SET def = AO_DEF = 3)",SET[S_AUTOOFF].val==3&&SET[S_AUTOOFF].def==AO_DEF&&!strcmp(vb,TR(TX_E_MIN30)));
+        { const char*f0="preheat=0\nat=06:30\nrepeat=daily\nautooff=0\nonce_at=0\n"; put_bytes(sched_path,f0,(int)strlen(f0)); } settings_load(); t=st_pw_home(); st_own_save(S_PREHEAT,1,t);
+        char rb2[256]; int fd2=open(sched_path,O_RDONLY); int rn2=fd2>=0?(int)read(fd2,rb2,sizeof rb2-1):-1; if(fd2>=0) close(fd2); if(rn2<0) rn2=0; rb2[rn2]=0;
+        st_check("explicit OFF survives a SAVE of another row: autooff=0 file + SAVE PRE-HEAT ON -> the file still says autooff=0",strstr(rb2,"autooff=0\n")!=NULL&&sch.ao==0);
+        unlink(sched_path); settings_load(); t=st_pw_home(); st_own_save(S_PREHEAT,1,t);
+        fd2=open(sched_path,O_RDONLY); rn2=fd2>=0?(int)read(fd2,rb2,sizeof rb2-1):-1; if(fd2>=0) close(fd2); if(rn2<0) rn2=0; rb2[rn2]=0;
+        st_check("no file + SAVE PRE-HEAT ON -> the default is written as autooff=30 (from then on an explicit value)",strstr(rb2,"autooff=30\n")!=NULL);
+        st_own_save(S_PREHEAT,0,t); unlink(sched_path); settings_load(); }
       st_check("the 4 time rows are merakiplus's own (SF_OWN): no config key, no MCU word, not in --dump-table; the stepper for PRE-HEAT AT is 5 min, 00:00..23:55",
                !SET[S_PREHEAT].key&&!SET[S_PHAT].key&&SET[S_PHAT].mcu==M_NONE&&(SET[S_PHAT].flags&SF_OWN)&&SET[S_PHAT].step==5&&SET[S_PHAT].max==1435); }
     /* ---- (6) pre-arm while on ---- */
@@ -8885,6 +8924,16 @@ static void st_time(const char*dir){
     st_check("... an activity (brew bits) keeps it on (stock isExtractionOrSteamSwitchOn -> recodeTime)",busy);
     st_check("... after 15 min idle: the stock power-off sequence (cmd8 w. alarm 0/0/0 -> cmd6 sub0 len2 " PW_V_OFF ")",pw.state!=PW_ON&&ao_n>=1&&na>=2&&!strcmp(all[na-2],TM_V_OFF0)&&!strcmp(all[na-1],PW_V_OFF));
     st_own_save(S_AUTOOFF,0,st_pw_home());
+    /* v6.23: explicit OFF never powers off; the default (no file) is stock's 30 min */
+    { t=st_pw_home(); txq_len=0; toast.dur=0; idle_kick(t); long n0=ao_n; t=st_tm_loop(t,61*60000,1);
+      st_check("v6.23: AUTO OFF = OFF chosen explicitly (autooff=0 in the file): still ON after 61 min idle, no warning",pw.state==PW_ON&&ao_n==n0&&SET[S_AUTOOFF].val==0&&!ao_warned);
+      unlink(sched_path); settings_load(); t=st_pw_home(); txq_len=0; toast.dur=0; idle_kick(t); n0=ao_n;
+      t=st_tm_loop(t,29*60000+29000,1); int quiet=pw.state==PW_ON&&!ao_warned;
+      t=st_tm_loop(t,2000,1); int warn=ao_warned&&!strcmp(toast.msg,TR(TX_T_AUTOOFF_SOON));
+      t=st_tm_loop(t,30000,1); na=st_txq_frames(all,64);
+      st_check("v6.23: no schedule file (default) -> AUTO OFF 30 MIN like stock: quiet until 29:29, warning at 29:30, the stock power-off sequence at 30:00",
+               SET[S_AUTOOFF].val==AO_DEF&&quiet&&warn&&pw.state!=PW_ON&&ao_n==n0+1&&na>=2&&!strcmp(all[na-1],PW_V_OFF));
+      st_own_save(S_AUTOOFF,0,st_pw_home()); }
     /* ---- (10) HOME clock ---- */
     { t=st_pw_home(); SET[S_TIMEMODE].val=1; char c[24]; int v=home_clock_text(c,sizeof c); int a=v&&!strcmp(c,"16:35");
       SET[S_TIMEMODE].val=0; v=home_clock_text(c,sizeof c); a&=v&&!strcmp(c,"04:35 P.M."); SET[S_TIMEMODE].val=1;

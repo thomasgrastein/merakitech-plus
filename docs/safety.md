@@ -46,7 +46,7 @@ Meraki+ also contains no code for updating the controller's firmware.
 
 | | Stock UI | Meraki+ | What it means for you |
 |---|---|---|---|
-| **Auto off** | Switches the machine off after 30 minutes without use. | **Off by default.** Optional: 15, 20, 30 or 60 minutes (*SYSTEM → SCHEDULE → AUTO OFF*). | Unless you turn AUTO OFF on, the machine stays on and hot until you switch it off. |
+| **Auto off** | Switches the machine off after 30 minutes without use. | **30 minutes by default, like stock** (since v6.23). Selectable: off, 15, 20, 30 or 60 minutes (*SYSTEM → SCHEDULE → AUTO OFF*). An install that already had AUTO OFF saved as *off* keeps it off ([time-scheduling.md §5.1](time-scheduling.md#51-default-and-migration-v623)). | If AUTO OFF is set to *off*, the machine stays on and hot until you switch it off. Check the setting after updating from v6.22 or earlier. |
 | **Planned pre-heat** | Hands the next wake time to the controller when the machine is switched off. | The same, and also while the machine is on. Meraki+ keeps its own schedule. | The machine heats **unattended** at the set time. Only plan a pre-heat for a time when you would be comfortable switching the machine on without being there. |
 | **Manual hot water** | Runs until stopped; no time limit. | The same (*WATER MODE = MANUAL*, and always on a controller that cannot weigh). | Water runs until you tap **STOP WATER**. Stay at the machine. |
 | **Steam during a brew** | Possible (start steam from HOME while a shot runs). | A **HOLD·STEAM** button on the brew screen. | The controller runs both and stops each by itself; checked on the reference machine ([concurrent-brew-steam.md](concurrent-brew-steam.md)). |

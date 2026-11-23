@@ -1,6 +1,6 @@
 {
   "name": "schedule_prewarm",
-  "description": "v6.16 planned pre-heat: PRE-HEAT every day at 06:30 (local, zone #48) saved at 06:29 → pre-armed while on (cmd8 alarm [18,6,30]); HOLD → power-off carries the same alarm (stock performSleepActions) + cmd6 sub0 len2 [0,0] → deep sleep → the MCU RTC reaches 06:30 → alarm wake (CPU reset, factory defaults) → re-push restores the config → merakiplus ON again and RE-ARMS the next occurrence (tomorrow, [19,6,30]); then PRE-HEAT OFF disarms with 0/0/0",
+  "description": "v6.16 planned pre-heat: PRE-HEAT every day at 06:30 (local, zone #48) saved at 06:29 → pre-armed while on (cmd8 alarm [18,6,30]); HOLD → power-off carries the same alarm (stock performSleepActions) + cmd6 sub0 len2 [0,0] → deep sleep → the MCU RTC reaches 06:30 → alarm wake (CPU reset, factory defaults) → re-push restores the config → merakiplus ON again and RE-ARMS the next occurrence (tomorrow, [19,6,30]); then PRE-HEAT OFF disarms with 0/0/0 · v6.23: no schedule file at start -> auto off = 30 min (stock default; was OFF), and the first SAVE writes it as autooff=30",
   "duration_s": 80,
   "ui_only": true,
   "ui_env": {
@@ -96,6 +96,38 @@
       "t": 1.5,
       "window": 1,
       "value": "READY"
+    },
+    {
+      "kind": "state",
+      "path": "sched.auto_off",
+      "t0": 1.0,
+      "t1": 1.8,
+      "mode": "all",
+      "equals": 30
+    },
+    {
+      "kind": "state",
+      "path": "sched.file",
+      "t0": 1.0,
+      "t1": 1.8,
+      "mode": "all",
+      "equals": "default"
+    },
+    {
+      "kind": "state",
+      "path": "sched.auto_off",
+      "t0": 4.5,
+      "t1": 6.0,
+      "mode": "all",
+      "equals": 30
+    },
+    {
+      "kind": "state",
+      "path": "sched.file",
+      "t0": 4.5,
+      "t1": 6.0,
+      "mode": "all",
+      "equals": "file"
     },
     {
       "kind": "state",

@@ -15,7 +15,7 @@ marked *MCU*. Strings in `demo_v9`'s read-only data are at file offset = VA − 
 | Pre-heat schedule | Up to 30 entries in the binary `/customer/config.bin` | One entry in `/new_customer/merakiplus/schedule` (not shared with stock) |
 | Arming | Only at power-off: the next occurrence goes out as the **cmd8 alarm** | The same frame at power-off, **plus** pre-armed while on |
 | Cancel | No entry → alarm 0/0/0 | Same; switching the schedule off sends 0/0/0 once |
-| Auto off | Fixed 30 min idle → power-off (with the alarm) | Optional: off / 15 / 20 / 30 / 60 min |
+| Auto off | Fixed 30 min idle → power-off (with the alarm) | **30 min by default** (v6.23, like stock); off / 15 / 20 / 30 / 60 min selectable |
 
 ## 2. `timemode` (TIME FORMAT)
 
@@ -158,9 +158,32 @@ steam or grind runs (`isExtractionOrSteamSwitchOn` 0x1481E0). After 10 min it sh
 `updateSleepState` 0x14827C calls `powerOff` (with the schedule alarm). Config `sleepMode` / `sleepModeSetting`
 are loaded (`model+0x54/0x55`) but never read; the setting's own table (0x1A02D0) lists 15/20/30/60 min.
 
-Meraki+: AUTO OFF is **off by default**. When on, every touch, button event and any active phase restarts the
+Meraki+: AUTO OFF is **30 min by default** (since v6.23, the stock value; v6.16–v6.22 defaulted to off) and can be
+set to off / 15 / 20 / 30 / 60 min. When on, every touch, button event and any active phase restarts the
 timer; 30 s before the end a toast warns (a touch dismisses it); then the same power-off as the button. It only
 fires when the power-off itself is allowed (link, word 0 = 1, not read-only, no SAVE in flight).
+
+### 5.1 Default and migration (v6.23)
+The setting lives in Meraki+'s own file `/new_customer/merakiplus/schedule` as `autooff=0|15|20|30|60`
+(0 = off). How v6.23 reads it:
+
+| The file says | v6.23 uses | Why |
+|---|---|---|
+| no file at all | **30 min** | nothing was ever chosen → the stock behaviour |
+| a file without an `autooff=` line | **30 min** | unset |
+| `autooff=` with anything that is not exactly 0, 15, 20, 30 or 60 (empty, `off`, `45`, `0x`…) | **30 min** | not a valid choice → treated as unset (an empty or garbled value is never read as an explicit 0) |
+| `autooff=0` | **off** | an explicit choice is kept |
+| `autooff=15` / `20` / `30` / `60` | that value | an explicit choice is kept |
+
+What this means for existing installs:
+* **Never saved a SCHEDULE row** (no file): auto off becomes **30 min** after the update.
+* **Saved any SCHEDULE row with v6.16–v6.22**: every save writes all four keys, so the file already holds
+  `autooff=<value>` — including `autooff=0` if AUTO OFF was left at its old default of off while another
+  SCHEDULE row was saved. Meraki+ cannot tell that apart from a deliberate OFF, so **it keeps OFF**; to get the
+  stock behaviour set *SYSTEM → SCHEDULE → AUTO OFF* to *30 MIN*. 15 / 20 / 60 stay exactly as they were.
+* From v6.23 on, the first save of any SCHEDULE row writes the value shown (30 when unset), so from then on the
+  file always holds an explicit choice.
+* Nothing is migrated or rewritten by the installer; the file is only read differently.
 
 ## 6. Safety notes
 * The power semantics of v6.14 are unchanged: the physical button's kernel cut (≥ 0.8 s) still turns the display
@@ -175,4 +198,7 @@ fires when the power-off itself is allowed (link, word 0 = 1, not read-only, no 
   file round trip without config writes, pre-arm / no repeat / re-arm after an MCU restart / no pre-arm in
   read-only / disarm 0/0/0, power-off with the alarm, no pre-arm while off, re-arm after the wake, one-shot use,
   auto off (warning, touch reset, activity, power-off sequence), HOME clock 12/24 h and the pre-heat hint.
+  v6.23 adds the auto off default / migration matrix (13 file contents, see §5.1), the SYSTEM row showing 30 MIN
+  with no file, an explicit OFF surviving a save of another row, the default being written as `autooff=30` on the
+  first save, explicit OFF staying on through 61 min idle and the default powering off at 30:00 (warning at 29:30).
 * Simulator scenarios: `time_display`, `timemode_stock_parity`, `schedule_prewarm` (alarm wake end-to-end).
