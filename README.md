@@ -33,15 +33,17 @@ obligation to provide support.** Read the whole section. Only continue if you un
    liability, it applies to the greatest extent permitted.
 3. **Warranty and consumer rights.** Modifying the machine's software **may void the
    manufacturer's warranty** and may affect your statutory consumer rights. Consider waiting until
-   the warranty has expired, and always remove Meraki+ (`./revert.sh`) before service or returning
-   the machine.
+   the warranty has expired. Before service or a return, restore the original software
+   (`./revert.sh`) so the machine is in its original state, and answer truthfully if you are asked
+   whether it has been modified.
 4. **Risk of "bricking" and data loss.** Meraki+ is designed to be careful (backup before every
    change, md5 checks, atomic file replacement, no reboots, slot A is never touched) — but software
    has bugs, and hardware variants exist. In the worst case a bug could leave the display without a
    working UI, corrupt settings, or require electronic recovery (UART/flash). There is no guarantee
    that recovery will be possible.
-5. **Electrical safety — danger to life.** The espresso machine runs on **230 V mains** and has
-   pressurized boilers with boiling water and steam. **You do not need to open the machine** to use
+5. **Electrical safety — danger to life.** The espresso machine runs on **mains voltage**
+   (100–120 V or 220–240 V, depending on the model) and has pressurized boilers with boiling water
+   and steam. **You do not need to open the machine** to use
    Meraki+ (installation happens over the network). If you open it anyway (e.g. for UART
    troubleshooting): **unplug it and wait until it has cooled down and discharged**, and only do so
    if you are qualified. Working on mains-powered equipment may be illegal for unlicensed persons in
@@ -73,8 +75,10 @@ obligation to provide support.** Read the whole section. Only continue if you un
     where you live** and with any license terms you have accepted.
 11. **Pressure and weight readings are estimates.** The pressure figure (≈bar · EST.) is a linear
     estimate based on a single anchor point, not a calibrated measurement. Do not use it for safety
-    assessments. The machine's own controller (MCU) is responsible for all safety functions; Meraki+
-    does not change its firmware.
+    assessments. Meraki+ does not change the firmware of the machine's controller (MCU), which keeps
+    its own fault handling. The controller does not check the range of the settings a display sends
+    it, however, so Meraki+ enforces the stock UI's limits itself, and a bug in Meraki+ could send a
+    value outside them. See [docs/safety.md](docs/safety.md).
 
 By downloading, installing or using Meraki+ you confirm that you have read and accepted the above.
 
@@ -213,7 +217,7 @@ steaming, grinding or hot water — while you install. The installer asks before
 
 | | |
 |---|---|
-| `--ip ADDR` / `--scan` | the display's address / find it automatically (`--subnet 10.0.0.0/24` for another network) |
+| `--ip ADDR` / `--scan` | the display's address / find it automatically (`--subnet 10.0.0.0/24` for another network). Only scan a network you own or administer. |
 | `--dry-run` | show every step, change nothing |
 | `--persist` | start Meraki+ at **every** boot (sets the boot flag `/customer/new`) |
 | `--gesture` | install the center-hold gesture (stock → Meraki+ without a reboot) |
@@ -455,6 +459,7 @@ description (including the gesture, the watchdog race and the OTA table) is in
 | [docs/ota-plan.md](docs/ota-plan.md) | *Planned:* secure updates — storage/tooling/vendor-OTA inventory, signed manifests, boot launcher with automatic rollback, phases and tests |
 | [docs/water-dosing-compat.md](docs/water-dosing-compat.md) | Hot water by weight needs controller firmware > 5.1.2 — how the stock UI detects it (words 80..87), how Meraki+ gates it and its manual hot water (v6.22) |
 | [docs/mains-voltage.md](docs/mains-voltage.md) | 120 V / 60 Hz vs 230 V / 50 Hz — the controller's `set_voltage` modes, the E1 boot check, vendor specs, the pressure-estimate caveat |
+| [docs/safety.md](docs/safety.md) | Safety notes — what Meraki+ can and cannot command, where it differs from the stock UI (auto off, pre-heat, manual hot water), what is untested |
 | [docs/dev/](docs/dev/) | Developer notes (full UI spec with changelog, parity analysis) |
 | [sim/README.md](sim/README.md) | The simulator and the E2E tests |
 
@@ -485,5 +490,8 @@ From the simulator (the same code as on the machine):
 
 The project's own code and documentation are released under the [MIT License](LICENSE). The license
 does **not** cover the manufacturer's firmware or software, which is neither included nor licensed
-here. "MerakiTech" and other names mentioned are trademarks of their respective owners; "Cisco
-Meraki" is a trademark of Cisco Systems, Inc. and has nothing to do with this project.
+here. "Meraki", "MerakiTech" and other names mentioned are trademarks of their respective owners;
+"Cisco Meraki" is a trademark of Cisco Systems, Inc. and has nothing to do with this project.
+
+If you are a rights holder and have a concern about this project, please contact the maintainer
+directly (the address is in [SECURITY.md](SECURITY.md)) — you will get a prompt answer.

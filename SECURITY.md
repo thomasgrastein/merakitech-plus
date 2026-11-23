@@ -31,4 +31,5 @@ the README section *Security and OTA*).
 
 ## Supported versions
 
-Only the latest release (currently v6.14) receives fixes.
+Only the [latest release](https://github.com/thomasgrastein/merakitech-plus/releases/latest) receives
+fixes.
