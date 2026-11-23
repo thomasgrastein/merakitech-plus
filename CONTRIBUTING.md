@@ -11,7 +11,8 @@ Thank you for wanting to help! Issues and pull requests are welcome. Please writ
    never be written. No `reboot` from any tool.
 2. **No manufacturer files in the repository** — no `demo_v9`, MCU firmware (`MEM03_*.bin`), libs,
    `config.bin`, OTA packages or vendor scripts (`demo.sh`, `test.sh`, `upgrade.sh`). No disassembly
-   dumps either. Short addresses/excerpts in documentation are fine (interoperability).
+   either — not even short excerpts or single quoted instructions. Describe stock behaviour in prose or
+   pseudocode; flash/RAM addresses are fine (interoperability). `tests/hygiene.py` checks the docs for this.
 3. **No credentials or personal data** — no `config.json` from a real machine (it contains the Wi-Fi
    password), no Wi-Fi names/passwords, IP addresses, MAC addresses, serial numbers, personal paths
    (`/Users/<name>/…`) or md5 sums of files that contain secrets. Use placeholders
