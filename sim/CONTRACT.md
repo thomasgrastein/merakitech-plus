@@ -545,3 +545,34 @@ The contract and ADDENDUM v6.4/v6.5/v6.6 (UI work stream) are unchanged. Full do
 * **merakiplus SIM build, state JSON `err`:** `null` while words 34/35/36 are all 0; otherwise `{"id": "<TX_ER_…>", "code": "E1|E2|E3|?"}` — the string id of HOME's error sub-line (`err_id()`, language-neutral) and the dimmed code. v6.24 adds `TX_ER_E3_TANK` (word 36 & `0x8000`), `TX_ER_E3_LOW` (word 36 & `0x0001`), `TX_ER_E2_NOFLOW` (word 35 & `0x8000`) after the existing ids; every other unmapped bit stays `TX_ER_UNKNOWN` / `?`.
 * **`fault_water_tank`** (`ui_only`, 22 s, 35 checks): `fault` events `e3 = 32768` (3–7 s), `e3 = 1` (10–13 s), `e2 = 32768` (16–19 s) via the existing `mcu_sim.py` fault injection; asserts `err.id` / `err.code`, `shown.sub` contains `TANK` (true in EN and DA) and never `UNKNOWN` / `UKENDT` while the tank is missing, `toast.id = TX_G_ERROR` for a brew start with no frame sent, READY + `err = null` after each fault. Fails against the v6.23 SIM build (22/35).
 * No runner, `mcu_sim.py` or timing change; `--quick` is unchanged.
+
+## ADDENDUM — MQTT / Home Assistant (unreleased feature) (state.mqtt, the "mqtt" scenario block, mqtt_broker.py, ctrl "drag")
+
+Additive; every older scenario runs unchanged (except `ia_navigation`, see below).
+
+* **merakiplus SIM build, state JSON `mqtt`:** `{"enabled", "set_up", "file": "file|session|default", "status":
+  "off|not_set_up|no_helper|failed|connecting|connected|disconnected|not_local|auth", "helper_pid", "spawns", "exits",
+  "feed", "lines", "dropped", "published", "shot_seq", "shots", "shot_state"}` — the switch (`mqtt.conf`), the helper
+  process, the feed and the shot tracker (0 idle, 1 brewing, 2 settling).
+* **SIM environment:** `MERAKIPLUS_MQTTFILE` / `MERAKIPLUS_SHOTSFILE` (default: the sandbox's
+  `/new_customer/merakiplus/mqtt.conf` and `…/shots`); `MERAKIPLUS_SIM_MQTT_HELPER=<path>` — the helper to start (SIM
+  only; without it STATUS is NO HELPER); `MERAKIPLUS_SIM_FEED_LOG=<file>` — every feed line is appended there too
+  (this makes the feed run even without a helper).
+* **ctrl hooks:** `save` takes the param ids `mqtt` (0/1; `mqtt_status`, `mqtt_last` are read-only); new
+  `{"cmd": "drag", "x0", "y0", "x1", "y1", "ms"}` — a drag through the same evdev path as `touch` (down, 8 moves, up).
+* **Runner (`run_e2e.py`), scenario block** `"mqtt": {"broker": true, "conf": {…} | null, "helper": true, "feed_log": true}`:
+  starts `sim/mqtt_broker.py` on 127.0.0.1 (ephemeral port), writes the sandbox's `mqtt.conf` (defaults: enabled 1,
+  host 127.0.0.1, the broker's port, user `merakiplus`, a marker password, id `e2e0test`; `conf: null` = no file), and
+  starts the UI with the host helper `build/merakiplus_mqtt_host`. At the end the runner waits for the helper's
+  `offline` + DISCONNECT (the UI's exit closes the feed). Runner op `{"op": "mqtt", "action": "outage_on|outage_off|inject_publish"}`.
+  Expectation kinds: `mqtt` (messages on a topic — `{base}` = `merakiplus/e2e0test`: `min`/`max`, `retain`, `qos`,
+  `where` (filter), `json` (dotted keys, `[lo, hi]` ranges) / `present` / `absent` / `payload` on the last match),
+  `mqtt_packets` (`allowed` packet types, `connections_min/max`, `will`, `no_secret`), `feed` (`channel`, `where`, `json`).
+* **Scenarios** (all `ui_only`): `mqtt_shot` (28 checks: brew → brew_started + shot_finished + one retained shot record +
+  summary; discovery, availability online → offline, info/state/live; no SUBSCRIBE; the brew's phases unchanged),
+  `mqtt_stop_brew` (STOP BREW → `manual_stop`, kind `short`), `mqtt_off_default` (no file: no helper, no connection,
+  no feed), `mqtt_toggle` (SAVE ON → connect; SAVE OFF → offline + DISCONNECT, the helper exits; config.json never
+  written), `mqtt_broker_outage` (broker down while the brew starts: brew unchanged, queued events delivered after the
+  reconnect). 101 checks; they need `./build.sh host` (the host helper).
+* **`ia_navigation`:** SYSTEM closed now has 6 rows (`shown.rows` 5 → 6, 9 → 10 with SCHEDULE open); a `drag` before
+  the DIAGNOSTICS tap brings that row into view.

@@ -2,7 +2,8 @@
 
 | File | What | Built from |
 |---|---|---|
-| `merakiplus` | **Meraki+ v6.24** device binary (static ARMv7, musl). Installed as `/new_customer/merakiplus/rel/<version>-<sha8>/demo_v9`. | `src/merakiplus.c` |
+| `merakiplus` | **Meraki+** device binary (last release v6.24 + the unreleased MQTT feature) (static ARMv7, musl). Installed as `/new_customer/merakiplus/rel/<version>-<sha8>/demo_v9`. | `src/merakiplus.c` |
+| `merakiplus_mqtt` | MQTT feature (unreleased): publish-only MQTT helper (static ARMv7, musl). Installed into each release directory; started by Meraki+ only when MQTT is switched on | `src/merakiplus_mqtt.c` |
 | `merakiplus_boot` | the launcher (static ARMv7, no UI/network/UART). Installed as `/new_customer/demo_v9`; starts the chosen release and rolls back (docs/ota-plan.md phase 1b) | `src/merakiplus_boot.c` |
 | `merakiplus_snd` | sound helper (ARMv7, dynamic against the display's glibc 2.28; `dlopen`s the display's own `libmi_*.so` at run time). Installed into each release directory, next to `audio/` | `src/merakiplus_snd.c` |
 | `switcher` | gesture switcher daemon (center-hold 5 s → stock to Meraki+), only with `--gesture` | `boot/switcher.c` |
@@ -18,6 +19,18 @@
 **No vendor firmware, libraries or scripts are included here or anywhere in this repository.**
 
 ## Provenance of the ARM binaries
+
+**MQTT feature, unreleased (2026-11-25, MQTT / Home Assistant, read-only — feature PR, no version assigned; the version
+string stays V6.24 until the maintainer's release PR):** `merakiplus`
+(`a17c3e05…`), `merakiplus_sim_arm` and the two host SIM builds were rebuilt from the feature branch's source with the official zig
+0.17.1; **`merakiplus_mqtt` is new** (`./build.sh`: `zig cc -target arm-linux-musleabihf -mcpu=cortex_a7 -static -O2 -s`,
+82 KB, bit-reproducible, checked by `tests/check_bins.py`). The UI change is observe-only: the SYSTEM › MQTT section,
+Meraki+'s own `mqtt.conf`, and the read-only feed to the helper (docs/integrations.md §15); no UART frame, frame-policy
+rule or guard changed (the self-test compares a brew's frames with the feed on and off). `merakiplus_boot`,
+`merakiplus_snd`, `switcher`, `tinj_hold`, `keyinj`, `grab_shim.so` and `audio/` are byte-identical to v6.24.
+**Not verified on a machine** (the reference machine was not used): covered by the UI self-test (EN + DA, also as a
+32-bit ARM binary), the helper's self-test (host + ARMv7 container), `tests/test_mqtt.py` against a mock broker, five
+SIM E2E MQTT scenarios and the installer suite. The helper's resident memory on the device is not measured yet.
 
 **v6.24 (2026-11-25, water tank messages — issue #1):** `merakiplus` (`9182753f…`), `merakiplus_sim_arm` and the two
 host SIM builds were rebuilt from the v6.24 source with the official zig 0.17.1. The change is display-only: three
@@ -136,14 +149,15 @@ self-test and the simulator E2E suite.
 
 | File | md5 (this repo) | Built with |
 |---|---|---|
-| `merakiplus` (V6.24) | `9182753f4d277821f9f06b810a066096` | `./build.sh` → `build/merakiplus` |
-| `merakiplus_sim_arm` (V6.24) | `1c2b4ac4b1de1474b654ac4679d68537` | `./build.sh` → `build/merakiplus_sim_arm` |
+| `merakiplus` (V6.24 + MQTT, unreleased) | `a17c3e053960032efdb46d21aef1a5d5` | `./build.sh` → `build/merakiplus` |
+| `merakiplus_mqtt` (MQTT, unreleased) | `00556874f3d4631a492748d551919bfd` | `./build.sh` → `build/merakiplus_mqtt` |
+| `merakiplus_sim_arm` (V6.24 + MQTT, unreleased) | `b51a56676b3bac12b6fbf6d28f68587d` | `./build.sh` → `build/merakiplus_sim_arm` |
 | `merakiplus_snd` (V6.18.1) | `a7659c176b8ef78385b0b612a69e81ca` | `./build.sh` → `build/merakiplus_snd` |
 | `switcher` | `e02a463c16278545c04b8e4022b8369f` | `./build.sh` → `build/switcher` |
 | `tinj_hold` | `e9806fb92e9b8a7e506a34639173c648` | `./build.sh` → `build/tinj_hold` |
 | `keyinj` | `a0cbd4bc2a670abe0e250ec34a193843` | `./build.sh` → `build/keyinj` |
-| `merakiplus_sim-linux-x86_64` (V6.24) | `8994c3a10ae40c2eceaca597c3d9c977` | `zig cc -target x86_64-linux-musl -DMERAKIPLUS_SIM -O2 -static -s src/merakiplus.c -lm` |
-| `merakiplus_sim-macos-arm64` (V6.24) | `f4b59e4452839d8549a9cb8c65ec6fdb` | `zig cc -DMERAKIPLUS_SIM -O2 -s src/merakiplus.c -lm` (Mach-O builds are not bit-reproducible) |
+| `merakiplus_sim-linux-x86_64` (V6.24 + MQTT, unreleased) | `7b0264d676992022794a2bdbf026bc6c` | `zig cc -target x86_64-linux-musl -DMERAKIPLUS_SIM -O2 -static -s src/merakiplus.c -lm` |
+| `merakiplus_sim-macos-arm64` (V6.24 + MQTT, unreleased) | `a3c63803c324c13bd2f937edb266115c` | `zig cc -DMERAKIPLUS_SIM -O2 -s src/merakiplus.c -lm` (Mach-O builds are not bit-reproducible) |
 
 The ARM builds above are reproducible: running `./build.sh` on the same sources with the **official**
 zig 0.17.1 release (the ziglang.org tarball CI installs) gives the same md5 on macOS and Linux,
@@ -154,14 +168,14 @@ reproducible file with the official toolchain (`switcher`, `tinj_hold`, `keyinj`
 Note that a zig cache shared with a Homebrew zig of the same version can hand its objects to the official
 zig: use a separate `ZIG_GLOBAL_CACHE_DIR`. `tests/hygiene.py` rejects Homebrew-built files in `bin/`. The Linux SIM build (`-target x86_64-linux-musl
 -static -s`) is reproducible the same way. CI enforces this on every push and PR
-(`tests/check_bins.py`): the committed `bin/` must be byte-identical to fresh builds of these eight
+(`tests/check_bins.py`): the committed `bin/` must be byte-identical to fresh builds of these nine
 reproducible targets, so a source change without a `bin/` rebuild fails CI. `grab_shim.so` (trimmed
 verified build, see below) and `merakiplus_sim-macos-arm64` (Mach-O is not bit-reproducible) are
 excluded from that check; `tests/hygiene.py` still md5-gates every file in `bin/`.
 
 GitHub releases are maintained automatically by `.github/workflows/release.yml`: a `v*` tag push, a
 manual dispatch, or a push to `main` that bumps `VERSION` past the latest release builds, runs the
-full quick test gate and publishes the committed `bin/` assets (device binary, sound helper, switcher, `grab_shim.so`, the three
+full quick test gate and publishes the committed `bin/` assets (device binary, sound helper, MQTT helper, switcher, `grab_shim.so`, the three
 WAVs from `audio/`, ARM SIM, Linux SIM, macOS SIM, `MD5SUMS`, `SHA256SUMS`) with the CHANGELOG section as notes. Re-runs update the existing release
 instead of creating a duplicate. The macOS SIM asset is the committed build from the table above —
 CI does not rebuild it (no macOS runner needed), it ships exactly what `bin/MD5SUMS` lists.

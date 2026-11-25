@@ -1,0 +1,83 @@
+{
+  "name": "mqtt_stop_brew",
+  "description": "MQTT ON — STOP BREW on the screen during the extraction: the shot record says completion_reason manual_stop (and kind short: < 15 s); the stop frame and the brew stop exactly as in stop_brew",
+  "ui_only": true,
+  "duration_s": 26,
+  "mqtt": {
+    "conf": {}
+  },
+  "events": [
+    {
+      "t": 2,
+      "target": "ui",
+      "cmd": "action",
+      "name": "brew"
+    },
+    {
+      "t": 12,
+      "target": "ui",
+      "cmd": "action",
+      "name": "brew_stop"
+    }
+  ],
+  "expect": [
+    {
+      "kind": "phase_seq",
+      "t0": 0,
+      "t1": 26,
+      "values": [
+        "READY",
+        "PRE",
+        "EXT",
+        "READY"
+      ]
+    },
+    {
+      "kind": "stop_ok",
+      "min": 1,
+      "max_fail": 0,
+      "t0": 12
+    },
+    {
+      "kind": "mqtt_packets",
+      "allowed": [
+        "CONNECT",
+        "PUBLISH",
+        "PINGREQ",
+        "DISCONNECT"
+      ],
+      "will": true,
+      "no_secret": true,
+      "connections_min": 1,
+      "connections_max": 1
+    },
+    {
+      "kind": "mqtt",
+      "topic": "{base}/event",
+      "min": 1,
+      "max": 1,
+      "where": {
+        "event_type": "shot_finished"
+      },
+      "json": {
+        "completion_reason": "manual_stop",
+        "kind": "short"
+      }
+    },
+    {
+      "kind": "mqtt",
+      "topic": "{base}/shot",
+      "min": 1,
+      "max": 1,
+      "retain": true,
+      "json": {
+        "completion_reason": "manual_stop",
+        "kind": "short",
+        "duration_estimate_s": [
+          6,
+          12
+        ]
+      }
+    }
+  ]
+}

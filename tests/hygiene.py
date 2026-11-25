@@ -101,7 +101,9 @@ for p in files:
         fail(f"vendor-looking file name: {rel}")
 
 # 3. personal data in text files
-ALLOWED_IPS = {"192.168.1.50", "192.168.1.100", "192.168.0.0", "10.0.0.0"}
+ALLOWED_IPS = {"192.168.1.50", "192.168.1.100", "192.168.0.0", "10.0.0.0",
+               # MQTT: boundary test vectors of the MQTT helper's local-broker rule (src/merakiplus_mqtt.c, tools/merakiplus.py)
+               "10.255.255.255", "172.16.0.0", "172.31.255.255"}
 PRIV = re.compile(r"\b(?:192\.168|10\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01]))\.\d{1,3}\.\d{1,3}\b")
 MAC = re.compile(r"\b(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}\b")
 HOME = re.compile(r"/(?:Users|home)/[A-Za-z][\w.-]+/")

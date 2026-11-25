@@ -150,6 +150,12 @@ available to go back to.
   with a different tone, when the **steam boiler** is (the stock UI plays one sound once both are). Meraki+'s own
   short tones, at the stock *volume*; *SYSTEM → DISPLAY · SOUND* turns them off, picks which boiler announces itself,
   or uses the display's own stock sounds. See [Sounds](#sounds).
+- **MQTT / Home Assistant, read-only and off by default** (unreleased) — switch on *SYSTEM → MQTT → PUBLISH DATA* and
+  the machine publishes temperatures, weights, activity, faults, a `shot_finished` event and a complete record of every
+  shot (time, pre-infusion, yield, dose, ratio, weight curve) to an MQTT broker **on your own network**; Home
+  Assistant discovers the device by itself. The broker is set up from a computer
+  (`python3 tools/merakiplus.py mqtt --ip ADDR --host BROKER --user merakiplus`). Publish-only: the machine never
+  subscribes and accepts no commands. **Not yet verified on a machine.** See [MQTT / Home Assistant](#mqtt--home-assistant).
 - **Boot selection in the UI** — *SYSTEM → STOCK UI → BOOT UI* selects whether the machine starts Meraki+ or the
   original UI.
 - **DIAGNOSTICS** (advanced, behind SYSTEM — or one tap on HOME's error line) — connection, error codes
@@ -296,6 +302,26 @@ Details: [docs/time-scheduling.md](docs/time-scheduling.md).
   The speaker path is confirmed on a machine (v6.18.1); the v6.19 sounds have **not yet been heard on a machine** —
   feedback welcome.
 
+### MQTT / Home Assistant
+
+- **Off by default.** Set up the broker once from your computer — the round screen has no keyboard:
+  `python3 tools/merakiplus.py mqtt --ip <display> --host <broker> --user merakiplus` (asks for the password; the
+  broker must be on your local network). That writes Meraki+'s own `mqtt.conf` (never the stock `config.json`) and
+  switches publishing on; *SYSTEM → MQTT → PUBLISH DATA* turns it off and on, **STATUS** shows *CONNECTED* and
+  **LAST PUBLISH** the seconds since the last message.
+- Home Assistant (MQTT integration) shows a device **Meraki**: boiler / group / milk temperatures, cup and grinder
+  weight, activity, brew/steam ready, water low, faults and error codes, mains voltage and frequency, controller
+  firmware, the last shot (yield, time, dose, ratio, number of brews) and a **Machine event** entity that fires
+  `shot_finished`, `brew_started`, `steam_finished`, `error` and more — e.g. for a notification when the shot is done.
+- Every shot is also published as one self-contained JSON record on `merakiplus/<id>/shot` (same key names as Meraki
+  Companion where the meaning is the same; the weight curve in Beanconqueror's format).
+- **Try it without a machine:** `python3 tools/mqtt_demo.py --host <broker>` runs the real publisher with a canned
+  session. Everything, incl. a Node-RED shot journal and a notification automation:
+  [docs/integrations.md §15–16](docs/integrations.md#15-implemented-unreleased-mqtt--home-assistant-mvp).
+- Security: publish-only (no subscription, no command path), local broker only, plain MQTT (no TLS) in this version.
+  Use a **dedicated broker user that may only publish to `merakiplus/#`** — anyone on your network can read
+  `mqtt.conf` through the display's open telnet.
+
 ### The pressure estimate
 
 The machine's protocol does not provide a calibrated pressure value. Meraki+ therefore shows
@@ -369,9 +395,10 @@ Without `--persist` the machine starts the original UI. With `--persist`: see th
   [docs/signing.md](docs/signing.md).
 - **Planned:** an opt-in update check on the display itself — see [docs/ota-plan.md](docs/ota-plan.md)
   (phases 1a, 1b and 2 are done; on-device download is not implemented yet).
-- **Meraki+ itself** opens no new network ports and contacts no servers. Its only network function
-  is bringing up the display's Wi-Fi at boot from slot B (the same configuration the stock UI uses;
-  the password is never logged).
+- **Meraki+ itself** opens no new network ports and contacts no servers. Its only network functions
+  are bringing up the display's Wi-Fi at boot from slot B (the same configuration the stock UI uses;
+  the password is never logged) and — only if you switch MQTT on (unreleased) — an outbound, publish-only MQTT
+  connection to a broker on your own network ([details](docs/integrations.md#155-security-as-built)).
 - Found a security bug in Meraki+'s own code? See [SECURITY.md](SECURITY.md).
 
 ## Troubleshooting / FAQ
@@ -440,10 +467,10 @@ result (and your *DIAGNOSTICS → CONTROLLER* version) in an issue.
 ```
  /customer/          slot A — original UI (demo_v9), NEVER touched by Meraki+
  /new_customer/      slot B — Meraki+'s launcher is installed here as demo_v9
-   merakiplus/rel/   one directory per version (UI, sound player, sounds, MANIFEST): current + previous
+   merakiplus/rel/   one directory per version (UI, sound player, MQTT helper, sounds, MANIFEST): current + previous
    merakiplus/ota/   the launcher's state (current / previous / trial) and its log
    merakiplus/boot/  backups (demo_v9.vendor, demo.sh.bak), install state, gesture switcher
-   merakiplus/       own settings (lang, schedule, sound)
+   merakiplus/       own settings (lang, schedule, sound, mqtt.conf, shots)
  /customer/new       boot flag: if present, slot B starts at boot (only with --persist)
  /customer/test.sh   the manufacturer's watchdog: restarts "demo_v9" if it disappears
 ```
@@ -469,7 +496,7 @@ description (including the gesture, the watchdog race and the OTA table) is in
 | [docs/presets-spec.md](docs/presets-spec.md) | *Planned:* presets (named recipe sets) — model, own file, UI, NDEF tag format; stock's preset system reversed |
 | [docs/nfc-plan.md](docs/nfc-plan.md) | *Planned:* the NFC reader reversed (bus, chip, stock tag format and flow) and the phased NFC plan |
 | [docs/concurrent-brew-steam.md](docs/concurrent-brew-steam.md) | *Feasibility:* brewing and steaming at the same time — MCU/stock/Meraki+ evidence, sim result, hardware runbook |
-| [docs/integrations.md](docs/integrations.md) | *Design, not implemented:* a read-only data feed — shot records, local journal, MQTT and Home Assistant discovery; reach ranking, security review, coexistence with Meraki Companion |
+| [docs/integrations.md](docs/integrations.md) | A read-only data feed — MQTT + Home Assistant **implemented (unreleased)** (§15, the shot record and `shot_finished`, §16 test guide); design of the journal, bridges and Companion coexistence |
 | [docs/ota-plan.md](docs/ota-plan.md) | *Planned:* secure updates — storage/tooling/vendor-OTA inventory, signed manifests, boot launcher with automatic rollback, phases and tests |
 | [docs/water-dosing-compat.md](docs/water-dosing-compat.md) | Hot water by weight needs controller firmware > 5.1.2 — how the stock UI detects it (words 80..87), how Meraki+ gates it and its manual hot water (v6.22) |
 | [docs/mains-voltage.md](docs/mains-voltage.md) | 120 V / 60 Hz vs 230 V / 50 Hz — the controller's `set_voltage` modes, the E1 boot check, vendor specs, the pressure-estimate caveat |

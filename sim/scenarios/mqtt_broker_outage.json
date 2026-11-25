@@ -1,0 +1,109 @@
+{
+  "name": "mqtt_broker_outage",
+  "description": "MQTT (R7): the broker goes away (connections dropped and refused from 2 s to 16 s) and the brew starts DURING the outage: the brew runs exactly as without MQTT (phases, weight stop); the helper retries with back-off (2, 4, 8 s ± jitter), reconnects and delivers the queued brew_started event (QoS 1), then shot_finished + the retained shot record",
+  "ui_only": true,
+  "duration_s": 46,
+  "mqtt": {
+    "conf": {}
+  },
+  "events": [
+    {
+      "t": 2,
+      "target": "runner",
+      "op": "mqtt",
+      "action": "outage_on"
+    },
+    {
+      "t": 4,
+      "target": "ui",
+      "cmd": "action",
+      "name": "brew"
+    },
+    {
+      "t": 16,
+      "target": "runner",
+      "op": "mqtt",
+      "action": "outage_off"
+    }
+  ],
+  "expect": [
+    {
+      "kind": "phase_seq",
+      "t0": 0,
+      "t1": 46,
+      "values": [
+        "READY",
+        "PRE",
+        "EXT",
+        "READY"
+      ]
+    },
+    {
+      "kind": "phase",
+      "t": 6,
+      "window": 1.5,
+      "value": "PRE"
+    },
+    {
+      "kind": "phase",
+      "t": 14,
+      "window": 2,
+      "value": "EXT"
+    },
+    {
+      "kind": "state",
+      "t0": 5,
+      "t1": 15,
+      "path": "mqtt.status",
+      "equals": "disconnected"
+    },
+    {
+      "kind": "state",
+      "t0": 24,
+      "t1": 45,
+      "path": "mqtt.status",
+      "equals": "connected"
+    },
+    {
+      "kind": "mqtt_packets",
+      "allowed": [
+        "CONNECT",
+        "PUBLISH",
+        "PINGREQ",
+        "DISCONNECT"
+      ],
+      "will": true,
+      "no_secret": true,
+      "connections_min": 2
+    },
+    {
+      "kind": "mqtt",
+      "topic": "{base}/event",
+      "min": 1,
+      "where": {
+        "event_type": "brew_started"
+      }
+    },
+    {
+      "kind": "mqtt",
+      "topic": "{base}/event",
+      "min": 1,
+      "where": {
+        "event_type": "shot_finished"
+      },
+      "json": {
+        "completion_reason": "target_weight"
+      }
+    },
+    {
+      "kind": "mqtt",
+      "topic": "{base}/shot",
+      "min": 1,
+      "retain": true,
+      "json": {
+        "seq": 1,
+        "kind": "espresso"
+      }
+    }
+  ]
+}

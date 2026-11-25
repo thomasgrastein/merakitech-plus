@@ -15,7 +15,7 @@ import merakiplus as mp     # noqa: E402
 import sign_release as sr   # noqa: E402
 
 # the release assets of a published version (.github/workflows/release.yml `files` + the two sum files)
-BIN_ASSETS = ["merakiplus", "merakiplus_snd", "merakiplus_boot", "switcher", "grab_shim.so", "merakiplus_sim_arm",
+BIN_ASSETS = ["merakiplus", "merakiplus_snd", "merakiplus_mqtt", "merakiplus_boot", "switcher", "grab_shim.so", "merakiplus_sim_arm",
               "merakiplus_sim-linux-x86_64", "merakiplus_sim-macos-arm64"]
 AUDIO_ASSETS = sorted(mp.AUDIO_MD5)
 

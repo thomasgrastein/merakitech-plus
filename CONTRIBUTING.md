@@ -123,6 +123,9 @@ The full suite also runs weekly and on request (`workflow_dispatch` with `full_e
    `tools/merakiplus.py` (install/revert migration); `tests/hygiene.py` fails if they appear elsewhere.
 
 Do not bump the version in a community PR unless the maintainer has asked for it (see [Releases](#releases)).
+This applies to every feature PR, the maintainer's own included: a feature goes under **Unreleased** in
+`CHANGELOG.md`, keeps `VERSION` / `MERAKIPLUS_VERSION` at the last released version and never names a future
+version in docs or `bin/README.md`. The version is assigned only in the release PR.
 
 ### Maintainer and maintainer automation
 

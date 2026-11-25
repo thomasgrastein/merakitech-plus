@@ -1,0 +1,60 @@
+{
+  "name": "mqtt_off_default",
+  "description": "MQTT: opt-in — without mqtt.conf nothing starts: SYSTEM › MQTT shows OFF, no helper process, no connection to the (running) broker, a brew sends exactly its usual frames",
+  "ui_only": true,
+  "duration_s": 38,
+  "mqtt": {
+    "conf": null,
+    "feed_log": false
+  },
+  "events": [
+    {
+      "t": 2,
+      "target": "ui",
+      "cmd": "action",
+      "name": "brew"
+    }
+  ],
+  "expect": [
+    {
+      "kind": "phase_seq",
+      "t0": 0,
+      "t1": 38,
+      "values": [
+        "READY",
+        "PRE",
+        "EXT",
+        "READY"
+      ]
+    },
+    {
+      "kind": "state",
+      "t0": 1,
+      "t1": 37,
+      "path": "mqtt.status",
+      "equals": "off",
+      "mode": "all"
+    },
+    {
+      "kind": "state",
+      "t0": 1,
+      "t1": 37,
+      "path": "mqtt.helper_pid",
+      "equals": 0,
+      "mode": "all"
+    },
+    {
+      "kind": "state",
+      "t0": 1,
+      "t1": 37,
+      "path": "mqtt.feed",
+      "equals": false,
+      "mode": "all"
+    },
+    {
+      "kind": "mqtt_packets",
+      "allowed": [],
+      "connections_max": 0
+    }
+  ]
+}
