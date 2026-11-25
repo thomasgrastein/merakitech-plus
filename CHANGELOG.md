@@ -37,6 +37,12 @@ No device binary changed (`bin/` is byte-identical; `VERSION` stays 6.24 until a
   anchor is not code-owned.
 - Tests: installer (signed by default, `--allow-unsigned`, `max_seq`, `--ref`, the `install.sh` bootstrap with a fake
   `curl`), signing (key pin, review, draft commit, CI refusal, `release.yml` shape).
+## Unreleased — CoffeeSense NFC documentation
+
+### Added
+
+- [Original CoffeeSense NFC reference](docs/stock-coffeesense-nfc.md) covering the tag format, background
+  codes, compatible exports and writing a MIFARE Classic 1K tag.
 
 ## Unreleased — pull-request workflow (repository process only)
 No code or binary changed. Details: [CONTRIBUTING.md](CONTRIBUTING.md#how-changes-reach-main), [docs/release-process.md](docs/release-process.md).
