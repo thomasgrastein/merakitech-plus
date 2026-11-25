@@ -464,6 +464,7 @@ description (including the gesture, the watchdog race and the OTA table) is in
 | [docs/presets-spec.md](docs/presets-spec.md) | *Planned:* presets (named recipe sets) — model, own file, UI, NDEF tag format; stock's preset system reversed |
 | [docs/nfc-plan.md](docs/nfc-plan.md) | *Planned:* the NFC reader reversed (bus, chip, stock tag format and flow) and the phased NFC plan |
 | [docs/concurrent-brew-steam.md](docs/concurrent-brew-steam.md) | *Feasibility:* brewing and steaming at the same time — MCU/stock/Meraki+ evidence, sim result, hardware runbook |
+| [docs/integrations.md](docs/integrations.md) | *Design, not implemented:* a read-only data feed — shot records, local journal, MQTT and Home Assistant discovery; reach ranking, security review, coexistence with Meraki Companion |
 | [docs/ota-plan.md](docs/ota-plan.md) | *Planned:* secure updates — storage/tooling/vendor-OTA inventory, signed manifests, boot launcher with automatic rollback, phases and tests |
 | [docs/water-dosing-compat.md](docs/water-dosing-compat.md) | Hot water by weight needs controller firmware > 5.1.2 — how the stock UI detects it (words 80..87), how Meraki+ gates it and its manual hot water (v6.22) |
 | [docs/mains-voltage.md](docs/mains-voltage.md) | 120 V / 60 Hz vs 230 V / 50 Hz — the controller's `set_voltage` modes, the E1 boot check, vendor specs, the pressure-estimate caveat |
