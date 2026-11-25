@@ -466,8 +466,8 @@ description (including the gesture, the watchdog race and the OTA table) is in
 | [docs/time-scheduling.md](docs/time-scheduling.md) | Clock, 12/24 h, planned pre-heat (the controller's wake alarm) and auto off — stock semantics with addresses |
 | [docs/audio.md](docs/audio.md) | The stock UI's audio path (MI_AO, mm_player, the jingle and "pre-heat complete") and Meraki+'s per-boiler tones |
 | [docs/calibration.md](docs/calibration.md) | Pressure estimate, graph and weight conditioning |
-| [docs/presets-spec.md](docs/presets-spec.md) | *Planned:* presets (named recipe sets) — model, own file, UI, NDEF tag format; stock's preset system reversed |
-| [docs/nfc-plan.md](docs/nfc-plan.md) | *Planned:* the NFC reader reversed (bus, chip, stock tag format and flow) and the phased NFC plan |
+| [docs/presets-spec.md](docs/presets-spec.md) | *Planned:* presets (named recipe sets) and the settings overlay — model, own file, UI, the tag recipe layer, the optional NDEF card format; stock's preset system reversed |
+| [docs/nfc-plan.md](docs/nfc-plan.md) | *Planned:* NFC, read-first — the reader reversed (bus, chip, stock flow), the design for reading existing CoffeeSense tags like stock does (read-only, key looked up on the machine at runtime, never in this repository), tests and phases |
 | [docs/concurrent-brew-steam.md](docs/concurrent-brew-steam.md) | *Feasibility:* brewing and steaming at the same time — MCU/stock/Meraki+ evidence, sim result, hardware runbook |
 | [docs/integrations.md](docs/integrations.md) | *Design, not implemented:* a read-only data feed — shot records, local journal, MQTT and Home Assistant discovery; reach ranking, security review, coexistence with Meraki Companion |
 | [docs/ota-plan.md](docs/ota-plan.md) | *Planned:* secure updates — storage/tooling/vendor-OTA inventory, signed manifests, boot launcher with automatic rollback, phases and tests |

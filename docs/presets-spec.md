@@ -4,14 +4,23 @@ Status: **plan / spec for review**. Nothing in this file is implemented yet. Pha
 [nfc-plan.md](nfc-plan.md). Addresses are virtual addresses in `demo_v9` (build 1.1.1-69, symbols kept).
 
 A *preset* is a named recipe set: grind, brew, steam and hot water values. You switch between presets from the UI.
-NFC is optional. A tag is only a shortcut that selects a preset (phase 2) or carries a recipe card (phase 3).
+Presets need no NFC hardware.
+
+**How this file relates to the read-first NFC plan** ([nfc-plan.md §8](nfc-plan.md#8-phasing)):
+
+| nfc-plan phase | Uses from this file |
+|---|---|
+| 1a — overlay engine | §3.2, §4.2–§4.5, §5: the layers, the own file, boot push / re-push / assert. Built first, because both presets and tags stand on it |
+| 1b–1d — CoffeeSense read parity | §4.6: a tapped CoffeeSense tag becomes a *tag recipe* layer in the same overlay. It is not a preset and does not use a preset slot |
+| 2 — presets UI | §4.1, §6, §8: the list, the preset sheet, stock import, SAVE AS PRESET from a bean card |
+| 3 — optional | §7 (Meraki+'s own NDEF card format) and tag links. Demoted: reading the tags people already own comes first |
 
 ## 1. Goals and non-goals
 
 | | |
 |---|---|
 | **Goal** | Up to 8 named presets. Apply one with one tap. HOME shows which preset is active. The active preset survives a reboot and a controller restart. Works with no NFC hardware at all. |
-| **Goal** | `config.json` stays stock-owned. **Applying a preset never writes `config.json`**, and neither does editing a value while a preset is active. |
+| **Goal** | `config.json` stays stock-owned. **Applying a preset never writes `config.json`**, and neither does editing a value while a preset is active. The same holds for a tag recipe (§4.6). |
 | **Goal** | Every controller write goes through the existing single-word save path and frame policy (`setting_mcu_push`, `word_ok`, `frame_policy`). No new frame shapes. |
 | **Goal** | EN/DA strings in `STR_TABLE`. The selftest covers every path, plus a sim scenario set. |
 | Non-goal | Machine-level settings in presets (head temp, break time, backlight, volume, sound, auto off, schedule). A preset is a drink recipe, not a machine profile. |
@@ -48,10 +57,12 @@ What it changes:
 
 > **Brew temperature offset (open question Q-P1).** Stock stores and shows preset/NFC brew temperatures as
 > **word 11 + 5.0 °C**: preset capture adds 50, apply and the NFC path subtract 50. Meraki+ shows `brewTemper` / word 11
-> unchanged, which is the documented mapping (docs/dev/UI_v6.md §4). Meraki+ presets store the **raw config value**,
-> the same unit as the `SET` row. Importing a stock preset (§6) or a stock NFC value subtracts 50. Whether stock's
-> *main* brew page also adds 5.0 °C to word 11 must be checked before phase 1 ships. If it does, the BREW row's
-> label/hint is a separate fix and does not belong to the preset work.
+> unchanged, which is the documented mapping (docs/dev/UI_v6.md §4). Meraki+ presets and the tag recipe store the
+> **raw config value**, the same unit as the `SET` row. Importing a stock preset (§6) or applying a CoffeeSense tag
+> ([nfc-plan.md §5.4](nfc-plan.md#54-validate-and-normalize)) subtracts 50. The parity table lists stock's own
+> brew-temperature page as showing the raw value (870 = 87.0 °C), which would mean a tag that says 92 shows as 87.0 on
+> both UIs; one tap test under stock is still wanted to confirm it (nfc-plan §12, R3). If stock's page turns out to add
+> 5.0 °C, the BREW row's label/hint is a separate fix and does not belong to the preset or tag work.
 
 ## 3. Data model
 
@@ -93,11 +104,13 @@ never changes `breakTime` (113 lo).
 ### 3.2 Effective settings
 
 ```
-base       = config.json (stock-owned; changed only by a SAVE while NO preset is active — exactly today's path)
+base       = config.json (stock-owned; changed only by a SAVE while NO preset and NO tag recipe is active — today's path)
 active     = preset P or none
-tweaks     = per-field edits made while P is active (own file, §5)
+tag        = tag recipe T or none: at most the three fields d, bt, bw from a CoffeeSense tag (§4.6)
+tweaks     = per-field edits made while P or T is active (own file, §5)
 
 effective(f) = tweaks[f]           if present
+             = T[f]                if T is active and holds f
              = P[f]                if f's group is in P
              = base[f]             otherwise
 ```
@@ -107,15 +120,16 @@ re-push after a controller restart, and the start checks. `base` is what the sto
 
 ## 4. Behaviour
 
-### 4.1 Apply (from the list, from an NFC tag, or on boot)
+### 4.1 Apply (from the list, from a linked tag, or on boot)
 
 1. **Guard:** the same conditions as `save_begin`. The link must be up, no activity may be running (grind/brew/steam/water), and the write queue must be idle.
    If the guard fails, nothing happens and a toast reads `BUSY — TRY AGAIN AFTER THE SHOT`. NFC taps that hit the guard are dropped. They are not queued.
-2. Compute `target = effective` with P active and no tweaks. Diff it against the controller's current words (the register
-   mirror from the reads). Fields outside P's groups take the base value, because applying clears the tweaks.
+2. Compute `target = effective` with P active, no tweaks and no tag recipe. Diff it against the controller's current
+   words (the register mirror from the reads). Fields outside P's groups take the base value, because applying clears
+   the tweaks and the tag recipe.
 3. Push each differing word with `setting_mcu_push` (a single-word cmd6, waiting for the ACK) through `word_ok`/`frame_policy`.
    Start words are never part of a preset write. Words 26/27/30 stay compile-time forbidden.
-4. **All ACKed:** set `active = P.id`, clear `tweaks`, write the presets file atomically (§5). Toast:
+4. **All ACKed:** set `active = P.id`, clear `tweaks` and the `[tag]` layer, write the presets file atomically (§5). Toast:
    `ESPRESSO APPLIED · GRINDER 12` (the grinder part only if `g` is present). If the file write fails, keep the state for
    this session (like `SCS_SESSION`) and show `APPLIED (NOT SAVED)`.
 5. **Any NACK or timeout:** roll the words already pushed back to the previous effective values (the same rollback as
@@ -125,8 +139,8 @@ At most 10 words are pushed. An apply takes well under one second (ACK ≈ 25 ms
 
 ### 4.2 Base settings ("no preset")
 
-Choosing **BASE SETTINGS** in the list sets `active = none`, clears `tweaks` and pushes `base` for the words that differ.
-`config.json` is not touched.
+Choosing **BASE SETTINGS** in the list sets `active = none`, clears `tweaks` and the tag recipe, and pushes `base` for
+the words that differ. `config.json` is not touched.
 
 ### 4.3 Editing while a preset is active
 
@@ -134,15 +148,15 @@ The normal editor rows (GRIND/BREW/WATER/STEAM pages) keep their UI. Only the SA
 
 | State | SAVE writes to | Controller |
 |---|---|---|
-| No preset active | `config.json` (`cfg_set_int`, today's path) | single-word push (today) |
-| Preset P active | `tweaks[f]` in the presets file. **`config.json` is not touched.** | single-word push (same) |
+| No preset and no tag recipe active | `config.json` (`cfg_set_int`, today's path) | single-word push (today) |
+| Preset P and/or tag recipe T active | `tweaks[f]` in the presets file. **`config.json` is not touched.** | single-word push (same) |
 
 If tweaks exist, the HOME badge shows a dot (`ESPRESSO •`). The preset sheet then offers **UPDATE PRESET** (move the
 tweaks into P) and **DISCARD CHANGES** (re-apply P). Stock clears the preset on any edit instead. That was rejected here:
 the other preset-applied fields would silently fall back to `base`, so the values on the screen would jump.
 
 Editing a field whose group is *not* in P counts as a tweak too. It is not saved into `config.json`. The rule is simple:
-while a preset is active, nothing writes `config.json`.
+while a preset or a tag recipe is active, nothing writes `config.json`.
 
 ### 4.4 Boot, controller restart, run.sh start
 
@@ -160,6 +174,27 @@ Stock keeps base values in its RAM mirror and in `config.json`, and its next blo
 apply, sub 4 len 22) pushes them. To keep the screen and the controller in agreement, **SWITCH TO ORIGINAL pushes `base`
 for the preset words before handing over** (when a preset is active and differs). After the switch back, the assert
 step (§4.4) re-applies the active preset. The SYSTEM row's hint says so: `STOCK UI USES BASE SETTINGS`.
+
+### 4.6 Tag recipe (a tapped CoffeeSense tag)
+
+A CoffeeSense tag carries a dose, a brew temperature and a yield, plus a grind recommendation and a bean description.
+Stock writes the three values into `config.json`. Meraki+ keeps them in a **tag recipe** layer `T` instead (§3.2). The
+reader, the decode and the bean card are specified in [nfc-plan.md §5](nfc-plan.md#5-coffeesense-read-path--design);
+this section fixes how the layer behaves.
+
+| Event | Effect |
+|---|---|
+| Tag tapped (and decoded, values in range) | Guard as §4.1 step 1. `T` = the valid ones of `d`, `bt`, `bw`; tweaks on those same fields are dropped; the active preset and all other tweaks stay. Push the differing words (at most 4, 11, 23), single-word, with rollback as §4.1 step 5. Then one atomic file write (`[tag]` block, §5) |
+| A tag value outside its `SET` range | That field is left out of `T` (not clamped); the others apply; the bean card shows it as not set |
+| Edit of dose, temperature or yield while `T` is active | A tweak (§4.3). The tag recipe stays underneath |
+| CLEAR TAG RECIPE (bean sheet) | `T` = none; tweaks on its three fields are dropped; the values underneath (preset or base) are pushed |
+| Apply a preset, or BASE SETTINGS | Clears `T` (§4.1, §4.2) |
+| SAVE AS PRESET (bean sheet, phase 2) | A new preset with the GRIND and BREW groups captured from `effective`, `g` from the tag's grind value when it is 0..40, and the bean-card fields kept with it. The new preset becomes active and `T` is cleared |
+| Boot, controller restart, run.sh start, SWITCH TO ORIGINAL | §4.4 and §4.5 unchanged: they work on `effective`, which includes `T` |
+| The same tag still resting on the reader | Nothing. A tag is applied once per arrival (nfc-plan §5.7) |
+
+`T` is not a preset: it uses none of the 8 slots, has no groups and no id, and there is at most one. A tag never writes
+`config.json`, never sends a start word, and can only set values the editor rows could set.
 
 ## 5. File format — `/new_customer/merakiplus/presets`
 
@@ -195,6 +230,23 @@ groups=grind,brew
 d=150
 bt=900
 bw=500
+[tag]
+src=9c1f02ab
+d=188
+bw=360
+c.gs=12
+c.pw=18.8
+c.bt=84
+c.bw=36
+c.n1=Example Coffee
+c.n2=Example Roaster
+c.o1=Colombia
+c.f1=Cocoa
+c.el=1200
+c.pr=3
+c.ct=1
+c.rl=3
+c.bgn=1.1.1
 [tweaks]
 bt=920
 ```
@@ -202,15 +254,21 @@ bt=920
 Rules:
 * At most 8 `[preset]` blocks. Extra blocks are ignored. A block without a valid `id` or `n` is dropped.
 * `groups` is the list of groups in the preset. A key whose group is not listed is ignored.
-* `active` must match an `id`, otherwise the state is "none". `[tweaks]` without a matching `active` is ignored.
+* `active` must match an `id`, otherwise the state is "none". `[tweaks]` is ignored when there is neither a matching
+  `active` nor a `[tag]` block.
+* At most one `[tag]` block (§4.6). `d`, `bt`, `bw` are the layer, in config units and validated like preset values; a
+  missing one means the tag's value was not usable (in the example the tag's 84 °C maps below the BREW TEMP range, so
+  there is no `bt` line). `src` identifies the tag payload it came from (nfc-plan §5.7). The `c.` lines are the bean card
+  exactly as the tag gave it, after sanitizing: single-line text of at most 64 bytes each, used for display only.
 * The list is shown in file order. "Move up/down" is a later option; no ordering field is needed.
-* The same short keys are used on NFC tags (§7). One parser serves both.
-* The NFC tag map lives in a **separate** file, `/new_customer/merakiplus/nfc` ([nfc-plan.md](nfc-plan.md) §6.3). That way
-  phase 2 never rewrites the preset file and the two cannot corrupt each other.
+* The same short keys are used on Meraki+'s own NDEF cards (§7). One parser serves both.
+* The optional tag-link map lives in a **separate** file, `/new_customer/merakiplus/nfc`
+  ([nfc-plan.md §8, phase 3a](nfc-plan.md#8-phasing)). That way linking never
+  rewrites the preset file and the two cannot corrupt each other.
 * Install/revert: the installer creates nothing; the file appears on the first save. `revert` removes it together with the
   other own files (the same list as `schedule`/`sound`). Its absence means "no presets, base active".
 
-## 6. Importing stock presets (phase 1b)
+## 6. Importing stock presets (phase 2b)
 
 If `config.json` has `presetStore.items` (read-only parse) and `imported_stock` is not set, the PRESETS list shows the row
 `IMPORT 3 STOCK PRESETS`. The mapping:
@@ -228,14 +286,17 @@ If `config.json` has `presetStore.items` (read-only parse) and `imported_stock` 
 Out-of-range values drop the field, as on load. The import adds presets up to the 8-slot limit and sets `imported_stock=1`.
 Stock's `presetStore` is never written. Stock's `presetAppliedIndex` is ignored.
 
-## 7. NDEF tag format (phase 3; the reader side is in nfc-plan.md)
+## 7. NDEF tag format (optional phase 3b; the reader side is in nfc-plan.md)
+
+This is Meraki+'s **own** card format for writing and sharing recipes. It is secondary: reading the CoffeeSense tags
+people already own (§4.6, nfc-plan §5) comes first and does not depend on anything in this section.
 
 Tags carry **no secrets**. Anyone can read them with a phone, and a UID can be cloned. A tag only *selects* or *proposes* a
 recipe. It can never start the machine, and every value passes the same range check and frame policy as a manual SAVE.
 
 **Target tags:** NFC Forum Type 2, i.e. NTAG213 (144 B user area), NTAG215 (504 B) or NTAG216 (888 B). Stock's vendor cards
-are MIFARE Classic 1K with an encrypted vendor payload. Meraki+ **never writes MIFARE Classic**, so a vendor card cannot
-be damaged. It only uses their UID for linking (phase 2).
+are MIFARE Classic 1K with an encrypted vendor payload. Meraki+ reads those read-only (phase 1) and **never writes
+MIFARE Classic**, so a vendor card cannot be damaged.
 
 **NDEF message, in order:**
 
@@ -272,6 +333,10 @@ pp=3
 | `fl` | flavour notes, comma-separated, at most 3 | 16 chars each |
 | `rd` | roast date `YYYY-MM-DD` (HOME can show "day 12 since roast", phase 4) | |
 
+  These bean keys are Meraki+'s own. A bean card that came from a CoffeeSense tag keeps the stock field names with the
+  `c.` prefix (§5); writing such a preset to an NDEF card maps `c.n1`→`bn`, `c.n2`→`by`, `c.o1`→`or`, `c.el`→`al`,
+  `c.f1..f3`→`fl`. Stock's roast scale has 7 steps and its process is a code, so `rl` and `pr` are written as text labels.
+
 * Recipe only ≈ 70–90 B, which fits NTAG213. With bean keys ≈ 160–220 B, NTAG215 is recommended.
 * Unknown keys are ignored. `v` > 1 shows `NEWER CARD FORMAT` and applies nothing.
 * `id` links the card to the preset it was written from. On another machine no preset has that `id`, so the tap shows the card
@@ -292,7 +357,9 @@ long-press.
 * `W_LABEL` line (y≈110, idle): when a preset is active it shows a **pill badge** with icon + name (+ `•` when tweaked), the
   same style as the steam badge. When no preset is active but presets exist, it shows a dim `PRESETS` pill. When none exist,
   nothing. During an activity the line keeps showing the phase as today, so the badge is hidden.
-* Tapping the pill opens the PRESETS sheet.
+* When a tag recipe is active (§4.6) the pill shows the bean's first name line instead (+ `•` when tweaked) and opens the
+  bean sheet (nfc-plan §5.6); the active preset, if any, is named on that sheet.
+* Otherwise tapping the pill opens the PRESETS sheet.
 * The width budget of the badge text (12 glyphs) is enforced by the selftest's pixel-budget class for the label line.
 
 ### 8.2 PRESETS sheet (also SYSTEM → PRESETS)
@@ -303,7 +370,7 @@ long-press.
   ●  ★ ESPRESSO      18.0→36 G · 93.0°   ›
   ○  ☀ V60 BEANS     15.0→50 G · 90.0°   ›
   +  SAVE CURRENT AS PRESET
-     IMPORT 3 STOCK PRESETS               (phase 1b, only if available)
+     IMPORT 3 STOCK PRESETS               (phase 2b, only if available)
 ```
 
 * Tapping a row **applies** it (§4.1). The `●` marks the active preset. Tapping the `›` zone (right 64 px) opens that preset's sheet.
@@ -319,10 +386,11 @@ long-press.
 | DISCARD CHANGES | Only when active with tweaks: re-apply |
 | GROUPS | Toggle GRIND / BREW / STEAM / WATER (at least one) |
 | ICON | Cycles 0..7 |
-| NAME | Phase 1: `PRESET n` / imported / from card. Phase 1b: a character roller editor (font charset, 12 glyphs) |
+| NAME | Phase 2a: `PRESET n` / imported / from a bean card. Phase 2b: a character roller editor (font charset, 12 glyphs) |
 | GRINDER | Advisory dial value 0..40 or OFF |
-| LINK NFC TAG | Phase 2 (nfc-plan.md §6.3) |
-| WRITE TO TAG | Phase 3 |
+| BEAN CARD | Only for a preset saved from a CoffeeSense tag: shows its card (nfc-plan §5.6) |
+| LINK NFC TAG | Optional phase 3a (nfc-plan.md §8) |
+| WRITE TO TAG | Optional phase 3b (NDEF, §7) |
 | DELETE | Two-step confirm (existing pattern). Deleting the active preset → BASE (pushes base) |
 
 ### 8.4 Strings (EN / DA), new `STR_TABLE` entries (draft)
@@ -350,7 +418,8 @@ The selftest checks for both languages, matching printf conversions, glyph cover
 ## 9. Code touch points (`src/merakiplus.c`)
 
 * New: `struct preset`, `pr_load`/`pr_save` (the `sched_*` pattern), `pr_effective(i)`, `pr_apply(id)`, `pr_assert()`,
-  `pr_capture()`, `pr_import_stock()`.
+  `pr_capture()`, `pr_import_stock()`; for the tag layer `tag_apply()`, `tag_clear()` (same guard, push and rollback as
+  `pr_apply`).
 * `sv()` callers that feed the controller or the display read `pr_effective()` instead: `boot_push_words`, `repush_step`,
   HOME stats, start checks.
 * `save_begin`/`save_step` branch: config path vs tweak path (§4.3).
@@ -363,10 +432,16 @@ The selftest checks for both languages, matching printf conversions, glyph cover
 Selftest section `st_presets` (v6.20):
 * Parser: valid file, garbage lines, more than 8 blocks, an off-step value, an unknown group, a duplicate `id`, a missing
   `active`, a 4 KiB overflow. Round trip: save → load → byte-identical.
-* Effective: base only, preset with a partial group set, tweak precedence.
+* Effective: base only, preset with a partial group set, tweak precedence, tag layer over a preset and over base, tweak
+  over a tag value.
+* Tag recipe (§4.6): apply pushes only the differing ones of words 4/11/23 as single-word frames; an out-of-range field is
+  left out; a tweak on a tag field is dropped by a new tap and kept otherwise; clear pushes the values underneath; a preset
+  apply and BASE clear the layer; NACK rolls back and leaves the file unchanged; the `[tag]` block round-trips, and hostile
+  `c.` text (control characters, `[preset]`, over-long lines) cannot inject a block or a key.
 * Apply: the diff pushes only the changed words; packed 112/113 keep `breakTime`; a NACK on word k rolls back words < k and
   leaves the file unchanged; busy guard; frame-policy assertion (no start word, never 26/27/30).
-* **config.json invariant:** md5 is unchanged after apply / tweak / base / delete / import (the main guarantee).
+* **config.json invariant:** md5 is unchanged after apply / tweak / base / delete / import / tag apply / tag clear (the
+  main guarantee).
 * Boot push and controller-restart re-push use effective values; the run.sh assert pushes nothing when the controller already matches.
 * SWITCH TO ORIGINAL pushes base when it differs.
 * Import: stock fixture with 3 items (one with an out-of-range value, one with non-font glyphs).
@@ -381,9 +456,12 @@ Circle-clip check as usual.
 
 ## 11. Open questions
 
-* **Q-P1** Brew temp +5.0 °C (§2 box). Does stock's main brew page show word 11 + 5? It decides only the import offset and
-  possibly a label fix.
+* **Q-P1** Brew temp +5.0 °C (§2 box). Does stock's main brew page show word 11 + 5? The parity table says it shows the raw
+  value; a tap test under stock should confirm it (nfc-plan §12, R3). It affects only labels: the arithmetic for import and
+  for tags (subtract 50) is proven from the code.
 * **Q-P2** Naming: is a character roller acceptable on the 480 px round screen, or are names only set via import, tag and the
   installer tool (`tools/merakiplus.py presets edit`, a later option)?
 * **Q-P3** Should a preset optionally include `headTemper`? It is excluded for now (machine setting).
-* **Q-P4** Stock's grind dial range 0..40: is that the same scale as the physical dial on Gen1 and Gen2?
+* **Q-P4** Stock's grind dial range 0..40: is that the same scale as the physical dial on Gen1 and Gen2? And how does it
+  relate to a CoffeeSense tag's `gs`, which generators allow up to 100 (nfc-plan §12, R5)? Until that is known a tag's
+  grind value is shown as given and copied into a preset's `g` only when it is 0..40.
