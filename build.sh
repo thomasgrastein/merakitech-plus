@@ -81,6 +81,19 @@ for i in range(dy[5] // dy[9]):
     if tag == 0: break
 assert not und and not need, f"grab_shim.so has UND/NEEDED: {und} {need}"
 print("   grab_shim.so: no DT_NEEDED, no undefined symbols")
+# Deterministic trim (bin/README.md): keep only what the loader maps — the file up to the end of the last program
+# header's file range — and clear the section-header fields (e_shoff, e_shentsize, e_shnum, e_shstrndx). The result
+# is the shipped bin/grab_shim.so byte for byte, so tests/check_bins.py drift-checks it like every other binary.
+phoff, = struct.unpack_from('<I', d, 28)
+phes, phn = struct.unpack_from('<HH', d, 42)
+end = max(struct.unpack_from('<8I', d, phoff + i * phes)[1] + struct.unpack_from('<8I', d, phoff + i * phes)[4]
+          for i in range(phn))
+assert phoff + phes * phn <= end <= e_shoff, "grab_shim.so: unexpected layout (program headers / sections)"
+t = bytearray(d[:end])
+struct.pack_into('<I', t, 32, 0)
+struct.pack_into('<HHH', t, 46, 0, 0, 0)
+open(sys.argv[1], 'wb').write(bytes(t))
+print(f"   grab_shim.so: trimmed to the loaded segments ({len(d)} -> {len(t)} bytes)")
 PY
 fi
 

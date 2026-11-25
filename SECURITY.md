@@ -36,6 +36,11 @@ sign). The public key is [`keys/merakiplus-release.pub`](keys/merakiplus-release
 A release asset that does not match its signed manifest, or a signature by any other key, is not ours — please
 report it. Key custody, rotation and the threat model: [docs/signing.md](docs/signing.md).
 
+Releases are built by CI as drafts and published only after the maintainer has signed them; the installer refuses
+unsigned files by default. A published release without `manifest.json` + `manifest.sig` (other than v6.22 and older),
+or a `v*` tag that no published release points to, is not ours either. How releases are made and what CI is allowed to
+do: [docs/release-process.md](docs/release-process.md).
+
 ## Supported versions
 
 Only the [latest release](https://github.com/thomasgrastein/merakitech-plus/releases/latest) receives

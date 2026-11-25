@@ -154,23 +154,26 @@ reproducible file with the official toolchain (`switcher`, `tinj_hold`, `keyinj`
 Note that a zig cache shared with a Homebrew zig of the same version can hand its objects to the official
 zig: use a separate `ZIG_GLOBAL_CACHE_DIR`. `tests/hygiene.py` rejects Homebrew-built files in `bin/`. The Linux SIM build (`-target x86_64-linux-musl
 -static -s`) is reproducible the same way. CI enforces this on every push and PR
-(`tests/check_bins.py`): the committed `bin/` must be byte-identical to fresh builds of these eight
-reproducible targets, so a source change without a `bin/` rebuild fails CI. `grab_shim.so` (trimmed
-verified build, see below) and `merakiplus_sim-macos-arm64` (Mach-O is not bit-reproducible) are
-excluded from that check; `tests/hygiene.py` still md5-gates every file in `bin/`.
+(`tests/check_bins.py`): the committed `bin/` must be byte-identical to fresh builds of these nine
+reproducible targets (including the trimmed `grab_shim.so`, see below), so a source change without a `bin/`
+rebuild fails CI. Only `merakiplus_sim-macos-arm64` (Mach-O is not bit-reproducible) is excluded from that
+check; `tests/hygiene.py` still md5-gates every file in `bin/`.
 
-GitHub releases are maintained automatically by `.github/workflows/release.yml`: a `v*` tag push, a
-manual dispatch, or a push to `main` that bumps `VERSION` past the latest release builds, runs the
-full quick test gate and publishes the committed `bin/` assets (device binary, sound helper, switcher, `grab_shim.so`, the three
-WAVs from `audio/`, ARM SIM, Linux SIM, macOS SIM, `MD5SUMS`, `SHA256SUMS`) with the CHANGELOG section as notes. Re-runs update the existing release
-instead of creating a duplicate. The macOS SIM asset is the committed build from the table above —
+GitHub releases are built by `.github/workflows/release.yml` as **drafts**: a push to `main` that bumps
+`VERSION` past the latest release (or a manual run on `main`) builds, runs the full quick test gate from a cold
+zig cache and creates a draft with the committed `bin/` assets (device binary, sound helper, switcher, `grab_shim.so`, the three
+WAVs from `audio/`, ARM SIM, Linux SIM, macOS SIM, `MD5SUMS`, `SHA256SUMS`) with the CHANGELOG section as notes. CI never changes an existing release; the
+maintainer signs the draft and publishes it (docs/release-process.md). The macOS SIM asset is the committed build from the table above —
 CI does not rebuild it (no macOS runner needed), it ships exactly what `bin/MD5SUMS` lists.
 
 `grab_shim.so` (`c42076c807c54d477a5868977404186d`) is still the exact build that was verified on a real
 machine: its source change was comments/self-test text only and compiles to the same `.so` as before.
-Like the earlier verified builds it has only the non-loaded trailer removed (debug info, symbol table
-and section headers, which contained the original build machine's file paths); every loadable segment
-is byte-identical to the verified build, which is why its md5 differs from a `./build.sh` build.
+Like the earlier verified builds it has only the non-loaded trailer removed (section headers and the
+non-loaded sections after the last loadable segment); every loadable segment is byte-identical to the
+verified build. Since the security hardening (Unreleased) `./build.sh` applies that trim deterministically —
+the file is cut at the end of the last program header's file range and `e_shoff`, `e_shentsize`, `e_shnum`
+and `e_shstrndx` are cleared — so `build/grab_shim.so` equals this file byte for byte (official zig 0.17.1)
+and the drift check and the signing rebuild cover it like every other binary. The bytes did not change.
 
 Earlier history: the V6.16 builds (after the rename) were `737db9b97dcea27764c682381b70dff2` (`merakiplus`) and
 `9c3f1fdb3692283a4c9e1cbaebc05a56` (`merakiplus_sim_arm`). The translated-source v6.14 build of `merakiplus` was `eb4d9360756e391df4cc95f92b875c90`

@@ -14,9 +14,15 @@
     (v6.18.1: the display's libmi_common.so uses sem_post & co. without NEEDing libpthread — docs/audio.md §3)
   * no quoted ARM instructions (disassembly listings or fragments) in Markdown/text docs: stock firmware behaviour is
     described in prose or pseudocode with flash/RAM addresses only
+  * every trust anchor (tools/sign_release.py TRUST_ANCHORS) is owned by the repository owner in .github/CODEOWNERS
+  * workflows: actions pinned to commit SHAs, no pull_request_target/workflow_run, read-only default token, no persisted
+    checkout credentials, contents: write only in release.yml's publish job; Dependabot for github-actions
+
+    python3 tests/hygiene.py --trust-anchors CHANGED.txt   advisory: list changed trust anchors (CI warning), exit 0
 """
 import hashlib
 import json
+import os
 import pathlib
 import re
 import subprocess
@@ -25,6 +31,21 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
 import merakiplus  # noqa: E402
+import sign_release  # noqa: E402
+
+if len(sys.argv) == 3 and sys.argv[1] == "--trust-anchors":
+    # CI (ci.yml `changes`): advisory warning for the reviewer when a change touches a trust anchor. Never fails.
+    changed = [ln.strip() for ln in pathlib.Path(sys.argv[2]).read_text().splitlines() if ln.strip()]
+    hits = sign_release.trust_anchor_hits(changed)
+    for h in hits:
+        print(f"::warning file={h}::trust anchor changed: {h} — review this diff line by line (.github/CODEOWNERS)")
+    msg = (f"Trust anchors changed: **{len(hits)}** — " + ", ".join(f"`{h}`" for h in hits)) if hits else \
+        "Trust anchors changed: none"
+    print(msg)
+    if os.environ.get("GITHUB_STEP_SUMMARY"):
+        with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+            f.write(msg + "\n")
+    sys.exit(0)
 
 fails = []
 
@@ -220,6 +241,49 @@ for p in files:
     if p.suffix not in (".png", ".gz", ".wav") and not p.relative_to(ROOT).as_posix().startswith("bin/") and \
             re.search(rb"-----BEGIN[ ][A-Z ]*PRIVATE[ ]KEY-----|untrusted[ ]comment:[^\n]*secret[ ]key", p.read_bytes()):
         fail(f"{p.relative_to(ROOT)}: contains a private key")
+
+# 9. trust anchors (docs/release-process.md "CI hardening"): every path in tools/sign_release.py TRUST_ANCHORS is owned
+#    by the repository owner in .github/CODEOWNERS (last matching rule wins, as on GitHub)
+OWNER = "@" + merakiplus.REPO.split("/")[0]
+_co = ROOT / ".github" / "CODEOWNERS"
+_rules = []
+if _co.is_file():
+    for ln in _co.read_text().splitlines():
+        f = ln.split("#", 1)[0].split()
+        if f:
+            _rules.append((f[0].lstrip("/"), f[1:]))
+else:
+    fail(".github/CODEOWNERS is missing")
+for a in sign_release.TRUST_ANCHORS:
+    owners = None
+    for pat, who in _rules:
+        if a == pat or (pat.endswith("/") and a.startswith(pat)):
+            owners = who
+    if not owners or OWNER not in owners:
+        fail(f"trust anchor {a} is not owned by {OWNER} in .github/CODEOWNERS")
+
+# 10. workflow hardening must not regress: actions pinned to a full commit SHA, no privileged-on-untrusted triggers,
+#     read-only default token, no persisted checkout credentials, contents: write only in release.yml's publish job;
+#     Dependabot keeps the pins current
+for wf in sorted((ROOT / ".github" / "workflows").glob("*.yml")):
+    t, rel = wf.read_text(), wf.relative_to(ROOT).as_posix()
+    for m in re.finditer(r"^\s*(?:-\s*)?uses:\s*(\S+)", t, re.M):
+        if not re.fullmatch(r"[\w.-]+/[\w./-]+@[0-9a-f]{40}", m.group(1)):
+            fail(f"{rel}: action not pinned to a full commit SHA: {m.group(1)}")
+    if re.search(r"^\s*(pull_request_target|workflow_run)\s*:", t, re.M):
+        fail(f"{rel}: privileged trigger (pull_request_target / workflow_run) — not allowed")
+    if not re.search(r"^permissions:\s*\n\s+contents:\s*read\s*$", t, re.M):
+        fail(f"{rel}: the workflow-level token must be read-only (permissions: contents: read)")
+    n_co = len(re.findall(r"uses:\s*actions/checkout@", t))
+    n_pc = len(re.findall(r"^\s*persist-credentials:\s*false", t, re.M))
+    if n_co != n_pc:
+        fail(f"{rel}: {n_co} checkout(s) but {n_pc} with persist-credentials: false")
+    n_w = len(re.findall(r"^\s*contents:\s*write", t, re.M))
+    if n_w != (1 if wf.name == "release.yml" else 0):
+        fail(f"{rel}: contents: write {n_w}x (only release.yml's publish job may have it, once)")
+_dep = ROOT / ".github" / "dependabot.yml"
+if not _dep.is_file() or "package-ecosystem: github-actions" not in _dep.read_text():
+    fail(".github/dependabot.yml must keep the pinned GitHub Actions up to date (package-ecosystem: github-actions)")
 
 print("HYGIENE: " + ("OK" if not fails else f"{len(fails)} problem(s)"))
 sys.exit(1 if fails else 0)

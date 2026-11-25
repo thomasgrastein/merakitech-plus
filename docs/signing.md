@@ -15,7 +15,16 @@ Every Meraki+ release can carry two extra assets:
 so a verified manifest also vouches for them.
 
 **CI cannot sign.** The private key never leaves the maintainer's computer; it is not in GitHub, not in CI secrets,
-not in this repository. Until the maintainer has signed a release, it is simply unsigned.
+not in this repository.
+
+**Draft → sign → publish** (from the first release after the security hardening; [release-process.md](release-process.md)):
+CI only builds a *draft* release, which is invisible to the public and has no git tag yet. The maintainer signs the
+draft and publishes it in the same step (§5), so no unsigned release is ever public. With immutable releases enabled
+on the repository, a published release — its assets and its tag — cannot be changed or deleted afterwards. (v6.23 and
+v6.24 were published first and signed 17-52 minutes later under the old flow.)
+
+**Signed by default** (installer, same point in time): `./install.sh` refuses files that are not covered by a valid
+signed manifest (§4). `--allow-unsigned` is the explicit escape hatch for development builds.
 
 ---
 
@@ -94,7 +103,8 @@ hardware token.
 | What | Where | Notes |
 |---|---|---|
 | Private key | `~/.merakiplus/signing_ed25519.pem` on the maintainer's Mac | PKCS#8, **scrypt (N = 2¹⁴, r = 8, p = 1) + AES-256-CBC** (OpenSSL 3). Mode 600, directory 700. Outside the repository and any synced work directory. The plaintext key never touched a disk (generated in a pipe). |
-| Public key | `keys/merakiplus-release.pub`, `TRUSTED_KEYS` in `tools/merakiplus.py`, `src/merakiplus_upd_keys.h` | `tests/hygiene.py` fails if the three differ, and if anything in the tree looks like a private key. |
+| Public key | `keys/merakiplus-release.pub`, `TRUSTED_KEYS` in `tools/merakiplus.py`, `src/merakiplus_upd_keys.h` | `tests/hygiene.py` fails if the three differ, and if anything in the tree looks like a private key. All three are trust anchors owned in `.github/CODEOWNERS`. |
+| Key pin | `~/.merakiplus/trusted-key-pin` on the maintainer's Mac — **outside the repository** | `<key id> <public key hex>` per line, written by `tools/sign_release.py pin-keys` from the *private* key (not from repository files). `sign` compares the three key copies **at the commit being signed** with it and refuses any difference (a key added or replaced by a merged PR) unless `--accept-key-change`. A PR cannot change this file. |
 | Warm backup | a dedicated folder in the maintainer's iCloud Drive | **The encrypted key file only** (+ `.pub`). Survives the loss of the Mac. |
 | Cold backup (recommended) | an offline USB stick in a drawer | Copy the same encrypted `.pem` (and the `.pub`). Check it once a year. |
 | Passphrase | a password manager, or on paper kept offline | **Never next to the key**: not in iCloud Drive, not in the repository, not in notes, chats, logs or shell history. Key file and passphrase are only dangerous together. |
@@ -128,15 +138,28 @@ maintainer chose backup copies of the one encrypted key; rotation as above cover
 
 | Where | Code | When | What happens on failure |
 |---|---|---|---|
-| Companion installer (computer) | `tools/merakiplus.py` (pure-Python RFC 8032 Ed25519, standard library only — the standalone `install.sh` fetches just this one file) | every `install`: the signed manifest of `v<VERSION>` from the `--bin-dir` directory if it holds one, else from the GitHub release; every file to be installed must be listed with the same size + SHA-256 | abort **before anything on the display changes** |
-| Release workflow (CI) | `tools/merakiplus.py verify-release` | a re-run for an already signed release | the job fails; assets under a signed manifest are never replaced |
+| Companion installer (computer) | `tools/merakiplus.py` (pure-Python RFC 8032 Ed25519, standard library only — the standalone `install.sh` fetches just this one file, from the latest release tag) | every `install`: the signed manifest of `v<VERSION>` from the `--bin-dir` directory if it holds one, else from the GitHub release; every file to be installed must be listed with the same size + SHA-256 | abort **before anything on the display changes** (signed by default) |
+| Release workflow (CI) | — | never changes an existing release (draft or published) | the run reports it and stops |
 | Maintainer | `tools/sign_release.py` | after signing, before and after the upload | not uploaded / investigate |
 | Display (phase 3) | `src/merakiplus_upd.c` + `src/merakiplus_crypto.zig` (Zig standard library Ed25519 + SHA-256), static ARMv7, ~96 KB | every on-device download and every install that stages it | nothing is staged |
 
 The installer also records `max_seq` on the display and refuses older signed releases (§2).
 
-**No signed manifest** (offline computer, a development build, a release not signed yet): the installer warns and
-falls back to its pinned SHA-256 table, as before. `--require-signed` turns that warning into an abort.
+**Signed by default.** No signed manifest (offline computer, a development build, a draft that is not published yet),
+or files that differ from the signed manifest of `v<VERSION>` (a development checkout between releases): the
+installer **stops before anything on the display changes**. `--allow-unsigned` is the explicit escape hatch: it
+installs such files with a loud `UNSIGNED install` warning, checked against the pinned SHA-256 table only. It is
+refused on a display that already accepted a signed release (`max_seq` recorded) unless `--allow-downgrade` is given
+as well, and it never excuses a bad signature, an unknown key or an older `seq`. `--require-signed` is still accepted
+(it is the default now). Downloads come from the release tag `v<VERSION>`; `--ref`/`MERAKIPLUS_REF` accept only release
+tags (`vX.Y[.Z]`) and full 40-character commit SHAs — never a branch.
+
+**Bootstrap — the one thing a signature cannot fix.** The installer verifies files with the key *it* carries. A
+first-time user who downloads the installer has to trust where it came from: GitHub and this repository (TLS). The
+standalone `install.sh` therefore fetches the installer from the **latest published release tag**, not from a branch,
+and a git clone should be checked out at a release tag (README). The key id is listed here and in the release notes;
+cross-check it with a copy you obtained earlier (an older clone keeps its own pins and key and is not affected by a
+later change to the repository).
 
 The device verifier is **built and tested but not shipped yet** (no release contains it; nothing on the display runs
 it). It ships with phase 3 or with the first release that stages it into `rel/<x>/` — that is a shipped-binary change
@@ -154,49 +177,67 @@ directories and caches with the official zig 0.17.1).
 
 ---
 
-## 5. Signing runbook (maintainer)
+## 5. Signing runbook (maintainer) — draft → sign → publish
 
 Prerequisites on the maintainer's computer: a clone of this repository, `gh` logged in, OpenSSL ≥ 3
 (`brew install openssl@3`), and the **official** zig 0.17.1 tarball unpacked somewhere (Homebrew's zig differs in the
-ELF `.comment`, see [bin/README.md](../bin/README.md)).
+ELF `.comment`, see [bin/README.md](../bin/README.md)). Once: `python3 tools/sign_release.py pin-keys` (asks the key
+passphrase; writes `~/.merakiplus/trusted-key-pin` from the private key — compare the key id with §1).
 
-1. CI publishes the release as usual (a merged PR that bumps `VERSION` on `main`, see [release-process.md](release-process.md); a tag; or *Run workflow*). Wait until the
-   release workflow is green.
-2. Sign:
+Run the signing tool from a checkout you trust, **not** from a freshly pulled `main` you have not read: it imports the
+verifier from that checkout and runs the release commit's `build.sh` in a worktree on this computer, next to the key.
+A dedicated clone that you update only after reading the diff (or a separate macOS user without access to
+`~/.merakiplus/` for the rebuild) keeps a hostile merge away from the key.
+
+1. The release PR (version bump) is merged into `main` (release-process.md). `release.yml` builds and tests it and
+   creates a **draft** release `vX.Y` with the unsigned assets and `manifest.unsigned.json`. Wait until it is green.
+2. Sign and publish:
 
    ```sh
-   git pull
+   git fetch origin
    ./build.sh host                       # also builds build/merakiplus_upd_host, used as a second verifier
-   python3 tools/sign_release.py sign v6.24 --zig-dir ~/zig-aarch64-macos-0.17.1 --upload
+   python3 tools/sign_release.py sign vX.Y --zig-dir ~/zig-aarch64-macos-0.17.1 --upload
    ```
 
    The tool, in this order, stops at the first problem:
-   1. downloads every asset of the release;
+   1. refuses to run in CI; downloads every asset of the (draft) release;
    2. re-verifies every earlier signed manifest and takes `seq = highest + 1` (the version must be newer than the
-      last signed one; an already signed release needs `--resign`, which keeps its `seq`);
-   3. rebuilds the **tagged** source in a temporary `git worktree` with the official zig and its own cache;
-   4. compares byte for byte: every reproducible binary (the list in `tests/check_bins.py`) = fresh build = committed
-      `bin/` at the tag = downloaded asset; `grab_shim.so` and the macOS SIM (not reproducible by design) = committed
-      `bin/` at the tag; the WAVs = `audio/` at the tag (and `tools/gen_audio.py --check` ran in the build);
-      `MD5SUMS` / `SHA256SUMS` = recomputed from the downloads. Any unknown asset stops it;
-   5. writes `manifest.json`; if CI published `manifest.unsigned.json`, the assets / release / platform sections must
-      be identical;
-   6. signs with OpenSSL (**it asks for the passphrase on the terminal**; type it, nothing is stored);
-   7. verifies the signature with the keys pinned in `tools/merakiplus.py` (not with the key file) and with the device
+      last signed one; an already signed draft needs `--resign`, which keeps its `seq` — a published release is
+      immutable and cannot be re-signed);
+   3. resolves the commit: the tag's commit if the tag exists, else the draft's target, which must be a full SHA on
+      `origin/main` whose `VERSION` equals the tag;
+   4. **review**: the commit list and diffstat since the last signed release, with every changed **trust anchor**
+      (`.github/`, `install.sh`, `revert.sh`, `build.sh`, `tools/merakiplus.py`, `tools/sign_release.py`, `keys/`,
+      `src/merakiplus_upd_keys.h`, `tests/hygiene.py`, `tests/check_bins.py`, `bin/`) flagged — read those diffs
+      line by line; then the three key copies at that commit against your key pin (any difference: refused unless
+      `--accept-key-change`); then **you type the first 12 characters of the commit** to confirm what you reviewed;
+   5. rebuilds that commit in a temporary `git worktree` with the official zig and its own cache;
+   6. compares byte for byte: every reproducible binary (the list in `tests/check_bins.py`, which includes the
+      deterministically trimmed `grab_shim.so` from this change on) = fresh build = committed `bin/` = downloaded asset;
+      the macOS SIM (Mach-O, not reproducible) = committed `bin/`; the WAVs = `audio/` (and `tools/gen_audio.py --check`
+      ran in the build); `MD5SUMS` / `SHA256SUMS` = recomputed from the downloads. Any unknown asset stops it;
+   7. writes `manifest.json`; CI's `manifest.unsigned.json` must be identical in assets / release / platform / commit;
+   8. signs with OpenSSL (**it asks for the passphrase on the terminal**; type it, nothing is stored);
+   9. verifies the signature with the keys pinned in `tools/merakiplus.py` (not with the key file) and with the device
       verifier's host build;
-   8. with `--upload`: asks once more, uploads `manifest.json` + `manifest.sig`, downloads the release again and runs
-      `verify-release` on it.
+   10. with `--upload`: asks, uploads `manifest.json` + `manifest.sig` to the draft, downloads it again and runs
+       `verify-release`; then asks once more and **publishes** the draft (`--latest` for a stable version). Publishing
+       creates the tag at the signed commit; the tool checks that the tag points there and verifies the published
+       release once more. `--no-publish` stops after the upload.
 
-   Without `--upload` the files stay in `build/sign-<tag>/out/` for a manual `gh release upload`.
+   Without `--upload` the files stay in `build/sign-<tag>/out/` for a manual `gh release upload` + `gh release edit
+   <tag> --draft=false`.
 3. Done. Optionally keep the signed pair as a test fixture: `tests/fixtures/release-<tag>/` (the tests verify every
    fixture with the production verifiers).
 
-Never sign when step 4 reports a mismatch: it means the published binaries are not what the tagged source builds to
-(wrong toolchain at release time, a manual upload, or a compromise). Investigate first.
+Never sign when step 6 reports a mismatch: it means the release binaries are not what the commit builds to (wrong
+toolchain at release time, a manual upload, or a compromise). Investigate first. Rebuilding a draft: delete it
+(`gh release delete vX.Y` — a draft has no tag) and run the release workflow on `main` (*Run workflow*).
 
 New key (only for a rotation or after a loss): `python3 tools/sign_release.py keygen` → asks the passphrase twice,
 writes `~/.merakiplus/signing_ed25519.pem` (+ `.pub`), refuses to overwrite a key or to write inside the repository,
-proves the key signs. Then pin the public key (§3) and make the backups.
+proves the key signs. Then pin the public key (§3), run `pin-keys` again, and make the backups. A rotation release is
+signed with `--accept-key-change` once.
 
 ---
 
@@ -204,8 +245,9 @@ proves the key signs. Then pin the public key (§3) and make the backups.
 
 | Attack | Result once the display verifies (phase 3) | Today (companion installer verifies) |
 |---|---|---|
-| Compromised CI / leaked `GITHUB_TOKEN` / malicious workflow change | can publish binaries and a manifest, but cannot sign → refused | refused by an installer from a trusted checkout |
-| Hijacked GitHub account | same as above: no key on GitHub | same; but the attacker can also change `tools/merakiplus.py` on `main` (incl. its keys), so a *freshly downloaded* installer is not a trust anchor — an installer from an earlier, known-good clone is |
+| Compromised CI / leaked `GITHUB_TOKEN` / malicious workflow change | can publish binaries and a manifest, but cannot sign → refused | CI only has a write token in the job that creates the draft (no repository code runs there); a draft is not public and an unsigned release is refused by the installer (signed by default) |
+| Malicious PR merged into `main` (incl. new pins, binaries, or a key added to the three key copies) | not signed unless the maintainer signs it | not installed: users install release tags, and an unsigned or mismatching release is refused. At signing time the tool shows every commit and trust-anchor change since the last signed release and refuses a key change that is not in the maintainer's out-of-repository key pin |
+| Hijacked GitHub account | same as above: no key on GitHub | same; but the attacker can also change `tools/merakiplus.py` (incl. its keys) and publish a release, so a *freshly downloaded* installer is not a trust anchor — an installer from an earlier, known-good clone is. Immutable releases stop a published signed release from being altered or stripped of its signature |
 | Tampered download / CDN / TLS-intercepting proxy | hash or signature mismatch → refused | refused |
 | Malicious pull request merged into a release | the maintainer's local rebuild compares the binaries with the tagged source, not the intent of the code: review stays essential | same |
 | Older, validly signed release with known bugs | `seq < max_seq` → OLDER VERSION REFUSED | refused (`max_seq` on the display) unless `--allow-downgrade` |
@@ -227,7 +269,17 @@ tagged source. It does not prove the code is good.
   a path in the repository, wrong passphrase), the release workflow's manifest command (dry run on a CI-like `dist/`),
   the published v6.23 manifest with the production verifiers, and that production builds trust only the pinned key.
   `--arm` runs the same cases with the static ARM build in an arm32v7 container.
-- `tests/test_installer.py`, scenario *2: signed release manifest* — verification before any change on the display,
-  tampered / wrong key / missing signature / a file not in the manifest refused, `max_seq` recorded, re-install,
-  downgrade refused and `--allow-downgrade`, unsigned fallback, `--require-signed`, revert.
+- `tests/test_upd.py`, *signing hardening* — trust-anchor classification, key pin (missing → warning; added /
+  replaced / one-copy key change → refused; `--accept-key-change`; malformed pin; never inside the repository), review
+  since the last signed tag (commits, diffstat, trust-anchor warning) on a throwaway git repository, draft commit
+  resolution (target on `origin/main`, VERSION match, branch names / unmerged commits / tag mismatch refused),
+  commit confirmation, no signing in CI, and the shape of `release.yml` (main only, read-only token, write only in the
+  draft job, no asset replacement or deletion, cold zig cache).
+- `tests/test_installer.py`, scenario *2: signed release manifest* — signed by default (no manifest → refused),
+  tampered / wrong key / missing signature / a file not in the manifest refused (also with `--allow-unsigned`),
+  `max_seq` recorded, re-install, downgrade refused and `--allow-downgrade`, unsigned install on a display with
+  `max_seq` refused unless `--allow-unsigned --allow-downgrade`, `--require-signed` still accepted, revert. Scenario
+  *2b*: development builds with `--allow-unsigned`, `--ref` validation, default ref. *install.sh bootstrap*: the
+  standalone installer resolves the latest published release tag and fetches from it, `MERAKIPLUS_REF` validation
+  (fake `curl`, no network).
 - `./build.sh` runs `merakiplus_upd_host --selftest`; `tests/hygiene.py` checks the pinned keys.

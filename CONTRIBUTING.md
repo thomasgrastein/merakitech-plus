@@ -83,10 +83,11 @@ maintainer's automation (coding agents) alike. `main` is protected:
 
 | Rule on `main` | Setting |
 |---|---|
-| Pull request required | yes, with **1 approving review** from a maintainer |
+| Pull request required | yes, with **1 approving review** from a maintainer; a new push **dismisses** earlier approvals; changes to trust anchors need the **code owner** ([`.github/CODEOWNERS`](.github/CODEOWNERS)) |
 | Required status check | **`merge-gate`** (CI), branch must be **up to date** with `main` before merge |
 | Force-push / branch deletion | not allowed |
 | Administrators | may bypass (see below) |
+| Tags `v*` | created only by the owner, by publishing a signed draft release (tag ruleset) |
 
 ### The CI gate: `merge-gate`
 
@@ -124,32 +125,47 @@ The full suite also runs weekly and on request (`workflow_dispatch` with `full_e
 
 Do not bump the version in a community PR unless the maintainer has asked for it (see [Releases](#releases)).
 
+**Trust anchors.** Some files decide what users install and which signatures they trust: `.github/`, `install.sh`,
+`revert.sh`, `build.sh`, `tools/merakiplus.py` (pins, keys, verifier), `tools/sign_release.py`, `keys/`,
+`src/merakiplus_upd_keys.h`, `tests/hygiene.py`, `tests/check_bins.py` and `bin/`. They are owned by the maintainer in
+`.github/CODEOWNERS`; CI marks a PR that touches one with a warning. That is not a rejection — it means the diff is read
+line by line. Keep such changes small and separate from feature work where you can.
+
 ### Maintainer and maintainer automation
 
 The maintainer's own work — and work done by coding agents on the maintainer's behalf — follows the
 same flow: a branch in this repository (`vX.Y-topic`, `feat/…`, `docs/…`) → `gh pr create` → CI
-(`merge-gate`) → the maintainer merges. Agents never merge and never push to `main`; they open the PR
-and report its CI state.
+(`merge-gate`) → the maintainer merges (`gh pr merge --admin` once `merge-gate` is green). Agents never merge, never
+push to `main`, never create tags and never publish or sign a release; they open the PR and report its CI state.
+Recommended: agents use a fine-grained token for this repository with *Contents* and *Pull requests* write access
+only — not the owner's login (see [docs/release-process.md](docs/release-process.md#8-credentials-for-automation)).
 
 The repository owner is an administrator, and branch protection is configured **without** enforcing
 the rules for administrators. The owner can therefore merge their own (or an agent's) PR without a
 second reviewer — there is no other maintainer to review — and can push to `main` directly in an
 emergency. This is a deliberate escape hatch, not the normal path: wait for `merge-gate` before
-merging, as everyone else does.
+merging, as everyone else does. The owner uses pull requests for their own changes too.
 
 ## Releases
 
 **Releases are published only after explicit approval from the maintainer.** Other owners run these
-builds on their machines, so a release is a decision, not a side effect. The approval *is* the merge:
+builds on their machines, so a release is a decision, not a side effect.
 
-1. A pull request bumps the version (`VERSION` in `tools/merakiplus.py` **and** `MERAKIPLUS_VERSION`
-   in `src/merakiplus.c`), updates `CHANGELOG.md` and, for device changes, `bin/`.
+**Version discipline.** Feature, fix and tooling PRs keep `VERSION` and `MERAKIPLUS_VERSION` at the last released
+version and add their `CHANGELOG.md` entry under `## [Unreleased]`; a shipped binary they change is rebuilt with the
+unchanged version string. Only a release PR assigns a version.
+
+1. A release PR bumps the version (`VERSION` in `tools/merakiplus.py` **and** `MERAKIPLUS_VERSION`
+   in `src/merakiplus.c`), moves the `Unreleased` changelog entries into the new version and, for device changes,
+   updates `bin/`.
 2. The maintainer merges it once `merge-gate` (including the full E2E suite) is green.
 3. On the push to `main`, [`release.yml`](.github/workflows/release.yml) sees a version newer than the
-   latest release, re-runs the test gate and publishes the release with **unsigned** assets
-   (`manifest.unsigned.json` for comparison).
-4. The maintainer signs the release offline (`tools/sign_release.py`, next `seq`) and uploads
-   `manifest.json` + `manifest.sig` — see [docs/signing.md](docs/signing.md).
+   latest release, re-runs the test gate (cold build) and creates a **draft** release (unsigned assets,
+   `manifest.unsigned.json`; not public, no tag).
+4. The maintainer reviews, signs and publishes the draft offline (`tools/sign_release.py sign vX.Y --upload`: diff
+   since the last signed release, key pin, byte-for-byte rebuild, next `seq`, `manifest.json` + `manifest.sig`, publish)
+   — see [docs/signing.md](docs/signing.md). Only then can the release be installed: the installer is **signed by
+   default** and refuses unsigned files unless `--allow-unsigned` is given (development builds).
 
 Details: [docs/release-process.md](docs/release-process.md). Do not bump the version or trigger the
 release workflow without prior agreement. CI may build and test any commit; publishing a release

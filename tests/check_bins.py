@@ -13,9 +13,11 @@ zig (e.g. Homebrew's), whose clang/LLD write their own name into the ELF .commen
 every byte of code matches but the md5 does not. Rebuild with the official toolchain (and its
 own cache dir), then update bin/MD5SUMS and BIN_MD5 in tools/merakiplus.py (CONTRIBUTING.md).
 
+grab_shim.so is included: ./build.sh trims the fresh build deterministically (only the loaded
+segments, section-header fields cleared), which reproduces the on-device-verified bin/grab_shim.so
+byte for byte (bin/README.md).
+
 Excluded on purpose:
-  * grab_shim.so — the committed file is the on-device-verified build with only the
-    non-loaded trailer trimmed; a fresh ./build.sh build differs by design (bin/README.md).
   * merakiplus_sim-macos-arm64 — Mach-O builds are not bit-reproducible; the committed
     build (made on macOS) is shipped as-is. tests/hygiene.py still md5-gates it.
 """
@@ -33,6 +35,7 @@ REPRODUCIBLE = (
     "merakiplus_snd",
     "merakiplus_boot",
     "merakiplus_sim-linux-x86_64",
+    "grab_shim.so",
 )
 
 

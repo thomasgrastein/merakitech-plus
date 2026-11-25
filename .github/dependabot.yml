@@ -1,0 +1,11 @@
+# Weekly pull requests that move the SHA-pinned GitHub Actions (ci.yml, release.yml) to their newest release.
+# They go through the normal PR flow (merge-gate, maintainer review): read the action's changelog before merging.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci(deps)"

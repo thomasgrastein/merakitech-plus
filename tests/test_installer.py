@@ -54,12 +54,15 @@ def tree_digest(root):
     return h.hexdigest()
 
 
-def run(srv, root, *args):
+def run(srv, root, *args, unsigned=True):
+    """unsigned=True: installs pass --allow-unsigned (the repo's bin/ has no signed manifest here; the signed-by-default
+    behaviour itself is tested in the "phase 2" scenario with unsigned=False)."""
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
         rc = mp.main([args[0], "--ip", "127.0.0.1", "--port", str(srv.port), "--test-prefix", str(root),
                       "--yes", "--log", str(root.parent / "test.log")] +
                      (["--bin-dir", str(ROOT / "bin"), "--health-seconds", "2"] if args[0] == "install" else []) +
+                     (["--allow-unsigned"] if args[0] == "install" and unsigned else []) +
                      list(args[1:]))
     out = buf.getvalue()
     if rc != 0:
@@ -679,20 +682,27 @@ def signed_install(srv, root):
             return d
 
         before = tree_digest(root)
-        rc, out = run(srv, root, "install", "--require-signed")
-        check("2: --require-signed without a signed manifest: refused, display untouched",
-              rc == 1 and "--require-signed" in out and tree_digest(root) == before, out[-400:])
+        rc, out = run(srv, root, "install", unsigned=False)
+        check("2: signed by default: no signed manifest -> refused, display untouched",
+              rc == 1 and "signed by default" in out and "--allow-unsigned" in out and tree_digest(root) == before,
+              out[-400:])
+        rc, out = run(srv, root, "install", "--require-signed", unsigned=False)
+        check("2: --require-signed (now the default) is still accepted and refuses the same way",
+              rc == 1 and "signed by default" in out and tree_digest(root) == before, out[-400:])
+        rc, out = run(srv, root, "install", "--require-signed", "--allow-unsigned", unsigned=False)
+        check("2: --require-signed with --allow-unsigned is a usage error", rc == 1 and "contradict" in out
+              and tree_digest(root) == before, out[-300:])
         bad = variant_dir("tampered", data.replace(b'"seq": 5', b'"seq": 6'))
-        rc, out = run(srv, root, "install", "--bin-dir", str(bad))
+        rc, out = run(srv, root, "install", "--bin-dir", str(bad), unsigned=False)
         check("2: tampered manifest (old signature): refused, display untouched",
               rc == 1 and "BAD SIGNATURE" in out and tree_digest(root) == before, out[-400:])
         wk = variant_dir("wrongkey", sigt=other.sign(data))
-        rc, out = run(srv, root, "install", "--bin-dir", str(wk))
+        rc, out = run(srv, root, "install", "--bin-dir", str(wk), unsigned=False)
         check("2: manifest signed by an untrusted key: refused, display untouched",
               rc == 1 and "unknown key" in out and tree_digest(root) == before, out[-400:])
         nosig = variant_dir("nosig")
         (nosig / "manifest.sig").unlink()
-        rc, out = run(srv, root, "install", "--bin-dir", str(nosig))
+        rc, out = run(srv, root, "install", "--bin-dir", str(nosig), unsigned=False)
         check("2: manifest without manifest.sig: refused", rc == 1 and "no manifest.sig" in out
               and tree_digest(root) == before, out[-400:])
         mis = tmp / "mismatch"                                   # validly signed, but lists another sound helper
@@ -702,33 +712,48 @@ def signed_install(srv, root):
         shutil.copy(ROOT / "bin" / "merakiplus_snd", mis / "merakiplus_snd")
         (mis / "manifest.json").write_bytes(mdata)
         (mis / "manifest.sig").write_text(key.sign(mdata))
-        rc, out = run(srv, root, "install", "--bin-dir", str(mis))
+        rc, out = run(srv, root, "install", "--bin-dir", str(mis), unsigned=False)
         check("2: a file that differs from the signed manifest: refused, display untouched",
-              rc == 1 and "merakiplus_snd does not match the signed manifest" in out and tree_digest(root) == before,
-              out[-400:])
+              rc == 1 and "merakiplus_snd does not match the signed manifest" in out and "--allow-unsigned" in out
+              and tree_digest(root) == before, out[-400:])
+        for bad_args, why in ((("--bin-dir", str(bad)), "BAD SIGNATURE"), (("--bin-dir", str(wk)), "unknown key")):
+            rc, out = run(srv, root, "install", *bad_args)                     # unsigned=True: --allow-unsigned
+            check(f"2: --allow-unsigned does not excuse a forged manifest ({why})",
+                  rc == 1 and why in out and tree_digest(root) == before, out[-400:])
 
-        rc, out = run(srv, root, "install", "--bin-dir", str(good), "--require-signed")
+        rc, out = run(srv, root, "install", "--bin-dir", str(good), unsigned=False)
         check("2: signed release: verified on the computer, installed, max_seq recorded on the display",
               rc == 0 and "signature valid, all" in out and ota(root).get("max_seq") == "5"
               and [e for _, e in ui(root)] == [REL_EXE], (out[-600:], ota(root)))
         rc, out = run(srv, root, "status")
         check("2: status shows the newest accepted seq", "newest accepted seq 5" in out, out[-500:])
-        rc, out = run(srv, root, "install", "--bin-dir", str(good))
+        rc, out = run(srv, root, "install", "--bin-dir", str(good), unsigned=False)
         check("2: re-install of the same signed release (seq == max_seq) is fine", rc == 0 and ota(root).get("max_seq") == "5")
 
         old = tmp / "old"
         sigtest.signed_release(old, key, seq=3)
         before = tree_digest(root)
-        rc, out = run(srv, root, "install", "--bin-dir", str(old))
+        rc, out = run(srv, root, "install", "--bin-dir", str(old), unsigned=False)
         check("2: older signed release (seq 3 < 5): OLDER VERSION REFUSED, display untouched",
               rc == 1 and "OLDER VERSION REFUSED" in out and "--allow-downgrade" in out and tree_digest(root) == before,
               out[-400:])
-        rc, out = run(srv, root, "install", "--bin-dir", str(old), "--allow-downgrade")
+        rc, out = run(srv, root, "install", "--bin-dir", str(old), "--allow-downgrade", unsigned=False)
         check("2: --allow-downgrade installs it on purpose and resets max_seq",
               rc == 0 and "DOWNGRADE on purpose" in out and ota(root).get("max_seq") == "3", (out[-400:], ota(root)))
-        rc, out = run(srv, root, "install")
-        check("2: unsigned install (no manifest reachable): warning, installed, max_seq kept",
-              rc == 0 and "no signed manifest found" in out and ota(root).get("max_seq") == "3", out[-400:])
+        before = tree_digest(root)
+        rc, out = run(srv, root, "install", unsigned=False)
+        check("2: display with max_seq, no signed manifest: refused by default, display untouched",
+              rc == 1 and "signed by default" in out and tree_digest(root) == before, out[-400:])
+        rc, out = run(srv, root, "install")                                     # --allow-unsigned alone
+        check("2: display with max_seq: --allow-unsigned alone is refused (would bypass the signed record)",
+              rc == 1 and "already accepted signed release seq 3" in out and "--allow-downgrade" in out
+              and tree_digest(root) == before, out[-400:])
+        rc, out = run(srv, root, "install", "--bin-dir", str(mis))             # dev build vs. a signed manifest
+        check("2: display with max_seq: --allow-unsigned with files that differ from the signed release is refused too",
+              rc == 1 and "not the signed release" in out and tree_digest(root) == before, out[-400:])
+        rc, out = run(srv, root, "install", "--allow-downgrade")
+        check("2: --allow-unsigned --allow-downgrade: UNSIGNED warning, installed, max_seq kept",
+              rc == 0 and "UNSIGNED install" in out and ota(root).get("max_seq") == "3", out[-400:])
         rc, out = run(srv, root, "revert")
         check("2: revert removes the OTA state (incl. max_seq)", rc == 0 and not ota(root))
     finally:
@@ -737,7 +762,128 @@ def signed_install(srv, root):
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def dev_build_and_refs(srv, root):
+    """Signed by default, development side: a development build (files that differ from the signed release of
+    v<VERSION>) installs only with --allow-unsigned on a display without max_seq; --ref accepts only release tags and full
+    commit SHAs; the default ref is this installer's release tag."""
+    import shutil
+    tmp = pathlib.Path(tempfile.mkdtemp(prefix="merakiplus-dev-"))
+    key = sigtest.TestKey(tmp, "test")
+    saved = dict(mp.TRUSTED_KEYS)
+    mp.TRUSTED_KEYS.clear()
+    mp.TRUSTED_KEYS.update(key.trusted())
+    try:
+        mis = tmp / "devbuild"                                   # a signed release whose sound helper differs from bin/
+        sigtest.make_dist(mis, tweak=lambda d: (d / "merakiplus_snd").write_bytes(b"\x7fELF released"))
+        mdata = sigtest.sr.build_manifest(mis, mp.VERSION, "0" * 40, "2026-11-23", [p.name for p in mis.iterdir()], 7)
+        shutil.copy(ROOT / "bin" / "merakiplus_snd", mis / "merakiplus_snd")
+        (mis / "manifest.json").write_bytes(mdata)
+        (mis / "manifest.sig").write_text(key.sign(mdata))
+        before = tree_digest(root)
+        rc, out = run(srv, root, "install", "--bin-dir", str(mis), unsigned=False)
+        check("2b: development build (differs from the signed release): refused by default with a hint",
+              rc == 1 and "does not match the signed manifest" in out and "latest release tag" in out
+              and tree_digest(root) == before, out[-400:])
+        rc, out = run(srv, root, "install", "--bin-dir", str(mis))
+        check("2b: --allow-unsigned on a display without max_seq: installed as UNSIGNED, no max_seq recorded",
+              rc == 0 and "UNSIGNED install" in out and "not the signed release" in out and "max_seq" not in ota(root)
+              and [e for _, e in ui(root)] == [REL_EXE], (out[-500:], ota(root)))
+
+        before = tree_digest(root)
+        for ref in ("main", "feature/x", "v6", "v6.24-rc1", "deadbeef", "../../evil", "6.24", "V6.24", "a" * 39):
+            rc, out = run(srv, root, "install", "--ref", ref)
+            check(f"2b: --ref {ref!r} refused before anything happens",
+                  rc == 1 and "must be a release tag" in out and tree_digest(root) == before, out[-300:])
+        ok = all(mp.check_ref(r) == r for r in ("v6.24", "v6.24.1", "v10.0", "0123456789abcdef0123456789abcdef01234567"))
+        check("2b: release tags and full commit SHAs are accepted", ok)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            try:
+                mp.main(["install", "--help"])
+            except SystemExit:
+                pass
+        check("2b: the default --ref is this installer's release tag", f"(default v{mp.VERSION}" in buf.getvalue(),
+              buf.getvalue()[-600:])
+    finally:
+        mp.TRUSTED_KEYS.clear()
+        mp.TRUSTED_KEYS.update(saved)
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def install_sh_bootstrap():
+    """install.sh without a clone around it (standalone, e.g. piped from curl): it resolves the LATEST PUBLISHED release
+    tag, fetches tools/merakiplus.py from that tag (never from a branch) and passes --ref <tag>. MERAKIPLUS_REF accepts
+    only a release tag or a full commit SHA. Network-free: a fake `curl` first on PATH logs every request."""
+    import os
+    import shutil
+    import subprocess
+    print("== install.sh: standalone bootstrap (fake curl, no network) ==")
+    tmp = pathlib.Path(tempfile.mkdtemp(prefix="merakiplus-sh-"))
+    try:
+        (tmp / "bin").mkdir()
+        log = tmp / "curl.log"
+        (tmp / "bin" / "curl").write_text(f"""#!/bin/sh
+echo "$*" >> "{log}"
+for a in "$@"; do last="$a"; done
+case "$*" in
+  *url_effective*) case "$FAKE_LATEST" in fail) exit 22;; esac; printf '%s' "$FAKE_LATEST"; exit 0;;
+esac
+out=""; prev=""
+for a in "$@"; do [ "$prev" = "-o" ] && out="$a"; prev="$a"; done
+printf '%s\n' 'import sys; print("TOOL ARGS:", " ".join(sys.argv[1:]))' > "$out"
+""")
+        os.chmod(tmp / "bin" / "curl", 0o755)
+        standalone = tmp / "standalone"
+        standalone.mkdir()
+        shutil.copy(ROOT / "install.sh", standalone / "install.sh")
+
+        def sh(env_extra, *args):
+            env = {k: v for k, v in os.environ.items() if k != "MERAKIPLUS_REF"}
+            env.update(PATH=f"{tmp / 'bin'}{os.pathsep}{os.environ['PATH']}", **env_extra)
+            if log.exists():
+                log.unlink()
+            r = subprocess.run(["bash", str(standalone / "install.sh"), *args], env=env, capture_output=True, text=True,
+                               timeout=60)
+            return r.returncode, r.stdout + r.stderr, (log.read_text() if log.exists() else "")
+
+        latest = "https://github.com/thomasgrastein/merakitech-plus/releases/tag/v6.24"
+        rc, out, calls = sh({"FAKE_LATEST": latest}, "--ip", "192.0.2.1", "--dry-run")
+        check("install.sh: standalone resolves the latest published release and fetches the installer from that tag",
+              rc == 0 and "releases/latest" in calls and "/merakitech-plus/v6.24/tools/merakiplus.py" in calls
+              and "/main/" not in calls, (out, calls))
+        check("install.sh: standalone passes --ref <that tag> to the installer",
+              "TOOL ARGS: install --ip 192.0.2.1 --dry-run --ref v6.24" in out, out)
+        sha = "0123456789abcdef0123456789abcdef01234567"
+        rc, out, calls = sh({"FAKE_LATEST": latest, "MERAKIPLUS_REF": sha}, "--ip", "192.0.2.1")
+        check("install.sh: MERAKIPLUS_REF=<full SHA> is used as given (no latest lookup)",
+              rc == 0 and "releases/latest" not in calls and f"/{sha}/tools/merakiplus.py" in calls
+              and f"--ref {sha}" in out, (out, calls))
+        for bad in ("main", "v6.24;rm -rf ~", "../x", "deadbeef"):
+            rc, out, calls = sh({"FAKE_LATEST": latest, "MERAKIPLUS_REF": bad}, "--ip", "192.0.2.1")
+            check(f"install.sh: MERAKIPLUS_REF={bad!r} refused before any download", rc == 2 and not calls
+                  and "release tag" in out, (rc, out, calls))
+        rc, out, calls = sh({"FAKE_LATEST": "https://github.com/thomasgrastein/merakitech-plus/releases"},
+                            "--ip", "192.0.2.1")
+        check("install.sh: no release tag in the answer -> stops, nothing fetched",
+              rc == 1 and "tools/merakiplus.py" not in calls, (out, calls))
+        rc, out, calls = sh({"FAKE_LATEST": "https://github.com/thomasgrastein/merakitech-plus/releases/tag/main"},
+                            "--ip", "192.0.2.1")
+        check("install.sh: a 'latest' that is not a release tag is refused", rc == 1 and "unexpected" in out
+              and "tools/merakiplus.py" not in calls, (out, calls))
+        rc, out, calls = sh({"FAKE_LATEST": "fail"}, "--ip", "192.0.2.1")
+        check("install.sh: offline (latest unknown) -> stops with a hint", rc == 1 and "MERAKIPLUS_REF" in out, out)
+        if log.exists():
+            log.unlink()
+        r = subprocess.run(["bash", str(ROOT / "install.sh"), "--help"], capture_output=True, text=True, timeout=60,
+                           env=dict(os.environ, PATH=f"{tmp / 'bin'}{os.pathsep}{os.environ['PATH']}"))
+        check("install.sh: in a clone it uses the local installer (no download) and shows --allow-unsigned",
+              r.returncode == 0 and "--allow-unsigned" in r.stdout and not log.exists(), r.stdout[-300:] + r.stderr)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 if __name__ == "__main__":
+    install_sh_bootstrap()
     scenario("fresh machine running stock from slot A", "stock_a", stock_a)
     scenario("machine running a vendor update from slot B", "vendor_b", vendor_b)
     scenario("slot B empty", "empty_b", empty_b)
@@ -754,6 +900,8 @@ if __name__ == "__main__":
     scenario("1b: migration of a v6.20 install (--persist --gesture) + installer power-cut replay + revert", "stock_a", migrate_v620)
     scenario("1b: update by exec-reload, deferral while busy, older releases collected", "stock_a", update_reload)
     scenario("1b: --no-activate leaves a trial for the next start", "stock_a", no_activate)
-    scenario("2: signed release manifest (verify, tamper, wrong key, downgrade, --require-signed)", "stock_a", signed_install)
+    scenario("2: signed release manifest (signed by default, tamper, wrong key, downgrade, --allow-unsigned)", "stock_a",
+             signed_install)
+    scenario("2b: development builds (--allow-unsigned) and --ref validation", "stock_a", dev_build_and_refs)
     print(f"\nINSTALLER TESTS: {'ALL PASS' if not FAILS else str(len(FAILS)) + ' FAIL: ' + ', '.join(FAILS)}")
     sys.exit(1 if FAILS else 0)
