@@ -3,6 +3,13 @@
 All notable changes to Meraki+. Details (with evidence, frames and test figures) are in
 [docs/dev/UI_v6.md](docs/dev/UI_v6.md) under *CHANGES-v6.x*. All dates are 2026.
 
+## Unreleased — CoffeeSense NFC documentation
+
+### Added
+
+- [Original CoffeeSense NFC reference](docs/stock-coffeesense-nfc.md) covering the tag format, background
+  codes, compatible exports and writing a MIFARE Classic 1K tag.
+
 ## Unreleased — pull-request workflow (repository process only)
 No code or binary changed. Details: [CONTRIBUTING.md](CONTRIBUTING.md#how-changes-reach-main), [docs/release-process.md](docs/release-process.md).
 ### Changed
