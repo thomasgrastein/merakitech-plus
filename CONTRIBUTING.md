@@ -99,6 +99,9 @@ passed ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)):
 | `full E2E gate (EN + DA)` | PRs that touch **code**: `src/`, `sim/`, `boot/`, `build.sh` or `ci.yml` | all E2E scenarios in English and Danish (> 30 min) |
 
 A docs-only PR therefore needs only the quick gate; a code PR also needs the full E2E suite to be green.
+A few timing-window checks are sensitive to load on the shared CI runner: a scenario that fails in the parallel
+full run is re-run **once, alone**; the gate still fails if it fails again or if more than three scenarios failed.
+Every retry shows up as a warning on the run — if you see the same scenario retried repeatedly, please open an issue.
 The full suite also runs weekly and on request (`workflow_dispatch` with `full_e2e`).
 
 ### Community contributors

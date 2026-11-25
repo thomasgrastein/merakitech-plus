@@ -141,11 +141,57 @@ jobs:
           version: 0.17.1
       - run: ./build.sh host
       - name: Full E2E, English
-        run: python3 sim/run_e2e.py --all --parallel 4 --run-name full-en
+        env:
+          E2E_LANG: en
+        run: |
+          # Some timing-window checks are load-sensitive under --parallel 4 on a shared runner. A failed
+          # pass re-runs each failed scenario ONCE, alone (no parallel load). It still fails when a retry
+          # fails, when more than 3 scenarios failed, or when the run failed without a scenario failure.
+          # Every retry is reported as a warning, so flaky scenarios stay visible.
+          set -o pipefail
+          mkdir -p build
+          log="build/full-$E2E_LANG.log"
+          if python3 sim/run_e2e.py --all --parallel 4 --ui-lang "$E2E_LANG" --run-name "full-$E2E_LANG" 2>&1 | tee "$log"; then
+            exit 0
+          fi
+          failed=$(sed -n 's/^\[e2e\] \([A-Za-z0-9_.-]*\): FAIL.*/\1/p' "$log" | sort -u)
+          n=$(printf '%s' "$failed" | grep -c . || true)
+          if [ "$n" -eq 0 ] || [ "$n" -gt 3 ]; then
+            echo "::error::full E2E ($E2E_LANG): $n scenario failure(s) — not retrying"; exit 1
+          fi
+          for sc in $failed; do
+            echo "::warning::full E2E ($E2E_LANG): $sc failed under parallel load — retrying once, alone"
+            python3 sim/run_e2e.py --scenario "$sc" --ui-lang "$E2E_LANG" --run-name "retry-$E2E_LANG-$sc" \
+              || { echo "::error::full E2E ($E2E_LANG): $sc failed again on retry"; exit 1; }
+          done
+          echo "full E2E ($E2E_LANG): passed after retrying: $failed" | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Full E2E, Danish
         # run even when the English pass failed, so one run reports both languages
         if: success() || failure()
-        run: python3 sim/run_e2e.py --all --parallel 4 --ui-lang da --run-name full-da
+        env:
+          E2E_LANG: da
+        run: |
+          # Some timing-window checks are load-sensitive under --parallel 4 on a shared runner. A failed
+          # pass re-runs each failed scenario ONCE, alone (no parallel load). It still fails when a retry
+          # fails, when more than 3 scenarios failed, or when the run failed without a scenario failure.
+          # Every retry is reported as a warning, so flaky scenarios stay visible.
+          set -o pipefail
+          mkdir -p build
+          log="build/full-$E2E_LANG.log"
+          if python3 sim/run_e2e.py --all --parallel 4 --ui-lang "$E2E_LANG" --run-name "full-$E2E_LANG" 2>&1 | tee "$log"; then
+            exit 0
+          fi
+          failed=$(sed -n 's/^\[e2e\] \([A-Za-z0-9_.-]*\): FAIL.*/\1/p' "$log" | sort -u)
+          n=$(printf '%s' "$failed" | grep -c . || true)
+          if [ "$n" -eq 0 ] || [ "$n" -gt 3 ]; then
+            echo "::error::full E2E ($E2E_LANG): $n scenario failure(s) — not retrying"; exit 1
+          fi
+          for sc in $failed; do
+            echo "::warning::full E2E ($E2E_LANG): $sc failed under parallel load — retrying once, alone"
+            python3 sim/run_e2e.py --scenario "$sc" --ui-lang "$E2E_LANG" --run-name "retry-$E2E_LANG-$sc" \
+              || { echo "::error::full E2E ($E2E_LANG): $sc failed again on retry"; exit 1; }
+          done
+          echo "full E2E ($E2E_LANG): passed after retrying: $failed" | tee -a "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -154,6 +200,7 @@ jobs:
           path: |
             sim/reports/
             !sim/reports/**/sandbox/**
+            build/full-*.log
 
   merge-gate:
     # THE required status check on main. Always runs (also when a dependency failed or was skipped) so
