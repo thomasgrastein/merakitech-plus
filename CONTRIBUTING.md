@@ -47,8 +47,9 @@ python3 tests/test_installer.py                           # install/revert/idemp
 python3 boot/test_switcher.py                             # the gesture switcher end-to-end (file mode)
 ```
 
-The **full** E2E suite (all scenarios, both languages, replay of recordings; > 30 min) is not run per
-iteration, but as a CI gate (`workflow_dispatch` / weekly) and before a release:
+The **full** E2E suite (all scenarios, both languages, replay of recordings; > 30 min) is not needed per
+local iteration. CI runs it automatically on every pull request that changes code (see
+[How changes reach `main`](#how-changes-reach-main)), weekly, and on request (`workflow_dispatch`). To run it locally:
 
 ```sh
 python3 sim/run_e2e.py --all --parallel 4
@@ -75,28 +76,81 @@ The simulator can also be played interactively in the browser: `python3 sim/play
 - **Language:** documentation, user-facing CLI messages and new code comments are in English. Some
   older code comments are still in Danish; translating them is a welcome contribution.
 
-## Pull requests
+## How changes reach `main`
 
-1. Fork → branch (`feat/…`, `fix/…`) → small, focused commits.
+**Every change goes through a pull request** — from community contributors, the maintainer and the
+maintainer's automation (coding agents) alike. `main` is protected:
+
+| Rule on `main` | Setting |
+|---|---|
+| Pull request required | yes, with **1 approving review** from a maintainer |
+| Required status check | **`merge-gate`** (CI), branch must be **up to date** with `main` before merge |
+| Force-push / branch deletion | not allowed |
+| Administrators | may bypass (see below) |
+
+### The CI gate: `merge-gate`
+
+`merge-gate` is the only required check. It always runs and passes only when the jobs it aggregates
+passed ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)):
+
+| Job | Runs for | What |
+|---|---|---|
+| `build + quick tests` | every PR and push | hygiene (vendor files, personal data, checksums), device + host builds, `bin/` drift check, UI self-test, simulator self-test, quick E2E, gesture switcher, launcher, signed manifests, installer/revert |
+| `full E2E gate (EN + DA)` | PRs that touch **code**: `src/`, `sim/`, `boot/`, `build.sh` or `ci.yml` | all E2E scenarios in English and Danish (> 30 min) |
+
+A docs-only PR therefore needs only the quick gate; a code PR also needs the full E2E suite to be green.
+The full suite also runs weekly and on request (`workflow_dispatch` with `full_e2e`).
+
+### Community contributors
+
+1. Fork → branch (`feat/…`, `fix/…`, `docs/…`) → small, focused commits.
 2. Run the quick test loop above; describe in the PR what you ran (and whether it was tested on a
    real machine — which model/firmware).
-3. If you change the binaries in `bin/`, describe how they were built and update `bin/MD5SUMS`
+3. Open the pull request against `main`. It is merged when `merge-gate` is green **and** a maintainer
+   has approved it. If `main` moves on, update your branch (merge or rebase `main` into it).
+4. If you change the binaries in `bin/`, describe how they were built and update `bin/MD5SUMS`
    **and** `BIN_MD5` + `BIN_SHA256` in `tools/merakiplus.py` (CI checks that they match). Build `bin/` with the **official**
    zig 0.17.1 tarball from ziglang.org (not a distribution package such as Homebrew's) and its own
    `ZIG_GLOBAL_CACHE_DIR`; only then are the files byte-identical to CI's fresh builds. The sounds in `audio/` are generated:
    change `tools/gen_audio.py`, run it, and update `AUDIO_MD5` + `AUDIO_SHA256` in `tools/merakiplus.py`. Never commit
    audio or video files you did not make (no vendor `.mp3`/`.mp4`; `tests/hygiene.py` refuses them).
-4. Update `CHANGELOG.md` and the relevant documentation.
-5. Use `merakiplus` for every technical name (paths, env vars `MERAKIPLUS_*`, binaries, logs). Names from
+5. Update `CHANGELOG.md` and the relevant documentation.
+6. Use `merakiplus` for every technical name (paths, env vars `MERAKIPLUS_*`, binaries, logs). Names from
    releases before the 2026-11-19 rebrand exist only in the *legacy-compat* block of
    `tools/merakiplus.py` (install/revert migration); `tests/hygiene.py` fails if they appear elsewhere.
+
+Do not bump the version in a community PR unless the maintainer has asked for it (see [Releases](#releases)).
+
+### Maintainer and maintainer automation
+
+The maintainer's own work — and work done by coding agents on the maintainer's behalf — follows the
+same flow: a branch in this repository (`vX.Y-topic`, `feat/…`, `docs/…`) → `gh pr create` → CI
+(`merge-gate`) → the maintainer merges. Agents never merge and never push to `main`; they open the PR
+and report its CI state.
+
+The repository owner is an administrator, and branch protection is configured **without** enforcing
+the rules for administrators. The owner can therefore merge their own (or an agent's) PR without a
+second reviewer — there is no other maintainer to review — and can push to `main` directly in an
+emergency. This is a deliberate escape hatch, not the normal path: wait for `merge-gate` before
+merging, as everyone else does.
 
 ## Releases
 
 **Releases are published only after explicit approval from the maintainer.** Other owners run these
-builds on their machines, so a release is a decision, not a side effect: do not bump the version or
-trigger the release workflow without prior agreement. CI may build and test any commit; publishing a
-release (version tag + assets) is reserved to the maintainer.
+builds on their machines, so a release is a decision, not a side effect. The approval *is* the merge:
+
+1. A pull request bumps the version (`VERSION` in `tools/merakiplus.py` **and** `MERAKIPLUS_VERSION`
+   in `src/merakiplus.c`), updates `CHANGELOG.md` and, for device changes, `bin/`.
+2. The maintainer merges it once `merge-gate` (including the full E2E suite) is green.
+3. On the push to `main`, [`release.yml`](.github/workflows/release.yml) sees a version newer than the
+   latest release, re-runs the test gate and publishes the release with **unsigned** assets
+   (`manifest.unsigned.json` for comparison).
+4. The maintainer signs the release offline (`tools/sign_release.py`, next `seq`) and uploads
+   `manifest.json` + `manifest.sig` — see [docs/signing.md](docs/signing.md).
+
+Details: [docs/release-process.md](docs/release-process.md). Do not bump the version or trigger the
+release workflow without prior agreement. CI may build and test any commit; publishing a release
+(version tag + assets) and signing it are reserved to the maintainer.
 
 ## Bug reports
 

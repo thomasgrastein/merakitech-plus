@@ -160,7 +160,7 @@ Prerequisites on the maintainer's computer: a clone of this repository, `gh` log
 (`brew install openssl@3`), and the **official** zig 0.17.1 tarball unpacked somewhere (Homebrew's zig differs in the
 ELF `.comment`, see [bin/README.md](../bin/README.md)).
 
-1. CI publishes the release as usual (push of a newer `VERSION` to `main`, a tag, or *Run workflow*). Wait until the
+1. CI publishes the release as usual (a merged PR that bumps `VERSION` on `main`, see [release-process.md](release-process.md); a tag; or *Run workflow*). Wait until the
    release workflow is green.
 2. Sign:
 

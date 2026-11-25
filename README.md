@@ -496,6 +496,9 @@ From the simulator (the same code as on the machine):
 
 - Build, test and simulate: [CONTRIBUTING.md](CONTRIBUTING.md) (`./build.sh`, `python3 sim/selftest.py`,
   `python3 sim/run_e2e.py --all --quick --parallel 4`, `python3 tests/test_installer.py`).
+- Contributions arrive as **pull requests** against `main`: CI's `merge-gate` check must be green (the full E2E
+  suite for code changes) and a maintainer approves — see [How changes reach `main`](CONTRIBUTING.md#how-changes-reach-main).
+  Releases are cut by merging a version bump: [docs/release-process.md](docs/release-process.md).
 - Changes: [CHANGELOG.md](CHANGELOG.md). Code of conduct: [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
 - Security issues: **not** as a public issue — see [SECURITY.md](SECURITY.md).
 - The shipped binaries and their md5 sums: [bin/README.md](bin/README.md).

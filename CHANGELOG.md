@@ -3,6 +3,15 @@
 All notable changes to Meraki+. Details (with evidence, frames and test figures) are in
 [docs/dev/UI_v6.md](docs/dev/UI_v6.md) under *CHANGES-v6.x*. All dates are 2026.
 
+## Unreleased — pull-request workflow (repository process only)
+No code or binary changed. Details: [CONTRIBUTING.md](CONTRIBUTING.md#how-changes-reach-main), [docs/release-process.md](docs/release-process.md).
+### Changed
+- **`main` is protected; every change arrives as a pull request.** One required CI check, `merge-gate`, plus one
+  maintainer approval for community PRs; force-push and branch deletion are blocked.
+- **CI:** `merge-gate` aggregates the quick gate and the full E2E suite (EN + DA). The full suite now runs
+  automatically for every change to `src/`, `sim/`, `boot/`, `build.sh` or the CI workflow; docs-only changes
+  need only the quick gate.
+
 ## Unreleased — signed releases (OTA phase 2, tooling only)
 No device binary changed. Details: [docs/signing.md](docs/signing.md), [docs/ota-plan.md](docs/ota-plan.md#phase-2--implemented-2026-11-23).
 ### Added

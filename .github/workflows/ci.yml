@@ -1,5 +1,15 @@
 name: CI
 
+# Merge policy (CONTRIBUTING.md#how-changes-reach-main): branch protection on main requires ONE status
+# check, `merge-gate`. It always runs and aggregates the others:
+#   * quick     — hygiene, builds, bin/ drift, UI self-test, SIM self-test, quick E2E, switcher, launcher,
+#                 signed manifests, installer. Every PR and push.
+#   * full-e2e  — all scenarios in English + Danish (> 30 min). Only when code changed (see `changes`), weekly,
+#                 or on request (workflow_dispatch full_e2e=true).
+# Docs-only changes skip full-e2e and merge-gate still passes; code changes need full-e2e green. Requiring only
+# merge-gate avoids the "skipped required check" deadlock. Do not rename the merge-gate job: its name is the
+# check that branch protection requires.
+
 on:
   push:
     branches: [main]
@@ -16,7 +26,55 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  # a new push to a PR cancels that PR's previous run; runs on main are never cancelled
+  group: ci-${{ github.event.pull_request.number && format('pr-{0}', github.event.pull_request.number) || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
+  changes:
+    name: detect code changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.f.outputs.code }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Does this change need the full E2E suite?
+        id: f
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+          FULL_INPUT: ${{ inputs.full_e2e }}
+        run: |
+          set -eu
+          # Paths whose change requires the full E2E suite. The workflow file itself is included so that a
+          # change to these gates is exercised by the gate it changes.
+          CODE_RE='^(src/|sim/|boot/|build\.sh$|\.github/workflows/ci\.yml$)'
+          code=false
+          case "$EVENT" in
+            schedule) code=true ;;
+            workflow_dispatch) if [ "$FULL_INPUT" = "true" ]; then code=true; fi ;;
+            pull_request)
+              # actions/checkout checks out the PR merge commit: parent 1 = base tip, so this is the PR's diff
+              git diff --name-only HEAD^1 HEAD > changed.txt ;;
+            push)
+              if [ -n "${BEFORE//0/}" ] && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+                git diff --name-only "$BEFORE" HEAD > changed.txt
+              else
+                code=true   # new branch / unknown base: be safe
+              fi ;;
+          esac
+          if [ -f changed.txt ]; then
+            echo "changed files:"; sed 's/^/  /' changed.txt
+            if grep -Eq "$CODE_RE" changed.txt; then code=true; fi
+          fi
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          echo "Full E2E required: **$code** ($EVENT)" >> "$GITHUB_STEP_SUMMARY"
+          echo "full E2E required: $code"
+
   quick:
     name: build + quick tests
     runs-on: ubuntu-latest
@@ -68,7 +126,8 @@ jobs:
 
   full-e2e:
     name: full E2E gate (EN + DA)
-    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.full_e2e)
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
@@ -94,3 +153,34 @@ jobs:
           path: |
             sim/reports/
             !sim/reports/**/sandbox/**
+
+  merge-gate:
+    # THE required status check on main. Always runs (also when a dependency failed or was skipped) so
+    # it always reports a result; never rename it without updating branch protection first.
+    name: merge-gate
+    needs: [changes, quick, full-e2e]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: All required jobs passed
+        env:
+          CHANGES: ${{ needs.changes.result }}
+          CODE: ${{ needs.changes.outputs.code }}
+          QUICK: ${{ needs.quick.result }}
+          FULL: ${{ needs.full-e2e.result }}
+        run: |
+          echo "changes=$CHANGES (code=$CODE)  quick=$QUICK  full-e2e=$FULL"
+          ok=true
+          [ "$CHANGES" = "success" ] || { echo "::error::change detection did not succeed ($CHANGES)"; ok=false; }
+          [ "$QUICK" = "success" ]   || { echo "::error::quick gate did not succeed ($QUICK)"; ok=false; }
+          if [ "$CODE" = "true" ]; then
+            [ "$FULL" = "success" ] || { echo "::error::code changed: full E2E must succeed ($FULL)"; ok=false; }
+          else
+            case "$FULL" in success|skipped) ;; *) echo "::error::full E2E did not succeed ($FULL)"; ok=false ;; esac
+          fi
+          if $ok; then
+            echo "merge-gate: PASS" | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "merge-gate: FAIL" | tee -a "$GITHUB_STEP_SUMMARY"; exit 1
+          fi
