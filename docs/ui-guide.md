@@ -405,3 +405,31 @@ Background, evidence and decisions: [water-dosing-compat.md](water-dosing-compat
   in both languages (selftest).
 * Previews: `106_page_water_manual_old`, `107_page_water_manual_unknown`, `108_page_water_mode_manual`,
   `109_home_water_manual_label`, `110_home_water_manual_running`, `111_diag_controller`, `112_diag_controller_scale_fault`.
+
+## 22. Water tank messages (v6.24, issue #1)
+
+Until v6.24, removing the water tank showed *ERROR · UNKNOWN FAULT*: the controller reports the tank through error
+bits that Meraki+ had no text for. v6.24 names them. Evidence: static analysis of the Gen 1 controller firmware
+(5.1.4) and the stock display UI. **Not yet confirmed on Gen 2** (the issue was reported on a Gen 2 machine).
+
+| Bit | What the controller means (Gen 1) | Stock UI | Meraki+ HOME sub-line (EN / DA) | Code |
+|---|---|---|---|---|
+| word 36 `0x8000` | tank switches read "none" — **tank removed** | icon `lackWaterTank` | *WATER TANK MISSING* / *VANDTANKEN MANGLER* | E3 |
+| word 36 `0x0001` | tank switches read "low" | icon `lack_water` + *Water tank is low, please refill water* | *WATER TANK LOW · PLEASE REFILL* / *LAVT VANDNIVEAU · FYLD TANKEN* | E3 |
+| word 35 `0x8000` | the pump ran but the flow meter stood still (latched; cleared when the tank is taken out) | icon `lackWater` | *NO WATER FLOW · CHECK THE TANK* / *INTET VANDFLOW · TJEK TANKEN* | E2 |
+
+* **Where it comes from:** the controller's tank check (MCU `0xB268`, every 10th status tick) adds two debounced
+  tank-switch inputs: 0 → word 36 bit 15 set (bit 0 cleared, word 35 bit 15 cleared), 1 → both word-36 bits cleared
+  (normal), 2 → word 36 bit 0 set (bit 15 cleared). The dry-pump check (MCU `0xB218`) sets word 35 bit 15 when the
+  pump has run with no flow-meter pulses for more than 60 checks. The controller's own hot-water control also cancels
+  on word 35 / word 36 `& 0x8001` ([water-dosing-compat.md §1.1](water-dosing-compat.md#11-hot-water-control-0x1b8c-called-every-10-ms-cycle)). The stock display (`dealLackWaterAndBar`
+  `0x10F6EC`) shows these as water-tank icons and is not part of its error-code pop-up list (`error_tip_deale`
+  `0x10EB14`); the `LackWater.mp3` sound is only played by the factory test page.
+* **Priority:** boiler / sensor / mains / scale faults keep their place in front; then tank missing, tank low, no
+  flow. Every other unmapped bit still reads *UNKNOWN FAULT* (code `?`) — DIAGNOSTICS shows the raw E1 / E2 / E3
+  values in any case.
+* **Display only:** the phase is still ERROR while any of words 34/35/36 ≠ 0, so starts stay blocked (*ERROR ACTIVE ·
+  START BLOCKED*) exactly as before; no frame, frame-policy rule or guard changed. Unlike the stock UI, which only
+  shows an icon, Meraki+ therefore also blocks starts while the tank is low — unchanged from v6.23.
+* **Tests:** UI self-test section *v6.24 water tank messages* (14 bit combinations × EN/DA, guards unchanged, clear →
+  READY, text widths); SIM scenario `fault_water_tank` (SIM state `err.id` / `err.code`).

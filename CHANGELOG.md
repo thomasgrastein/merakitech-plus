@@ -19,6 +19,30 @@ No device binary changed. Details: [docs/signing.md](docs/signing.md), [docs/ota
 - Tests: `tests/test_upd.py` (118 checks), installer scenario *2: signed release manifest*, hygiene check that the
   pinned keys agree and that no private key is in the tree.
 
+## [6.24] — 2026-11-25
+**Water tank: a real message instead of *UNKNOWN FAULT*** (fixes [#1](https://github.com/thomasgrastein/merakitech-plus/issues/1)).
+Removing the water tank showed *ERROR · UNKNOWN FAULT*. The controller reports the tank through error bits that
+Meraki+ had no text for; the stock UI shows them as water-tank icons. Details: [docs/ui-guide.md §22](docs/ui-guide.md#22-water-tank-messages-v624-issue-1).
+### Fixed
+- HOME's error line now names the water supply (code shown dimmed, as before):
+  - word 36 `0x8000` → *WATER TANK MISSING* / *VANDTANKEN MANGLER* (E3)
+  - word 36 `0x0001` → *WATER TANK LOW · PLEASE REFILL* / *LAVT VANDNIVEAU · FYLD TANKEN* (E3; stock: "Water tank is
+    low, please refill water")
+  - word 35 `0x8000` → *NO WATER FLOW · CHECK THE TANK* / *INTET VANDFLOW · TJEK TANKEN* (E2; pump ran, no flow)
+- Boiler / sensor / mains / scale faults keep priority; any other unmapped bit still reads *UNKNOWN FAULT*.
+- **Display only:** the phase (ERROR), the start guards (*ERROR ACTIVE · START BLOCKED*) and the frame policy are
+  unchanged; no UART frame changed.
+- **Evidence:** static analysis of the Gen 1 controller firmware 5.1.4 (tank check, dry-pump check) and the stock
+  display UI. The report came from a **Gen 2** machine — the same bits there are not confirmed yet.
+### Verification
+- UI self-test **592 / 0** EN and DA (new section *v6.24 water tank messages*: 14 bit combinations × 2 languages,
+  guards unchanged, clear → READY, text widths); also as a 32-bit ARMv7 binary (EN + DA). Mutants (mapping removed,
+  bits swapped, wrong code mask) fail it. New SIM scenario `fault_water_tank` 35/35 EN + DA (22/35 against the v6.23
+  SIM). Full E2E **52/52 EN** and **52/52 DA**, quick E2E 5/5,
+  `sim/selftest.py` 204/0, installer suite 152/152, launcher tests (96 power-cut states), switcher 55/0, manifest
+  tests 115/115, hygiene + bin/ drift OK (official zig 0.17.1).
+- **Not yet on a machine.**
+
 ## [6.23] — 2026-11-23
 **Auto off: 30 minutes by default, like the stock UI.** Until now Meraki+'s AUTO OFF was *off* unless you turned it
 on, so a machine left alone stayed on and hot; the stock UI always switches off after 30 minutes without use. The

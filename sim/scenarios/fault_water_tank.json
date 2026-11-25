@@ -1,0 +1,230 @@
+{
+  "name": "fault_water_tank",
+  "ui_only": true,
+  "description": "v6.24 (issue #1): water-supply bits are named instead of UNKNOWN FAULT — word 36 0x8000 (tank missing; stock lackWaterTank icon, MCU 0xB268 sum 0) -> TX_ER_E3_TANK / E3, a brew start is still blocked (TX_G_ERROR, no frame), the bit clears -> READY; word 36 0x0001 (tank low; stock 'Water tank is low') -> TX_ER_E3_LOW / E3; word 35 0x8000 (pump on, no flow; MCU 0xB218) -> TX_ER_E2_NOFLOW / E2. Display only: phase and guards as for any error.",
+  "duration_s": 22,
+  "events": [
+    {
+      "t": 3,
+      "target": "sim",
+      "event": {
+        "type": "fault",
+        "e3": 32768,
+        "dur": 4
+      }
+    },
+    {
+      "t": 4,
+      "target": "runner",
+      "op": "snapshot",
+      "label": "tank-missing"
+    },
+    {
+      "t": 4.5,
+      "target": "ui",
+      "cmd": "action",
+      "name": "brew"
+    },
+    {
+      "t": 10,
+      "target": "sim",
+      "event": {
+        "type": "fault",
+        "e3": 1,
+        "dur": 3
+      }
+    },
+    {
+      "t": 11.5,
+      "target": "runner",
+      "op": "snapshot",
+      "label": "tank-low"
+    },
+    {
+      "t": 16,
+      "target": "sim",
+      "event": {
+        "type": "fault",
+        "e2": 32768,
+        "dur": 3
+      }
+    },
+    {
+      "t": 17.5,
+      "target": "runner",
+      "op": "snapshot",
+      "label": "no-flow"
+    }
+  ],
+  "expect": [
+    {
+      "kind": "phase",
+      "t": 2,
+      "window": 1,
+      "value": "READY"
+    },
+    {
+      "kind": "state",
+      "path": "err",
+      "t": 2,
+      "window": 1,
+      "equals": null
+    },
+    {
+      "kind": "word",
+      "word": 36,
+      "t": 4,
+      "window": 0.8,
+      "value": 32768
+    },
+    {
+      "kind": "phase",
+      "t": 4,
+      "window": 0.8,
+      "value": "ERROR"
+    },
+    {
+      "kind": "state",
+      "path": "err.id",
+      "t": 4,
+      "window": 0.8,
+      "equals": "TX_ER_E3_TANK"
+    },
+    {
+      "kind": "state",
+      "path": "err.code",
+      "t": 4,
+      "window": 0.8,
+      "equals": "E3"
+    },
+    {
+      "kind": "state",
+      "path": "shown.sub",
+      "t": 4,
+      "window": 0.8,
+      "contains": "TANK"
+    },
+    {
+      "kind": "state",
+      "path": "shown.sub",
+      "t": 4,
+      "window": 0.8,
+      "not_contains": "UNKNOWN",
+      "mode": "all"
+    },
+    {
+      "kind": "state",
+      "path": "shown.sub",
+      "t": 4,
+      "window": 0.8,
+      "not_contains": "UKENDT",
+      "mode": "all"
+    },
+    {
+      "kind": "state",
+      "path": "toast.id",
+      "t": 5,
+      "window": 0.4,
+      "equals": "TX_G_ERROR"
+    },
+    {
+      "kind": "sim_log",
+      "assert": "no_writes_between",
+      "t0": 3.2,
+      "t1": 6.8,
+      "except_subs": [
+        0,
+        1,
+        112
+      ]
+    },
+    {
+      "kind": "phase",
+      "t": 8.5,
+      "window": 1,
+      "value": "READY"
+    },
+    {
+      "kind": "state",
+      "path": "err",
+      "t": 8.5,
+      "window": 1,
+      "equals": null
+    },
+    {
+      "kind": "word",
+      "word": 36,
+      "t": 11.5,
+      "window": 0.8,
+      "value": 1
+    },
+    {
+      "kind": "state",
+      "path": "err.id",
+      "t": 11.5,
+      "window": 0.8,
+      "equals": "TX_ER_E3_LOW"
+    },
+    {
+      "kind": "state",
+      "path": "err.code",
+      "t": 11.5,
+      "window": 0.8,
+      "equals": "E3"
+    },
+    {
+      "kind": "state",
+      "path": "shown.sub",
+      "t": 11.5,
+      "window": 0.8,
+      "contains": "TANK"
+    },
+    {
+      "kind": "phase",
+      "t": 14.5,
+      "window": 1,
+      "value": "READY"
+    },
+    {
+      "kind": "word",
+      "word": 35,
+      "t": 17.5,
+      "window": 0.8,
+      "value": 32768
+    },
+    {
+      "kind": "state",
+      "path": "err.id",
+      "t": 17.5,
+      "window": 0.8,
+      "equals": "TX_ER_E2_NOFLOW"
+    },
+    {
+      "kind": "state",
+      "path": "err.code",
+      "t": 17.5,
+      "window": 0.8,
+      "equals": "E2"
+    },
+    {
+      "kind": "state",
+      "path": "shown.sub",
+      "t": 17.5,
+      "window": 0.8,
+      "contains": "TANK"
+    },
+    {
+      "kind": "phase",
+      "t": 20.5,
+      "window": 1,
+      "value": "READY"
+    },
+    {
+      "kind": "state",
+      "path": "err",
+      "t": 20.5,
+      "window": 1,
+      "equals": null
+    }
+  ]
+}
