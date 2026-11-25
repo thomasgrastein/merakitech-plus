@@ -766,7 +766,8 @@ that the stock UI's check fails cleanly while pinned.
    the power cuts?
 6. **Vendor OTA:** activate the router block now (recommended before phase 1b), and is the on-device hosts pin wanted?
 7. **Pre-releases:** should owners be able to opt into a beta channel, or stable only?
-8. **Gen 2:** untested hardware; should the updater refuse to run when the board fingerprint differs (recommended), as
+8. **Gen 2:** untested hardware at the time of writing (since confirmed running Meraki+ v6.23, community report,
+   issue #1); should the updater refuse to run when the board fingerprint differs (recommended), as
    the installer already does?
 
 ---
@@ -798,5 +799,6 @@ recommendation in the plan, the decision wins.
 7. **Channel: stable only.** No beta channel.
 8. **Board guard in the updater: NO.** The updater does not refuse non-Gen1 board fingerprints (maintainer's choice,
    deviating from the recommendation). The installer's existing board check is unchanged. Consequence: Gen2 or other
-   boards are not blocked by the updater itself; hardware verification on non-Gen1 remains out of scope and at the
-   owner's risk.
+   boards are not blocked by the updater itself. Gen 2 has since been confirmed running Meraki+ v6.23 (community
+   report, issue #1); this decision is unchanged, and detailed hardware verification on non-Gen1 remains out of scope
+   and at the owner's risk.

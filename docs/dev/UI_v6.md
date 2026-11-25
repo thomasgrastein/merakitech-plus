@@ -2524,7 +2524,7 @@ the UI rules in [ui-guide.md §21](../ui-guide.md#21-hot-water-dosing-gate--manu
 ## CHANGES-v6.24
 
 **Water tank messages** (issue #1, [ui-guide.md §22](../ui-guide.md#22-water-tank-messages-v624-issue-1)). Reported on a
-Gen 2 machine: removing the water tank showed *ERROR · UNKNOWN FAULT*.
+Gen 2 machine where Meraki+ v6.23 runs: removing the water tank showed *ERROR · UNKNOWN FAULT*.
 
 1. **Root cause:** `err_text()` mapped word 36 bits 4/5, word 34 bits 0/5, word 35 bits 0/1/3/4 and `0x1400` only. The
    controller's tank check (MCU `0xB268`) sets word 36 `0x8000` (tank switches read 0 → tank missing) or `0x0001`
@@ -2541,7 +2541,7 @@ Gen 2 machine: removing the water tank showed *ERROR · UNKNOWN FAULT*.
 5. **Self-test** section *v6.24 water tank messages* (4 checks): 14 bit combinations × EN/DA (sub-line, hint code,
    phase), guards + phase identical to an unmapped bit and no frame queued, word 36 = 0 → READY + brew allowed, widths.
 6. **Verification:** UI self-test **592 / 0** EN and DA (also 32-bit ARMv7); 3 mutants caught. `fault_water_tank`
-   35/35 EN + DA (22/35 vs the v6.23 SIM). Full E2E **52/52 EN** and **52/52 DA**, quick 5/5; `sim/selftest.py` 204/0; installer 152/152, launcher (96 power-cut states), switcher 55/0, upd 115/115; hygiene + bin/ drift OK (official zig 0.17.1). Gen 2 not verified (issue #1
+   35/35 EN + DA (22/35 vs the v6.23 SIM). Full E2E **52/52 EN** and **52/52 DA**, quick 5/5; `sim/selftest.py` 204/0; installer 152/152, launcher (96 power-cut states), switcher 55/0, upd 115/115; hygiene + bin/ drift OK (official zig 0.17.1). Gen 2 bits not verified (issue #1
    asks for the DIAGNOSTICS values); not yet on a machine.
 
 ## Appendix A — string table (id / EN / DA)

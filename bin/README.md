@@ -25,8 +25,9 @@ controller water-supply bits (word 36 `0x8000` tank missing, `0x0001` tank low, 
 their own HOME text instead of *UNKNOWN FAULT* (docs/ui-guide.md §22). No UART frame, frame-policy rule or guard changed.
 `merakiplus_boot`, `merakiplus_snd`, `switcher`, `tinj_hold`, `keyinj`, `grab_shim.so` and `audio/` are byte-identical
 to v6.23. **Not yet verified on a machine.** The bit meanings come from static analysis of the Gen 1 controller
-firmware (5.1.4) and the stock display UI. The issue was reported on a **Gen 2** machine, whose controller firmware
-we have not analysed, so it is not yet confirmed that Gen 2 uses the same bits. Covered by the UI self-test (EN + DA,
+firmware (5.1.4) and the stock display UI. The issue was reported on a **Gen 2** machine, which runs Meraki+ (v6.23,
+community report), but we have not analysed its controller firmware, so it is not yet confirmed that Gen 2 uses the
+same water-tank bits (issue #1 awaits the values). Covered by the UI self-test (EN + DA,
 also as a 32-bit ARM binary), `sim/selftest.py` and the full simulator E2E suite (EN + DA) incl. `fault_water_tank`.
 
 **v6.23 (2026-11-23, auto off 30 min by default):** `merakiplus` (`79cdf911…`), `merakiplus_sim_arm` and the two

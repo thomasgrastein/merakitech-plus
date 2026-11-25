@@ -664,8 +664,9 @@ Out of scope: closing the manufacturer's telnet, and the security of Secure Link
 
 ## 11. Versioning, Gen 1 and Gen 2
 
-The register map was reversed on one Gen 1 with controller firmware V5.1.4. Gen 2 may differ, and a first Gen 2
-owner has already reported a difference (issue #1).
+The register map was reversed on one Gen 1 with controller firmware V5.1.4. Meraki+ is confirmed running on Gen 2
+(community report, issue #1, v6.23), but Gen 2's register details have not been verified and may still differ (issue #1
+still awaits Gen 2 values for the water-tank error bits). The schema below is built to tolerate such differences.
 
 * **`schema` on every record.** Within one major version, changes only add keys. A consumer ignores unknown keys
   and treats a missing key as "not available".

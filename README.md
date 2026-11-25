@@ -12,7 +12,8 @@
 </p>
 
 **Meraki+** is an open-source replacement UI for the round 480×480 touch display of the
-**MerakiTech Gen 1** espresso machine (and possibly Gen 2 — see [Requirements](#requirements)). It
+**MerakiTech Gen 1** espresso machine, and confirmed running on **Gen 2** too (community report — see
+[Requirements](#requirements)). It
 runs in the display's *slot B* using the manufacturer's own A/B mechanism, so the original software
 in *slot A* is never touched, and you can always go back to it with a single command: `./revert.sh`.
 
@@ -161,7 +162,7 @@ available to go back to.
 
 | | |
 |---|---|
-| **Machine** | MerakiTech **Gen 1** with the round touch display (display module Sanbon SAT62091M, Linux 4.9). Developed and tested on one Gen 1. **Gen 2: not tested** — the installer checks a fingerprint and stops without changing anything if the display does not look as expected. Please report your results in an issue. |
+| **Machine** | MerakiTech **Gen 1** or **Gen 2** with the round touch display (on Gen 1: display module Sanbon SAT62091M, Linux 4.9). Developed and hardware-verified on one Gen 1. **Gen 2: confirmed running** — a Gen 2 owner installed v6.23 and it runs healthy (community report, [issue #1](https://github.com/thomasgrastein/merakitech-plus/issues/1)); detailed hardware verification (register map, controller firmware, error bits) is still Gen 1 only. On every machine the installer checks a fingerprint and stops without changing anything if the display does not look as expected. Please report your results in an issue. |
 | **Designed and tested against** | Controller (MCU) firmware **V5.1.4** (`MEM03_V514_260923`) and the stock display app build **1.1.1-69** — the versions on the reference machine. Every frame Meraki+ sends was reverse-engineered from and verified against these two. Other controller versions: hot water by weight is used only when the controller reports a version **> 5.1.2** (the stock UI's own rule); older or unreadable versions get manual hot water. Nothing else has been tested on other firmware — please report your *DIAGNOSTICS → CONTROLLER* version in an issue. |
 | **Network** | The machine on your Wi-Fi (set up in the stock app/UI), and your computer on the **same local network**. |
 | **Computer** | macOS or Linux (Windows: use WSL) with `bash`, `python3` ≥ 3.8 and `git`. Nothing else. |
@@ -426,8 +427,12 @@ and what to check: [docs/mains-voltage.md](docs/mains-voltage.md).
 
 <details><summary><b>Does it work on Gen 2?</b></summary>
 
-Unknown. Run `--dry-run` — the installer stops without changes if the display is not recognized.
-Please share the result in an issue.
+Yes — confirmed running. A Gen 2 owner installed v6.23 and reported it running healthy (community report,
+[issue #1](https://github.com/thomasgrastein/merakitech-plus/issues/1)). Detailed hardware verification is still Gen 1 only: whether Gen 2's controller firmware and
+register map match Gen 1 in every detail has not been checked, so some messages may differ (for example the
+water-tank error bits, still awaiting Gen 2 values in issue #1). The installer still checks the display's fingerprint
+on every machine — run `--dry-run` first; it stops without changes if the display is not recognized. Please share your
+result (and your *DIAGNOSTICS → CONTROLLER* version) in an issue.
 </details>
 
 ## How it works

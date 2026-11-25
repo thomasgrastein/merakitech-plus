@@ -59,7 +59,10 @@ The pressure figure Meraki+ shows (≈BAR) is an estimate, not a measurement
 
 - **Reference hardware:** one MerakiTech Gen 1, 220–240 V, controller firmware V5.1.4, stock display
   build 1.1.1-69. Everything Meraki+ sends was worked out from and checked against these.
-- **Not tested:** Gen 2, other controller firmware versions, 100–120 V machines.
+- **Gen 2: confirmed running** (community report, [issue #1](https://github.com/thomasgrastein/merakitech-plus/issues/1):
+  v6.23 installed and running healthy). Detailed hardware verification is still Gen 1 only — Gen 2's controller
+  firmware version and whether its register map differs from Gen 1 are not known.
+- **Not tested:** other controller firmware versions, 100–120 V machines.
 - **Releases are not always checked on a machine before they are published.** Every release passes the
   automated tests (the UI self-test and the simulator). Whether a given build has also run on the reference machine is
   stated per version in [bin/README.md](../bin/README.md) and [CHANGELOG.md](../CHANGELOG.md) — read it

@@ -410,7 +410,8 @@ Background, evidence and decisions: [water-dosing-compat.md](water-dosing-compat
 
 Until v6.24, removing the water tank showed *ERROR · UNKNOWN FAULT*: the controller reports the tank through error
 bits that Meraki+ had no text for. v6.24 names them. Evidence: static analysis of the Gen 1 controller firmware
-(5.1.4) and the stock display UI. **Not yet confirmed on Gen 2** (the issue was reported on a Gen 2 machine).
+(5.1.4) and the stock display UI. Meraki+ runs on Gen 2 (the issue was reported on a Gen 2 machine running v6.23),
+but **these specific bits are not yet confirmed on Gen 2** — issue #1 awaits the Gen 2 values.
 
 | Bit | What the controller means (Gen 1) | Stock UI | Meraki+ HOME sub-line (EN / DA) | Code |
 |---|---|---|---|---|
