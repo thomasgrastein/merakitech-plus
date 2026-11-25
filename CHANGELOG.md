@@ -3,6 +3,41 @@
 All notable changes to Meraki+. Details (with evidence, frames and test figures) are in
 [docs/dev/UI_v6.md](docs/dev/UI_v6.md) under *CHANGES-v6.x*. All dates are 2026.
 
+## Unreleased — security hardening (installer, release process, CI)
+No device binary changed (`bin/` is byte-identical; `VERSION` stays 6.24 until a release PR). Details:
+[docs/release-process.md](docs/release-process.md), [docs/signing.md](docs/signing.md).
+### Changed (behaviour)
+- **Installer: signed by default.** `./install.sh` stops when the files are not covered by a valid signed manifest
+  of their release (no manifest, unreachable, or files that differ from it). `--allow-unsigned` installs development
+  builds on purpose, with an `UNSIGNED install` warning; on a display that already accepted a signed release it also
+  needs `--allow-downgrade`. A bad signature, an unknown key or an older `seq` is refused either way.
+  `--require-signed` is still accepted (now the default).
+- **Installs come from release tags, never from a branch.** The default `--ref` is the installer's own release tag
+  (`v<VERSION>`); `--ref` / `MERAKIPLUS_REF` accept only `vX.Y[.Z]` tags and full commit SHAs. The standalone
+  `install.sh` (curl) resolves the **latest published release** and fetches the installer and binaries from that tag.
+  README: clone, then check out the latest release tag.
+- **Releases: draft → sign → publish.** `release.yml` builds a *draft* release (not public, no tag) and never changes
+  an existing release; `tools/sign_release.py sign --upload` signs the draft and publishes it. No unsigned release is
+  public any more. It runs on `main` only (no tag trigger; a dispatch on another branch is refused).
+### Added
+- **Signing review:** before signing, `sign_release.py` shows the commits, diffstat and changed **trust anchors** since
+  the last signed release, checks the three pinned key copies at the release commit against a key pin kept **outside
+  the repository** (`~/.merakiplus/trusted-key-pin`, `pin-keys`; a difference is refused unless
+  `--accept-key-change`), and asks for the reviewed commit SHA. It refuses to run in CI and to sign a draft whose
+  commit is not on `origin/main`.
+- **`grab_shim.so` is verifiable:** `build.sh` trims the fresh build deterministically (loaded segments only), which
+  reproduces the shipped, on-device-verified file byte for byte; the `bin/` drift check and the signing rebuild now
+  cover it.
+- **`.github/CODEOWNERS`** for the trust anchors, **Dependabot** for the pinned actions, and a CI warning on PRs that
+  touch a trust anchor.
+### Security (CI)
+- Every action pinned to a full commit SHA; `persist-credentials: false` on every checkout; read-only workflow token,
+  `contents: write` only on the draft-release job (no repository code runs there); cold zig cache (`use-cache: false`)
+  for the `bin/` drift check and the release build. `tests/hygiene.py` fails if any of this regresses, or if a trust
+  anchor is not code-owned.
+- Tests: installer (signed by default, `--allow-unsigned`, `max_seq`, `--ref`, the `install.sh` bootstrap with a fake
+  `curl`), signing (key pin, review, draft commit, CI refusal, `release.yml` shape).
+
 ## Unreleased — pull-request workflow (repository process only)
 No code or binary changed. Details: [CONTRIBUTING.md](CONTRIBUTING.md#how-changes-reach-main), [docs/release-process.md](docs/release-process.md).
 ### Changed

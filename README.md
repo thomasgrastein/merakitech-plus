@@ -174,13 +174,17 @@ available to go back to.
 ```sh
 git clone https://github.com/thomasgrastein/merakitech-plus.git
 cd merakitech-plus
+git checkout "$(git describe --tags --abbrev=0 origin/main)"   # the latest release tag (a signed release)
 
 ./install.sh --scan                      # 1. find the display on your network (or look in your router)
 ./install.sh --ip 192.168.1.50 --dry-run # 2. see exactly what will happen — changes nothing
 ./install.sh --ip 192.168.1.50           # 3. install and start Meraki+ (no reboot)
 ```
 
-(Replace `192.168.1.50` with your display's address.) **Make sure the machine is idle** — no brewing,
+(Replace `192.168.1.50` with your display's address.) The installer is **signed by default**: it installs only files
+that match the maintainer's signed release manifest, so install from a release tag as above — a checkout of `main`
+between releases is a development build and is refused unless you pass `--allow-unsigned`
+([Security and OTA](#security-and-ota)). **Make sure the machine is idle** — no brewing,
 steaming, grinding or hot water — while you install. The installer asks before it changes anything.
 
 **What the installer does, step by step:**
@@ -225,6 +229,7 @@ steaming, grinding or hot water — while you install. The installer asks before
 | `--no-activate` | install, but do not start Meraki+ now |
 | `--yes` | do not ask (for scripts) |
 | `--verbose` | show every command sent to the display |
+| `--allow-unsigned` | developers: install files that are not a signed release (refused on a display that already has a signed release unless `--allow-downgrade` is added) |
 
 The installer is **idempotent**: run it again to update to a new version, or to start Meraki+ again
 after a reboot (without `--persist` the machine starts the original UI at boot). A log is saved in
@@ -243,9 +248,12 @@ the older Meraki+ build is still recognised as Meraki+. Nothing is lost; `--dry-
 curl -fsSL https://raw.githubusercontent.com/thomasgrastein/merakitech-plus/main/install.sh | bash -s -- --ip 192.168.1.50
 ```
 
-The binaries are still md5-checked, but the install script itself is not, and you cannot read it
-before it runs. **Prefer `git clone`**, read the script, and run `--dry-run` first. `revert.sh`
-requires a clone of the repository.
+The script installs the **latest published release**: it looks up that release tag on GitHub and fetches the
+installer and the binaries from the tag, never from a branch; the binaries are then checked against the pinned
+hashes and the release's signed manifest. The installer itself is not verified by anything but GitHub's TLS, and you
+cannot read it before it runs. **Prefer `git clone`** of a release tag, read the script, and run `--dry-run` first.
+`MERAKIPLUS_REF` may name another release tag (`v6.23`) or a full commit SHA, nothing else. `revert.sh` requires a
+clone of the repository.
 </details>
 
 ## Usage
@@ -361,12 +369,18 @@ Without `--persist` the machine starts the original UI. With `--persist`: see th
   display (previous version → original UI), without a computer or network.
   Meraki+ also shows a notice on screen (SYSTEM and a toast) when it finds a manufacturer update.
 - **Signed releases:** from v6.23, every release carries `manifest.json` + `manifest.sig` — all files
-  with SHA-256, signed offline by the maintainer with an Ed25519 key that CI and GitHub never see, after
-  a byte-for-byte rebuild. `./install.sh` checks the signature and every file on your computer before
-  it changes anything on the display, and refuses older signed releases than the display already had
-  (`--allow-downgrade` to do it on purpose; `--require-signed` to refuse unsigned installs). Check a
+  with SHA-256, signed offline by the maintainer with an Ed25519 key (id `26f673cde8584ba0`) that CI and GitHub
+  never see, after reviewing every change since the last signed release and a byte-for-byte rebuild. CI only builds
+  a *draft*; a release becomes public when the maintainer signs and publishes it, and published releases are
+  immutable. `./install.sh` is **signed by default**: it checks the signature and every file on your computer before
+  it changes anything on the display, refuses unsigned or modified files (`--allow-unsigned` for development builds),
+  and refuses older signed releases than the display already had (`--allow-downgrade` to do it on purpose). Check a
   download yourself: `python3 tools/merakiplus.py verify-release <dir>`. Details and the key:
   [docs/signing.md](docs/signing.md).
+- **Trust root:** a signature can only be checked with a key you already trust. The first download of the installer
+  trusts GitHub and this repository; a clone you keep (and update only to release tags you choose) keeps its own
+  pinned key and is not affected by later changes to the repository. How releases are made and what CI may do:
+  [docs/release-process.md](docs/release-process.md).
 - **Planned:** an opt-in update check on the display itself — see [docs/ota-plan.md](docs/ota-plan.md)
   (phases 1a, 1b and 2 are done; on-device download is not implemented yet).
 - **Meraki+ itself** opens no new network ports and contacts no servers. Its only network function

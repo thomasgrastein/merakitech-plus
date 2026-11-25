@@ -5,7 +5,7 @@ Normally used through ./install.sh and ./revert.sh. Python 3.8+, standard librar
 
     merakiplus.py status  --ip ADDR            read-only overview (safe)
     merakiplus.py scan                          find the display on your /24 (telnet fingerprint)
-    merakiplus.py install --ip ADDR [--persist] [--gesture] [--dry-run] [--yes]
+    merakiplus.py install --ip ADDR [--persist] [--gesture] [--dry-run] [--yes] [--allow-unsigned]
     merakiplus.py revert  --ip ADDR [--purge]  [--dry-run] [--yes]
     merakiplus.py verify-release DIR            check a downloaded release against its signed manifest
 
@@ -14,6 +14,12 @@ server on port 23. Commands are sent over that; files are pushed with the displa
 busybox `nc -l` (raw TCP), and every file is md5-verified after transfer and after install
 (plus SHA-256 when the display's busybox has sha256sum). On the computer every file is checked
 against the pinned SHA-256 and md5 tables below before anything is sent.
+
+Trust model (docs/signing.md): installs are SIGNED BY DEFAULT. Every file is checked against the pinned SHA-256/md5
+tables below AND against the Ed25519-signed manifest of release v<VERSION> (signed offline by the maintainer); without a
+valid signed manifest the installer stops. --allow-unsigned is the explicit escape hatch for development builds, and is
+refused on a display that already accepted a signed release unless --allow-downgrade is given too. Downloads come from
+the release tag v<VERSION> (--ref accepts only release tags and full commit SHAs), never from a moving branch.
 
 Safety model (see README "Security and OTA" and the disclaimer):
   * Slot A (/customer/demo_v9, libs, test.sh) is never written. config.json is never written.
@@ -577,7 +583,8 @@ def get_binary(name, args, out, sub="bin"):
         with urllib.request.urlopen(url, timeout=60) as r:
             data = r.read()
     except Exception as e:
-        raise Abort(f"Download failed ({e}). Clone the repo instead: git clone https://github.com/{REPO}")
+        raise Abort(f"Download failed ({e}). Clone the repo and check out the latest release tag instead: "
+                    f"git clone https://github.com/{REPO}")
     if sha256b(data) != want256 or md5b(data) != want:
         raise Abort(f"Downloaded {name} has sha256 {sha256b(data)}, expected {want256} — refusing to use it.")
     out.ok(f"{name}: downloaded, sha256 {want256[:16]}… and md5 {want} verified")
@@ -848,22 +855,41 @@ def fetch_signed_manifest(args, o):
 
 
 def check_signed_release(args, o, files, max_seq):
-    """Verify the installed files against the release's signed manifest (computer side). Returns the manifest or None
-    (unsigned / unreachable: a warning, or an abort with --require-signed). Never touches the display."""
+    """Verify the installed files against the release's signed manifest (computer side). Never touches the display.
+
+    Signed by default: no signed manifest (unsigned / unreachable) is an abort. --allow-unsigned (development builds,
+    offline) turns it into a warning — but not on a display that already accepted a signed release (it has max_seq),
+    unless --allow-downgrade is given as well. With --allow-unsigned, files that differ from the signed release of
+    v<VERSION> (a development commit between releases) are installed as UNSIGNED; a bad signature, an unknown key or
+    an older seq is refused either way. Returns the manifest, or None for an unsigned install."""
+    def unsigned(why):
+        if not args.allow_unsigned:
+            raise Abort(f"{why}. Installs are signed by default, so nothing was changed. Install a signed release "
+                        f"(the latest release tag, see README), or pass --allow-unsigned for a development build "
+                        f"you built or trust yourself (docs/signing.md).")
+        if max_seq is not None and not args.allow_downgrade:
+            raise Abort(f"{why}, and this display already accepted signed release seq {max_seq}: an unsigned install "
+                        "would bypass that. Nothing was changed. To install an unsigned development build on it on "
+                        "purpose, pass --allow-downgrade as well.")
+        o.warn(f"UNSIGNED install (--allow-unsigned): {why} — the files were checked against this installer's pinned "
+               "SHA-256 table only" + (f"; the display's max_seq {max_seq} is kept" if max_seq is not None else ""))
+        return None
+
     try:
         got = fetch_signed_manifest(args, o)
         if got is None:
-            msg = (f"no signed manifest found for v{VERSION} (offline, or the release is not signed yet) — the files "
-                   "were checked against this installer's pinned SHA-256 table only")
-            if args.require_signed:
-                raise Abort(msg.split(" — ")[0] + " and --require-signed was given. Nothing was changed.")
-            o.warn(msg)
-            return None
+            return unsigned(f"no signed manifest found for v{VERSION} (offline, or the release is not signed)")
         m = verify_manifest(got[0], got[1],
                             max_seq=None if args.allow_downgrade or max_seq is None else max_seq)
         if m["version"] != VERSION:
             raise SigError("format", f"the signed manifest is for v{m['version']}, this installer installs v{VERSION}")
-        verify_assets(m, files)
+        try:
+            verify_assets(m, files)
+        except SigError as e:
+            if args.allow_unsigned:
+                return unsigned(f"these files are not the signed release v{VERSION} ({e})")
+            raise SigError(e.kind, f"{e} — if this is a development checkout between releases, check out the latest "
+                                   "release tag (git checkout vX.Y) or pass --allow-unsigned")
     except SigError as e:
         raise Abort(f"signed release check FAILED ({e.kind}): {e}. Nothing was changed."
                     + (" Use --allow-downgrade to install an older release on purpose." if e.kind == "older" else ""))
@@ -872,6 +898,18 @@ def check_signed_release(args, o, files, max_seq):
     if max_seq is not None and m["seq"] < max_seq:
         o.warn(f"DOWNGRADE on purpose (--allow-downgrade): seq {max_seq} -> {m['seq']}")
     return m
+
+
+_REF = re.compile(r"v\d{1,4}\.\d{1,4}(?:\.\d{1,4})?\Z|[0-9a-f]{40}\Z")
+
+
+def check_ref(ref):
+    """--ref / MERAKIPLUS_REF: a release tag (vX.Y[.Z]) or a full 40-hex commit SHA — never a branch name, which can
+    move under you (the files must still match this installer's pins and the signed manifest)."""
+    if not _REF.match(ref or ""):
+        raise Abort(f"--ref/MERAKIPLUS_REF must be a release tag like v{VERSION} or a full 40-character commit SHA, "
+                    f"not {ref!r}. Branches are not accepted: use a git clone for development builds.")
+    return ref
 
 
 def cmd_verify_release(o, args):
@@ -1795,13 +1833,19 @@ def main(argv=None):
     p.add_argument("--gesture", action="store_true",
                    help="also install the center-hold gesture switcher (adds ONE line to /customer/demo.sh)")
     p.add_argument("--no-activate", action="store_true", help="install only; do not start Meraki+ now")
-    p.add_argument("--ref", default=os.environ.get("MERAKIPLUS_REF", "main"), help="git ref to download bin/ from")
+    p.add_argument("--ref", default=os.environ.get("MERAKIPLUS_REF") or "v" + VERSION,
+                   help=f"release tag (default v{VERSION}, this installer's version) or full commit SHA to download "
+                        "bin/ from when there is no local copy; branch names are refused")
     p.add_argument("--bin-dir", help="use binaries from this directory (sha256 + md5 checked; a signed manifest.json + "
                                      "manifest.sig in it is used instead of downloading them)")
+    p.add_argument("--allow-unsigned", action="store_true",
+                   help="development builds / offline: install even without a valid signed manifest for these files "
+                        "(on a display that already accepted a signed release, only together with --allow-downgrade)")
     p.add_argument("--require-signed", action="store_true",
-                   help="refuse to install unless the release's signed manifest verifies (docs/signing.md)")
+                   help=argparse.SUPPRESS)       # the default since signed-by-default; kept so older docs/scripts work
     p.add_argument("--allow-downgrade", action="store_true",
-                   help="allow a signed release older than the newest one this display accepted")
+                   help="allow a signed release older than the newest one this display accepted (and, with "
+                        "--allow-unsigned, an unsigned build on such a display)")
     p.add_argument("--health-seconds", type=int, default=HEALTH_S, help=argparse.SUPPRESS)   # tests
     p.add_argument("--reload-wait", type=int, default=45, help=argparse.SUPPRESS)              # tests
     p = sub.add_parser("revert", help="restore the stock UI and remove Meraki+")
@@ -1830,6 +1874,10 @@ def main(argv=None):
         if args.cmd == "verify-release":
             cmd_verify_release(o, args)
             return 0
+        if args.cmd == "install":
+            if args.allow_unsigned and args.require_signed:
+                raise Abort("--allow-unsigned and --require-signed contradict each other")
+            check_ref(args.ref)
         ip = resolve_ip(o, args)
         args.ip = ip
         dev = Device(ip, args.port, o, dry=args.dry_run, prefix=args.test_prefix or "")

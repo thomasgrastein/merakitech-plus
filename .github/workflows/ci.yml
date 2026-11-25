@@ -9,6 +9,10 @@ name: CI
 # Docs-only changes skip full-e2e and merge-gate still passes; code changes need full-e2e green. Requiring only
 # merge-gate avoids the "skipped required check" deadlock. Do not rename the merge-gate job: its name is the
 # check that branch protection requires.
+#
+# Hardening (docs/release-process.md "CI hardening"): read-only token, every action pinned to a full commit SHA
+# (Dependabot proposes updates), no persisted git credentials, cold zig cache for the bin/ drift check. Never add
+# pull_request_target / workflow_run, and never put ${{ }} expressions straight into a run: script (use env:).
 
 on:
   push:
@@ -40,9 +44,10 @@ jobs:
     outputs:
       code: ${{ steps.f.outputs.code }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
+          persist-credentials: false
       - name: Does this change need the full E2E suite?
         id: f
         env:
@@ -75,19 +80,30 @@ jobs:
           echo "code=$code" >> "$GITHUB_OUTPUT"
           echo "Full E2E required: **$code** ($EVENT)" >> "$GITHUB_STEP_SUMMARY"
           echo "full E2E required: $code"
+      - name: Trust-anchor changes (advisory, for the reviewer)
+        run: |
+          # Paths that decide what users install or trust (installer, pins, keys, signing tool, gates, workflows;
+          # list: TRUST_ANCHORS in tools/sign_release.py, owned via .github/CODEOWNERS). A change is not an error,
+          # but it must be read with extra care — this puts it on the run summary and as a warning on the PR.
+          if [ -f changed.txt ]; then python3 tests/hygiene.py --trust-anchors changed.txt; fi
 
   quick:
     name: build + quick tests
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
-      - uses: mlugg/setup-zig@v2
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
         with:
           version: 0.17.1
+          # cold build: the bin/ drift check below must compare against a build from an EMPTY zig cache, never one
+          # restored from (or saved for) another run (docs/release-process.md "CI hardening")
+          use-cache: false
       - name: Repository hygiene (checksums, no vendor files, no personal data)
         run: python3 tests/hygiene.py
       - name: Build (host SIM, switcher, self-tests)
@@ -117,7 +133,7 @@ jobs:
         run: python3 tests/test_installer.py
       - name: Upload reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: quick-reports
           path: |
@@ -132,11 +148,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
-      - uses: mlugg/setup-zig@v2
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
         with:
           version: 0.17.1
       - run: ./build.sh host
@@ -192,7 +210,7 @@ jobs:
               || { echo "::error::full E2E ($E2E_LANG): $sc failed again on retry"; exit 1; }
           done
           echo "full E2E ($E2E_LANG): passed after retrying: $failed" | tee -a "$GITHUB_STEP_SUMMARY"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
           name: full-e2e-reports

@@ -1,40 +1,39 @@
 name: Release
 
-# Automatically maintains the GitHub releases of Meraki+.
+# Builds the GitHub release of Meraki+ as a DRAFT. Publishing is the maintainer's offline step (docs/release-process.md):
 #
-# Triggers:
-#   * push of a v* tag      -> build + gate, then create OR update that release
-#   * workflow_dispatch     -> same, for the VERSION in tools/merakiplus.py
-#   * push to main          -> auto-maintain: only when VERSION is newer than the
-#                              latest published release (skips otherwise, green)
+#   merge to main (VERSION bump) -> this workflow: build + test gate -> DRAFT release vX.Y (unsigned assets,
+#   manifest.unsigned.json)  ->  maintainer: tools/sign_release.py sign vX.Y --upload  (rebuild + byte compare, diff
+#   review since the last signed tag, key-pin check, sign, upload manifest.json + manifest.sig, PUBLISH)
 #
-# Idempotency: a release that already exists for the version is edited (title, notes,
-# latest/prerelease flag) and its assets replaced with --clobber — never duplicated.
-# Re-running for the same version converges to the same release.
+# A draft is invisible to the public and creates no git tag, so no unsigned release is ever public. With immutable
+# releases on, a published release (assets + tag) cannot be changed afterwards — not by CI, not by anyone.
 #
-# Assets: the committed bin/ builds (source of truth for the raw-download installer).
-# tests/check_bins.py verifies they are byte-identical to fresh zig 0.17.1 builds
-# before anything is published. The macOS SIM asset is the committed build made on
-# macOS: Mach-O is not bit-reproducible, so CI does not rebuild it (no macOS runner
-# needed); tests/hygiene.py md5-gates it against bin/MD5SUMS. grab_shim.so is likewise
-# the committed on-device-verified build. Since OTA phase 1a every installed file is a
-# release asset (UI, sound helper, launcher (1b), switcher, grab_shim.so, the three WAVs), listed in both
-# MD5SUMS (kept for older scripts) and SHA256SUMS; tests/hygiene.py checks that the
-# installer's pinned tables (BIN_MD5/BIN_SHA256/AUDIO_MD5/AUDIO_SHA256) match the files.
-# OTA phase 2 (docs/signing.md): CI also publishes manifest.unsigned.json but can NEVER sign. The maintainer signs
-# offline with tools/sign_release.py (rebuild + byte compare first) and uploads manifest.json + manifest.sig. A re-run
-# for an already signed release refuses to replace assets that no longer match the signed manifest.
+# Triggers — main only:
+#   * push to main          -> only when VERSION is stable and newer than the latest published release (else: skip)
+#   * workflow_dispatch     -> same version check; refused unless started on main (e.g. to rebuild a deleted draft)
+# There is no tag trigger: a tag is created only when the maintainer publishes the signed draft.
 #
-# Auth: GITHUB_TOKEN only (contents: write below). No other credentials anywhere.
+# Idempotency: CI never changes an existing release. If a draft (or a published release) for the version exists, the
+# run reports it and stops. To rebuild a draft: delete it (`gh release delete vX.Y`) and dispatch this workflow.
+#
+# Assets: the committed bin/ builds (source of truth for the installer). tests/check_bins.py verifies they are
+# byte-identical to fresh zig 0.17.1 builds (cold cache) before anything is uploaded — every installed binary,
+# including grab_shim.so (deterministically trimmed, see build.sh). The macOS SIM asset is the committed build made
+# on macOS (Mach-O is not bit-reproducible); tests/hygiene.py md5-gates it against bin/MD5SUMS. Every installed file
+# is listed in MD5SUMS and SHA256SUMS; tests/hygiene.py checks that the installer's pinned tables match the files.
+#
+# Least privilege: the workflow token is read-only; only the `publish` job gets contents: write, and it runs no repository
+# code and no third-party action (only the pinned, GitHub-owned download-artifact). Every action is pinned to a full
+# commit SHA. No checkout persists credentials. CI never has the signing key and cannot sign.
 
 on:
   push:
     branches: [main]
-    tags: ["v*"]
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: release
@@ -43,6 +42,8 @@ concurrency:
 jobs:
   check:
     name: version check
+    # main only: a dispatch on any other branch (or a fork's ref) never reaches the build or publish jobs
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -52,7 +53,9 @@ jobs:
       target: ${{ steps.v.outputs.target }}
       prerelease: ${{ steps.v.outputs.prerelease }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
       - name: Decide whether a release is needed (and for which version)
         id: v
         env:
@@ -82,29 +85,21 @@ jobs:
           release_exists = lambda tag: gh("release", "view", tag, "--repo", repo,
                                           "--json", "tagName").returncode == 0
 
-          needed, target, tag = False, "", "v" + version
-          if event == "push" and ref.startswith("refs/tags/"):
-              tag = ref[len("refs/tags/"):]
-              if tag != "v" + version:
-                  sys.exit(f"tag {tag} does not match source VERSION {version} — "
-                           "bump VERSION (tools/merakiplus.py + src/merakiplus.c) first")
-              needed = True                       # create or update, idempotent
-          elif event == "workflow_dispatch":
-              needed = True                       # create or update, idempotent
-              target = sha                        # only used if the tag does not exist yet
-          else:                                   # push to main: auto-maintain
-              if not stable:
-                  print(f"VERSION {version} is not stable; main pushes only auto-release stable versions")
-              elif release_exists(tag):
-                  print(f"release {tag} already exists; nothing to do")
+          if ref != "refs/heads/main":
+              sys.exit(f"release.yml runs on main only (got {ref})")
+          needed, target, tag = False, sha, "v" + version
+          if release_exists(tag):                 # published (a read-only token does not see drafts)
+              print(f"release {tag} is already published; CI never changes a published release")
+          elif event == "push" and not stable:
+              print(f"VERSION {version} is not stable; main pushes only auto-release stable versions")
+          else:
+              r = gh("api", f"repos/{repo}/releases/latest", "--jq", ".tag_name")
+              latest = r.stdout.strip() if r.returncode == 0 else ""
+              if latest and vkey(version) <= vkey(latest.lstrip("v")):
+                  print(f"VERSION {version} is not newer than latest release {latest}; nothing to do")
               else:
-                  r = gh("api", f"repos/{repo}/releases/latest", "--jq", ".tag_name")
-                  latest = r.stdout.strip() if r.returncode == 0 else ""
-                  if latest and vkey(version) <= vkey(latest.lstrip("v")):
-                      print(f"VERSION {version} is not newer than latest release {latest}; nothing to do")
-                  else:
-                      needed, target = True, sha
-                      print(f"VERSION {version} is newer than latest release {latest or '(none)'}; releasing")
+                  needed = True
+                  print(f"VERSION {version} is newer than latest release {latest or '(none)'}; building a draft")
 
           with open(os.environ["GITHUB_OUTPUT"], "a") as f:
               f.write(f"needed={'true' if needed else 'false'}\n")
@@ -113,7 +108,7 @@ jobs:
               f.write(f"target={target}\n")
               f.write(f"prerelease={'false' if stable else 'true'}\n")
           summary = (f"Release check: **{tag}** — " +
-                     ("build + publish (create or update)" if needed else "skip, already up to date") +
+                     ("build + draft release" if needed else "skip, nothing to release") +
                      f" (VERSION {version}, {'stable' if stable else 'prerelease'})")
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
               f.write(summary + "\n")
@@ -126,14 +121,19 @@ jobs:
     if: needs.check.outputs.needed == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # read-only token (workflow default): this job runs repository code and a third-party action, so it must not be
+    # able to push, move tags or change/delete release assets
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
-      - uses: mlugg/setup-zig@v2
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
         with:
           version: 0.17.1
+          use-cache: false        # cold build: never restore (or save) a zig cache for the release build
       - name: Repository hygiene (checksums, no vendor files, no personal data)
         run: python3 tests/hygiene.py
       - name: Build (device ARMv7 + host SIM + self-tests)
@@ -168,34 +168,21 @@ jobs:
           cp bin/merakiplus bin/merakiplus_snd bin/merakiplus_boot bin/switcher bin/grab_shim.so audio/*.wav bin/merakiplus_sim_arm bin/merakiplus_sim-linux-x86_64 bin/merakiplus_sim-macos-arm64 dist/
           (cd dist && md5sum $files > MD5SUMS && sha256sum $files > SHA256SUMS)
           # OTA phase 2 (docs/signing.md): an UNSIGNED manifest for comparison. CI has no signing key; the maintainer
-          # signs offline (tools/sign_release.py sign) and uploads manifest.json + manifest.sig afterwards.
+          # signs the draft offline (tools/sign_release.py sign), uploads manifest.json + manifest.sig and publishes.
           COMMIT="$GITHUB_SHA"
           RELEASED="$(TZ=UTC git log -1 --format=%cd --date=format-local:%Y-%m-%d)"
           python3 tools/sign_release.py manifest --dir dist --version "$VERSION" --commit "$COMMIT" --released "$RELEASED" --assets $files MD5SUMS SHA256SUMS --out dist/manifest.unsigned.json
           python3 tools/release_notes.py "$VERSION" > dist/notes.md
           cat dist/MD5SUMS dist/SHA256SUMS
-      - name: Signed-release guard (never replace assets under an existing signed manifest)
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ needs.check.outputs.tag }}
-        run: |
-          if gh release view "$TAG" --json assets --jq '.assets[].name' 2>/dev/null | grep -qx manifest.json; then
-            gh release download "$TAG" -p manifest.json -p manifest.sig -D dist
-            python3 tools/merakiplus.py verify-release dist
-            rm -f dist/manifest.json dist/manifest.sig
-            echo "== $TAG is signed and the rebuilt assets match its signed manifest"
-          else
-            echo "== $TAG has no signed manifest (yet)"
-          fi
       - name: Upload release assets
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: release-assets
           path: dist/
           if-no-files-found: error
       - name: Upload reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: release-reports
           path: |
@@ -204,18 +191,21 @@ jobs:
           if-no-files-found: ignore
 
   publish:
-    name: publish release
+    name: draft release
     needs: [check, build]
-    if: needs.check.outputs.needed == 'true'
+    if: needs.check.outputs.needed == 'true' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # the ONLY job with a write token; it runs no repository code (no checkout) and only GitHub's own pinned action
+    permissions:
+      contents: write
     steps:
       - name: Download release assets
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: release-assets
           path: dist
-      - name: Create or update the release (idempotent)
+      - name: Create the DRAFT release (never changes an existing one)
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -225,18 +215,18 @@ jobs:
         run: |
           set -eu
           title="Meraki+ ${TAG}"
-          if [ "$PRERELEASE" = "true" ]; then flag="--prerelease"; else flag="--latest"; fi
           assets="dist/merakiplus dist/merakiplus_snd dist/merakiplus_boot dist/switcher dist/grab_shim.so dist/start.wav dist/ready_extract.wav dist/ready_steam.wav dist/merakiplus_sim_arm dist/merakiplus_sim-linux-x86_64 dist/merakiplus_sim-macos-arm64 dist/MD5SUMS dist/SHA256SUMS dist/manifest.unsigned.json"
-          if gh release view "$TAG" --json tagName >/dev/null 2>&1; then
-            echo "== release $TAG exists -> edit notes + replace assets (no duplicate)"
-            gh release edit "$TAG" --title "$title" --notes-file dist/notes.md "$flag"
-            gh release upload "$TAG" $assets --clobber
-          else
-            echo "== release $TAG does not exist -> create"
-            if [ -n "$TARGET" ]; then
-              gh release create "$TAG" --target "$TARGET" --title "$title" --notes-file dist/notes.md "$flag" $assets
+          if state=$(gh release view "$TAG" --json isDraft --jq '.isDraft' 2>/dev/null); then
+            if [ "$state" = "true" ]; then
+              echo "::notice::draft $TAG already exists — not touched. Sign it (tools/sign_release.py sign $TAG --upload), or delete it and re-run to rebuild."
             else
-              gh release create "$TAG" --title "$title" --notes-file dist/notes.md "$flag" $assets
+              echo "::notice::release $TAG is already published — CI never changes a published release."
             fi
+            exit 0
           fi
-          gh release view "$TAG" --json url,isPrerelease,assets --jq '{url: .url, prerelease: .isPrerelease, assets: [.assets[].name]}'
+          flag=""
+          if [ "$PRERELEASE" = "true" ]; then flag="--prerelease"; fi
+          echo "== creating DRAFT $TAG at $TARGET (no tag until the maintainer publishes it)"
+          gh release create "$TAG" --draft --target "$TARGET" --title "$title" --notes-file dist/notes.md $flag $assets
+          gh release view "$TAG" --json url,isDraft,isPrerelease,assets --jq '{url: .url, draft: .isDraft, prerelease: .isPrerelease, assets: [.assets[].name]}'
+          echo "Draft **$TAG** created (unsigned, not public). Next: \`tools/sign_release.py sign $TAG --upload\` on the maintainer's computer." >> "$GITHUB_STEP_SUMMARY"

@@ -80,6 +80,7 @@ def main():
     work = pathlib.Path(tempfile.mkdtemp(prefix="merakiplus-upd-")).resolve()
     try:
         run(work, arm)
+        signing_hardening(work)
     finally:
         shutil.rmtree(work, ignore_errors=True)
     print(f"UPD TESTS: {N[0] - len(FAILS)}/{N[0]} passed" + (f"; FAILED: {FAILS}" if FAILS else ""))
@@ -351,6 +352,136 @@ def run(work, arm):
         check("ARM: 32-bit container", r.stdout.startswith("32"), r.stdout + r.stderr)
         check("ARM: selftest passes", "passed" in r.stdout and "FAIL" not in r.stdout.split("ARM cases")[0])
         check(f"ARM: all {len(cases)} cases agree with the host", r.returncode == 0, r.stdout[-500:] + r.stderr[-300:])
+
+
+def signing_hardening(work):
+    """docs/signing.md §5 + docs/release-process.md: the signing tool's review (commits / diffstat / trust anchors since
+    the last signed tag), the key pin outside the repository, draft-commit resolution, commit confirmation, no signing
+    in CI — and the release workflow's draft -> sign -> publish shape."""
+    print("== signing hardening: trust anchors, key pin, review, draft commit ==")
+    check("trust anchors: installer, keys, workflows, bin/ are anchors; docs/src are not",
+          sr.trust_anchor_hits(["tools/merakiplus.py", "keys/x.pub", ".github/workflows/ci.yml", "bin/merakiplus",
+                                "docs/signing.md", "src/merakiplus.c", "install.sh", "tools/gen_audio.py"]) ==
+          ["tools/merakiplus.py", "keys/x.pub", ".github/workflows/ci.yml", "bin/merakiplus", "install.sh"])
+
+    real = sr.keys_at("HEAD")
+    check("keys_at(HEAD): the three pinned key sets equal TRUSTED_KEYS", all(v == mp.TRUSTED_KEYS for v in real.values()),
+          real)
+    pin = work / "pin" / "trusted-key-pin"
+    lines = sr.check_key_pin(real, pin)
+    check("key pin missing: a warning, not a stop", any("WARNING: no key pin" in ln for ln in lines), lines)
+    sr.write_key_pin(mp.TRUSTED_KEYS, pin)
+    check("key pin: written outside the repository, mode 600, read back",
+          sr.read_key_pin(pin) == mp.TRUSTED_KEYS and (pin.stat().st_mode & 0o777) == 0o600)
+    try:
+        sr.write_key_pin(mp.TRUSTED_KEYS, ROOT / "build" / "never-pin")
+        check("key pin refuses a path inside the repository", False)
+    except sr.Fail:
+        check("key pin refuses a path inside the repository", not (ROOT / "build" / "never-pin").exists())
+    check("key pin matches the release's keys: OK", any("[OK]" in ln for ln in sr.check_key_pin(real, pin)))
+    added = {k: dict(v, **{"00" * 8: "11" * 32}) for k, v in real.items()}
+    try:
+        sr.check_key_pin(added, pin)
+        check("a key ADDED by a merged change is refused at signing time", False)
+    except sr.Fail as e:
+        check("a key ADDED by a merged change is refused at signing time", "differ from your key pin" in str(e), str(e))
+    replaced = {k: {"00" * 8: "11" * 32} for k in real}
+    try:
+        sr.check_key_pin(replaced, pin)
+        check("a REPLACED key is refused at signing time", False)
+    except sr.Fail:
+        check("a REPLACED key is refused at signing time", True)
+    one = dict(real, **{"src/merakiplus_upd_keys.h": {"00" * 8: "11" * 32}})
+    try:
+        sr.check_key_pin(one, pin)
+        check("a change in only ONE of the three key copies is refused", False)
+    except sr.Fail:
+        check("a change in only ONE of the three key copies is refused", True)
+    lines = sr.check_key_pin(added, pin, accept_change=True)
+    check("--accept-key-change: signs anyway, with a loud warning",
+          any("WARNING" in ln for ln in lines) and any("--accept-key-change" in ln for ln in lines), lines)
+    (pin.parent / "bad").write_text("not a pin\n")
+    try:
+        sr.read_key_pin(pin.parent / "bad")
+        check("a malformed key pin is an error", False)
+    except sr.Fail:
+        check("a malformed key pin is an error", True)
+
+    # a throwaway git repository: v1.0 (signed earlier) -> main moves on -> a draft for v1.1
+    g = work / "gitrepo"
+    g.mkdir()
+    env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.invalid", GIT_COMMITTER_NAME="t",
+               GIT_COMMITTER_EMAIL="t@example.invalid")
+    git = lambda *a: subprocess.run(["git", "-C", str(g), *a], capture_output=True, text=True, env=env, check=True).stdout.strip()
+
+    def commit(files, msg):
+        for n, t in files.items():
+            (g / n).parent.mkdir(parents=True, exist_ok=True)
+            (g / n).write_text(t)
+        git("add", "-A")
+        git("commit", "-q", "-m", msg)
+        return git("rev-parse", "HEAD")
+    git("init", "-q", "-b", "main")
+    commit({"tools/merakiplus.py": 'VERSION = "1.0"\n', "docs/a.md": "a\n"}, "release 1.0")
+    git("tag", "v1.0")
+    commit({"docs/a.md": "b\n"}, "docs: wording")
+    c2 = commit({"tools/merakiplus.py": 'VERSION = "1.1"\nEXTRA = 1\n', "keys/new.pub": "x\n"}, "release 1.1")
+    git("update-ref", "refs/remotes/origin/main", c2)
+    lines, names, hits = sr.review_since("v1.0", c2, repo=g)
+    check("review: lists every commit since the last signed tag", sum("docs: wording" in ln or "release 1.1" in ln
+                                                                       for ln in lines) == 2, lines)
+    check("review: diffstat + trust-anchor warning for keys/ and the installer",
+          any("diffstat" in ln for ln in lines) and hits == ["keys/new.pub", "tools/merakiplus.py"]
+          and any("TRUST-ANCHOR" in ln for ln in lines), (hits, lines))
+    check("review without an earlier signed release asks for a full review", "whole history" in sr.review_since(None, c2, g)[0][0])
+    check("draft: the target commit (on origin/main, VERSION matches) is what gets rebuilt and signed",
+          sr.resolve_commit("v1.1", {"isDraft": True, "targetCommitish": c2}, repo=g) == c2)
+    git("checkout", "-q", "-b", "side", "v1.0")
+    c3 = commit({"tools/merakiplus.py": 'VERSION = "1.1"\n'}, "not merged")
+    for name, rel, tag in (("a draft whose target is not on origin/main", {"isDraft": True, "targetCommitish": c3}, "v1.1"),
+                           ("a draft that targets a branch name", {"isDraft": True, "targetCommitish": "main"}, "v1.1"),
+                           ("a draft whose commit has another VERSION", {"isDraft": True, "targetCommitish": c2}, "v1.2"),
+                           ("a published release without a local tag", {"isDraft": False, "targetCommitish": c2}, "v1.1")):
+        try:
+            sr.resolve_commit(tag, rel, repo=g)
+            check(f"refused: {name}", False)
+        except sr.Fail as e:
+            check(f"refused: {name}", True, str(e))
+    git("tag", "v1.1", c3)
+    try:
+        sr.resolve_commit("v1.1", {"isDraft": True, "targetCommitish": c2}, repo=g)
+        check("refused: an existing tag that differs from the draft's target", False)
+    except sr.Fail:
+        check("refused: an existing tag that differs from the draft's target", True)
+
+    for given, ok in ((c2[:12], True), (c2, True), (c2[:8], False), ("0" * 12, False)):
+        try:
+            sr.confirm_commit(c2, given)
+            check(f"confirm commit {given[:12]}…: {'accepted' if ok else 'refused'}", ok)
+        except sr.Fail:
+            check(f"confirm commit {given[:12]}…: {'accepted' if ok else 'refused'}", not ok)
+
+    r = subprocess.run([sys.executable, str(ROOT / "tools/sign_release.py"), "sign", "v0.0", "--key", str(pin)],
+                       capture_output=True, text=True, env=dict(os.environ, GITHUB_ACTIONS="true"))
+    check("sign refuses to run in CI (GITHUB_ACTIONS)", r.returncode == 1 and "never sign in CI" in r.stderr, r.stderr)
+
+    print("== release.yml: main only, least privilege, draft -> sign -> publish ==")
+    wf = (ROOT / ".github/workflows/release.yml").read_text()
+    on = wf[wf.index("\non:"):wf.index("\npermissions:")]
+    check("release.yml: no tag trigger, push only to main, dispatch guarded to main",
+          "tags" not in on and "branches: [main]" in on and wf.count("github.ref == 'refs/heads/main'") >= 2, on)
+    check("release.yml: workflow token read-only; contents: write only on the publish job",
+          re.search(r"^permissions:\n  contents: read$", wf, re.M) is not None
+          and re.findall(r"^\s+contents: write$", wf, re.M) == ["      contents: write"]
+          and wf.index("contents: write", wf.index("  publish:")) > wf.index("  publish:"))
+    pub = wf[wf.index("  publish:"):]
+    check("release.yml: publish job runs no repository code (no checkout, no tools/)",
+          "actions/checkout" not in pub and "tools/" not in pub.replace("tools/sign_release.py sign", ""))
+    check("release.yml: creates a DRAFT and never edits, replaces or deletes release assets",
+          "gh release create" in pub and "--draft" in pub and "--clobber" not in wf and "gh release upload" not in wf
+          and "gh release delete" not in wf.replace("`gh release delete vX.Y`", "") and "gh release edit" not in wf)
+    check("release.yml + ci.yml: cold zig cache for the release build and the drift check",
+          "use-cache: false" in wf and "use-cache: false" in (ROOT / ".github/workflows/ci.yml").read_text())
 
 
 if __name__ == "__main__":

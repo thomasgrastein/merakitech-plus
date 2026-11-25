@@ -1,0 +1,18 @@
+# Trust anchors: files that decide what users install and which signatures they trust. Every change to them needs the
+# owner's review (branch protection: "require review from code owners"). Keep this list in sync with TRUST_ANCHORS in
+# tools/sign_release.py — tests/hygiene.py fails when a trust anchor is not owned here.
+#
+# Changes to these paths are also flagged as a warning on the CI run (ci.yml, "Trust-anchor changes") and in the
+# signing tool's review before a release is signed (docs/signing.md).
+
+/.github/                       @thomasgrastein
+/install.sh                     @thomasgrastein
+/revert.sh                      @thomasgrastein
+/build.sh                       @thomasgrastein
+/tools/merakiplus.py            @thomasgrastein
+/tools/sign_release.py          @thomasgrastein
+/keys/                          @thomasgrastein
+/src/merakiplus_upd_keys.h      @thomasgrastein
+/tests/hygiene.py               @thomasgrastein
+/tests/check_bins.py            @thomasgrastein
+/bin/                           @thomasgrastein
