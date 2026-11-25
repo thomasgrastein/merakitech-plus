@@ -3,6 +3,20 @@
 All notable changes to Meraki+. Details (with evidence, frames and test figures) are in
 [docs/dev/UI_v6.md](docs/dev/UI_v6.md) under *CHANGES-v6.x*. All dates are 2026.
 
+## Unreleased — NFC plan re-prioritized: read CoffeeSense tags first (documentation only)
+
+No code or binary changed.
+
+### Changed
+
+- [docs/nfc-plan.md](docs/nfc-plan.md) is now **read-first**: phase 1 is feature parity with stock for the CoffeeSense
+  tags people already own (tap → recipe applied → bean card). It adds the design for the read path (read-only MIFARE
+  Classic, decode, runtime key lookup in the stock program on the machine — no key material in the repository — apply as a
+  tag recipe layer, tests, hardware verification, open questions). Writing Meraki+'s own NDEF cards is demoted to an
+  optional later phase.
+- [docs/presets-spec.md](docs/presets-spec.md): the tag recipe layer (§4.6, `[tag]` block), updated phase references;
+  the rule that neither a preset nor a tag writes `config.json` is unchanged.
+
 ## Unreleased — CoffeeSense NFC documentation
 
 ### Added
