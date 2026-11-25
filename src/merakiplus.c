@@ -2,6 +2,11 @@
  * 480x480 screen, v6.16: feature parity (settings + activity control), its own visual
  * design system, boot-slot integration, product name + two languages — and from v6.4 a SIM build.
  *
+ * v6.24 = v6.23 + WATER TANK MESSAGES (issue #1, docs/ui-guide.md §22): removing the water tank showed ERROR · UNKNOWN FAULT. The
+ *  controller reports the tank in word 36 (0x8000 = tank missing, 0x0001 = tank low) and a pump running dry in word 35 (0x8000); stock
+ *  shows them as water-tank icons, Meraki+ had no text for them. HOME now says WATER TANK MISSING / WATER TANK LOW · PLEASE REFILL /
+ *  NO WATER FLOW · CHECK THE TANK (codes E3 / E3 / E2). Display only: the phase (ERROR), the start guards and the frame policy are unchanged;
+ *  unmapped bits still read UNKNOWN FAULT. Gen 1 evidence (controller 5.1.4); Gen 2 not verified yet.
  * v6.23 = v6.22 + AUTO OFF 30 MIN BY DEFAULT, like stock (docs/time-scheduling.md §5.1, docs/safety.md §3). The schedule file's
  *  autooff key now means: absent / no file / not one of 0|15|20|30|60 -> 30 min (was OFF); any valid value -> exactly that value,
  *  so an explicit autooff=0 stays OFF and 15/20/60 stay as they are. Files written by v6.16..v6.22 always carry the key, so an
@@ -323,7 +328,7 @@ static int  sim_net_on=1;
 #define KBD_NAME "k62091"
 #define BL_SYSFS "/sys/class/pwm/pwmchip0/pwm2/duty_cycle"
 #define BL_EN_SYSFS "/sys/class/pwm/pwmchip0/pwm2/enable"   /* v6.14: stock uikit_os_back_light_off/on 0xC2278 = blpwm_set_enable(2,0/1) */
-#define MERAKIPLUS_VERSION "V6.23"
+#define MERAKIPLUS_VERSION "V6.24"
 
 /* ---- v6.10: pressure estimate (UI_v6.md §16) ----
  * Word 51 (SPI2 ADC channel 0xA, REGISTERMAP: pressure OR pump-drive candidate) -> bar with ONE linear anchor:
@@ -1396,6 +1401,10 @@ enum { K0=0, KT, KSUB, KLAB, KCHIP, KBTN, KBTNS, KTITLE, KPSUB, KSPL, KDL, KDV, 
  X(TX_ER_E2_STEAM, KSUB, "STEAM BOILER SENSOR FAULT", "FEJL PÅ DAMPKEDEL-SENSOR") \
  X(TX_ER_E2_MILK, KSUB, "MILK SENSOR FAULT", "FEJL PÅ MÆLKESENSOR") \
  X(TX_ER_UNKNOWN, KSUB, "UNKNOWN FAULT", "UKENDT FEJL") \
+ /* v6.24: water tank (issue #1) — one contiguous block (TX_ER_E3_TANK .. TX_ER_E2_NOFLOW; the v6.17 string-count rule leaves it out) */ \
+ X(TX_ER_E3_TANK, KSUB, "WATER TANK MISSING", "VANDTANKEN MANGLER") \
+ X(TX_ER_E3_LOW, KSUB, "WATER TANK LOW · PLEASE REFILL", "LAVT VANDNIVEAU · FYLD TANKEN") \
+ X(TX_ER_E2_NOFLOW, KSUB, "NO WATER FLOW · CHECK THE TANK", "INTET VANDFLOW · TJEK TANKEN") \
  X(TX_A_GRIND, K0, "GRIND", "KVÆRN") \
  X(TX_A_BREW, K0, "BREW", "BRYG") \
  X(TX_A_WATER, K0, "WATER", "VAND") \
@@ -2864,19 +2873,32 @@ static int stop_running(int kind){
     switch(kind){ case ACT_GRIND: return (ws&0x0040)!=0; case ACT_BREW: return (ws&0x0006)==0x0006; case ACT_WATER: return (ws&0x000A)==0x000A; case ACT_STEAM: return steam_bits(); }
     return 0;
 }
-static const char* err_text(void){
+/* v6.24 (issue #1): water-supply bits, Gen 1 evidence (controller 5.1.4 + stock UI). The controller's tank check (MCU 0xB268, every
+ * 10th status tick) adds two debounced tank-switch inputs: sum 0 -> word 36 |= 0x8000, &= ~0x0001 and word 35 &= ~0x8000;
+ * sum 1 -> both word-36 bits cleared; sum 2 -> word 36 |= 0x0001, &= ~0x8000. MCU 0xB218: while the pump runs (work_sta & 0x12,
+ * not bit 2) and the flow counter stands still for > 60 checks -> word 35 |= 0x8000, latched until the sum-0 state clears it.
+ * The stock UI (dealLackWaterAndBar 0x10F6EC) shows these as warning icons, not as fault pop-ups: word 36 & 0x0001 ->
+ * imgs/home/lack_water.png + "Water tank is low, please refill water" (string 39); word 36 & 0x8000 ->
+ * one_mode_icon/lackWaterTank.png; word 35 & 0x8000 -> one_mode_icon/lackWater.png (word 33 bit 8 clear -> lackBeenTank.png).
+ * None of them is in stock's fault-code list (error_tip_deale 0x10EB14). Meraki+ v6.24 only gives them their own text; the
+ * phase (ERROR while any of words 34/35/36 != 0) and every guard are unchanged. Gen 2: not verified (issue #1 asks for values). */
+static int err_id(void){   /* v6.24: the string id (SIM state "err.id"); err_text() = its text */
     uint16_t e1=reg[34],e2=reg[35],e3=reg[36];
-    if(e3&0x10) return TR(TX_ER_E3_BREW);
-    if(e3&0x20) return TR(TX_ER_E3_STEAM);
-    if(e1&0x20) return TR(TX_ER_E1_GROUP);
-    if(e1&0x01) return TR(TX_ER_E1_MAINS);
-    if(e2&0x01) return TR(TX_ER_E2_BREW);
-    if(e2&0x02) return TR(TX_ER_E2_GROUP);
-    if(e2&0x08) return TR(TX_ER_E2_STEAM);
-    if(e2&0x10) return TR(TX_ER_E2_MILK);
-    if(e2&0x1400) return TR(TX_ER_E2_SCALE);                 /* v6.22: stock hotWaterScaleFault 0x112BD8 */
-    return TR(TX_ER_UNKNOWN);
+    if(e3&0x10) return TX_ER_E3_BREW;
+    if(e3&0x20) return TX_ER_E3_STEAM;
+    if(e1&0x20) return TX_ER_E1_GROUP;
+    if(e1&0x01) return TX_ER_E1_MAINS;
+    if(e2&0x01) return TX_ER_E2_BREW;
+    if(e2&0x02) return TX_ER_E2_GROUP;
+    if(e2&0x08) return TX_ER_E2_STEAM;
+    if(e2&0x10) return TX_ER_E2_MILK;
+    if(e2&0x1400) return TX_ER_E2_SCALE;                     /* v6.22: stock hotWaterScaleFault 0x112BD8 */
+    if(e3&0x8000) return TX_ER_E3_TANK;                      /* v6.24 (issue #1): water tank removed (evidence in the comment above) */
+    if(e3&0x0001) return TX_ER_E3_LOW;                       /* v6.24: water tank low */
+    if(e2&0x8000) return TX_ER_E2_NOFLOW;                    /* v6.24: pump on, no water flow */
+    return TX_ER_UNKNOWN;
 }
+static const char* err_text(void){ return TR(err_id()); }
 /* v6.11: the error code (E1/E2/E3) is no longer in the HOME subline (that is plain language); it is shown dimmed in the chart area
  * with a pointer to DIAGNOSE (the E1 / E2 / E3 cell). Same priority as err_text(). */
 static const char* err_code(void){
@@ -2884,6 +2906,8 @@ static const char* err_code(void){
     if(e3&0x30) return "E3";
     if(e1&0x21) return "E1";
     if(e2&0x141B) return "E2";                               /* v6.22: + the scale-fault bits 0x1400 */
+    if(e3&0x8001) return "E3";                               /* v6.24: water tank missing / low */
+    if(e2&0x8000) return "E2";                               /* v6.24: no water flow */
     return "?";
 }
 
@@ -6417,6 +6441,7 @@ static void sim_state_emit(ms_t now,int force){   /* force=0: only if the line's
     static uint32_t last_h; jb(&j,"\"client\":\"merakiplus-sim\",\"version\":\"" MERAKIPLUS_VERSION "\"");
     jb(&j,",\"view\":\"%s\",\"view_raw\":\"%s\",\"page\":\"%s\",\"tab\":\"%s\"",view==V_BYE?"bye":"main",VW[view],sim_page_key(),TAB[page]);
     jb(&j,",\"phase\":\"%s\",\"phase_ui\":\"%s\",\"work_sta\":%u,\"link_up\":%s",PH_KEY[pr],PH_KEY[act.ph],reg[33],link_up(now)?"true":"false");
+    if(reg[34]|reg[35]|reg[36]){ jb(&j,",\"err\":{\"id\":\"%s\",\"code\":\"%s\"}",STR_ID[err_id()],err_code()); } else jb(&j,",\"err\":null");   /* v6.24: what HOME's error subline says (language-neutral) */
     /* v6.6: phase = the contract's phase_raw() (steam first, unchanged); phase_main = HOME's main activity; steam = the steam path */
     { static const char*const SKK[]={"none","unknown","auto","wand"}; int on=link_up(now)&&steam_bits(), pm=phase_main(now);
       jb(&j,",\"phase_main\":\"%s\",\"phases\":[",PH_KEY[pm]);
@@ -8719,7 +8744,7 @@ static void st_v617(void){
       int bad=0; for(int i=0;i<NSTR;i++){ int k=STR_K[i]; if(k==KCON||k==KDL||k==KDV||k==KDF) continue; for(int lg=0;lg<NLANG;lg++){ const char*t=STR[lg][i];
             if(strstr(t,"CONFIG ONLY")||strstr(t,"KUN CONFIG")||strstr(t,"CMD8")||strstr(t,"CONFIG.JSON")||strstr(t,"OR STOP")||strstr(t,"ELLER STOP")||strstr(t,"EST.")){ bad++; printf("     [%s] %s: '%s'\n",LANG_CODE[lg],STR_ID[i],t); } } }
       printf("       string table: %d ids (v6.16: 449)\n",NSTR);
-      st_check("text: no user-facing string says CONFIG ONLY / CONFIG.JSON / CMD8 / '· OR STOP' / 'EST.' any more; the string table is smaller than v6.16's 449 ids although v6.17 adds pages (v6.18's sound block aside)",bad==0&&NSTR-(TX_DV_SO_DROP-TX_SL_SOUND+1)-(TX_DV_WD_FAULT-TX_ER_E2_SCALE+1)<449);   /* v6.18: the sound feature's own strings (one contiguous block) are not counted; v6.22: nor the water gate's */
+      st_check("text: no user-facing string says CONFIG ONLY / CONFIG.JSON / CMD8 / '· OR STOP' / 'EST.' any more; the string table is smaller than v6.16's 449 ids although v6.17 adds pages (v6.18's sound block aside)",bad==0&&NSTR-(TX_DV_SO_DROP-TX_SL_SOUND+1)-(TX_DV_WD_FAULT-TX_ER_E2_SCALE+1)-(TX_ER_E2_NOFLOW-TX_ER_E3_TANK+1)<449);   /* v6.18: the sound feature's own strings (one contiguous block) are not counted; v6.22: nor the water gate's; v6.24: nor the water tank's */
       st_home(); home_model(sim_now); int one=!strcmp(hm.hint1,TR(TX_C_HINT))&&hm.hint2==NULL&&!strcmp(hm.label,TR(TX_H_BOILER))&&!st_has(hm.label,"\xC2\xB7");
       reg[33]=0x0141; sim_run(600); home_model(sim_now); fmt_fix(a,sizeof a,sv(S_GRINDW),1); snprintf(b,sizeof b,TR(TX_H_AUTOSTOP_G),a); int g=!strcmp(hm.label,TR(TX_H_DOSE))&&!st_has(hm.label,a)&&!strcmp(hm.sub,b)&&sub_font(&hm)==F_S;
       st_check("HOME: one hint line; the label is the name of the number only ('BREW BOILER', 'DOSE' — no '· NOW', no repeated target); during an activity the target is said once, in F_S ('STOPS AT 18.5 G')",one&&g); }
@@ -9360,6 +9385,38 @@ static void st_v622(void){
         LAY(text_wf(TR(TX_H_HOLD_WATER_MAN),F_XS),KB[KSUB].maxw,"HOME subline",TR(TX_H_HOLD_WATER_MAN));
         lang_set(kl); }
     st_check("v6.22 texts fit: 'MAN.' under the icon (52 px), the manual WATER page's title + lines, the HOME sublines (both languages)",ok);
+    sim_reset();
+}
+/* ============================ v6.24: water tank messages (issue #1; display only) ============================ */
+static void st_v624(void){
+    printf("== selftest: v6.24 water tank messages (issue #1: stock dealLackWaterAndBar 0x10F6EC; MCU 0xB268 / 0xB218 — word 36 0x8000 / 0x0001, word 35 0x8000) ==\n");
+    static const struct { uint16_t e1,e2,e3; short id; const char*code; } C[]={
+        {0,0,0x8000,TX_ER_E3_TANK,"E3"},{0,0,0x0001,TX_ER_E3_LOW,"E3"},{0,0x8000,0,TX_ER_E2_NOFLOW,"E2"},
+        {0,0,0x8001,TX_ER_E3_TANK,"E3"},{0,0x8000,0x8000,TX_ER_E3_TANK,"E3"},{0,0x8000,0x0001,TX_ER_E3_LOW,"E3"},   /* missing before low before no flow */
+        {0,0,0x8010,TX_ER_E3_BREW,"E3"},{0,0x8001,0,TX_ER_E2_BREW,"E2"},{0x0001,0,0x8000,TX_ER_E1_MAINS,"E1"},{0,0x1000,0x8000,TX_ER_E2_SCALE,"E2"},   /* real faults keep priority */
+        {0,0,0x0002,TX_ER_UNKNOWN,"?"},{0,0,0x4000,TX_ER_UNKNOWN,"?"},{0x0004,0,0,TX_ER_UNKNOWN,"?"},{0,0x4000,0,TX_ER_UNKNOWN,"?"}};   /* unmapped bits: still the fallback */
+    int ok=1, kl=ui_lang;
+    for(int lg=0;lg<NLANG;lg++){ lang_set(lg);
+        for(unsigned q=0;q<sizeof C/sizeof C[0];q++){
+            st_home(); lang_set(lg); reg[34]=C[q].e1; reg[35]=C[q].e2; reg[36]=C[q].e3; sim_run(400); home_model(sim_now);
+            char code[32]; snprintf(code,sizeof code,TR(TX_C_ERRCODE),C[q].code);
+            if(err_id()!=C[q].id||strcmp(err_text(),STR[lg][C[q].id])||strcmp(err_code(),C[q].code)||act.ph!=PH_ERROR||strcmp(hm.sub,STR[lg][C[q].id])||strcmp(hm.hint1,code)){
+                ok=0; printf("     [%s] %X/%X/%X: id %s code %s ph %d sub '%s' hint '%s'\n",LANG_CODE[lg],C[q].e1,C[q].e2,C[q].e3,STR_ID[err_id()],err_code(),act.ph,hm.sub,hm.hint1); } }
+        reg[34]=reg[35]=reg[36]=0; }
+    lang_set(kl);
+    st_check("HOME error subline (EN + DA): word 36 0x8000 'WATER TANK MISSING' / 'VANDTANKEN MANGLER', 0x0001 'WATER TANK LOW · PLEASE REFILL', word 35 0x8000 'NO WATER FLOW · CHECK THE TANK', codes E3/E3/E2; boiler/sensor/mains/scale faults keep priority; unmapped bits (word 36 0x0002/0x4000, word 34 0x0004, word 35 0x4000) still UNKNOWN FAULT, code ?",ok);
+    /* display only: the phase and every guard are exactly what an unmapped bit gives; nothing is sent */
+    { ms_t t=st_home(); reg[36]=0x0002; sim_run(400); t=sim_now; const char*g0[4]; for(int k=0;k<4;k++) g0[k]=act_guard(k,t); int ph0=phase_raw(t);
+      st_home(); reg[36]=0x8000; sim_run(400); t=sim_now; int same=phase_raw(t)==ph0&&ph0==PH_ERROR&&wq.n==0;
+      for(int k=0;k<4;k++) same&=act_guard(k,t)==g0[k]&&g0[k]==TR(TX_G_ERROR);
+      int f=st_hold(CX,372,700); same&=wq.n==0&&act.pending==ACT_NONE; (void)f;
+      st_check("display only: with the tank missing the phase (ERROR) and the four start guards ('ERROR ACTIVE · START BLOCKED') equal those of an unmapped bit; no frame is queued",same);
+      reg[36]=0; sim_run(400); home_model(sim_now); int rd=act.ph==PH_READY&&strcmp(hm.sub,TR(TX_ER_E3_TANK))&&act_guard(ACT_BREW,sim_now)==NULL;
+      st_check("tank back (word 36 = 0): READY again, the subline is no longer the tank text, a brew start is allowed",rd); }
+    ok=1; for(int lg=0;lg<NLANG;lg++){ lang_set(lg);
+        static const short L[]={TX_ER_E3_TANK,TX_ER_E3_LOW,TX_ER_E2_NOFLOW}; for(unsigned q=0;q<sizeof L/sizeof L[0];q++) LAY(text_wf(TR(L[q]),F_XS),KB[KSUB].maxw,"HOME subline",TR(L[q])); }
+    lang_set(kl);
+    st_check("v6.24 texts fit the HOME subline (both languages)",ok);
     sim_reset();
 }
 static int selftest(const char*cfgsrc){
@@ -10057,6 +10114,7 @@ static int selftest(const char*cfgsrc){
     st_v619();                         /* v6.19 */
     st_v620();                         /* v6.20 */
     st_v622();                         /* v6.22 */
+    st_v624();                         /* v6.24 */
     /* ============================ v6.15 ============================ */
     st_graph();
     printf("== selftest [%s]: %s (%d checks, %d failed) — work dir %s ==\n",LANG_CODE[base_lang],st_fail?"FAILED":"ALL OK",st_n,st_fail,dir);

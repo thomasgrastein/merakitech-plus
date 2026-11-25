@@ -2,7 +2,7 @@
 
 | File | What | Built from |
 |---|---|---|
-| `merakiplus` | **Meraki+ v6.23** device binary (static ARMv7, musl). Installed as `/new_customer/merakiplus/rel/<version>-<sha8>/demo_v9`. | `src/merakiplus.c` |
+| `merakiplus` | **Meraki+ v6.24** device binary (static ARMv7, musl). Installed as `/new_customer/merakiplus/rel/<version>-<sha8>/demo_v9`. | `src/merakiplus.c` |
 | `merakiplus_boot` | the launcher (static ARMv7, no UI/network/UART). Installed as `/new_customer/demo_v9`; starts the chosen release and rolls back (docs/ota-plan.md phase 1b) | `src/merakiplus_boot.c` |
 | `merakiplus_snd` | sound helper (ARMv7, dynamic against the display's glibc 2.28; `dlopen`s the display's own `libmi_*.so` at run time). Installed into each release directory, next to `audio/` | `src/merakiplus_snd.c` |
 | `switcher` | gesture switcher daemon (center-hold 5 s → stock to Meraki+), only with `--gesture` | `boot/switcher.c` |
@@ -18,6 +18,16 @@
 **No vendor firmware, libraries or scripts are included here or anywhere in this repository.**
 
 ## Provenance of the ARM binaries
+
+**v6.24 (2026-11-25, water tank messages — issue #1):** `merakiplus` (`9182753f…`), `merakiplus_sim_arm` and the two
+host SIM builds were rebuilt from the v6.24 source with the official zig 0.17.1. The change is display-only: three
+controller water-supply bits (word 36 `0x8000` tank missing, `0x0001` tank low, word 35 `0x8000` no water flow) get
+their own HOME text instead of *UNKNOWN FAULT* (docs/ui-guide.md §22). No UART frame, frame-policy rule or guard changed.
+`merakiplus_boot`, `merakiplus_snd`, `switcher`, `tinj_hold`, `keyinj`, `grab_shim.so` and `audio/` are byte-identical
+to v6.23. **Not yet verified on a machine.** The bit meanings come from static analysis of the Gen 1 controller
+firmware (5.1.4) and the stock display UI. The issue was reported on a **Gen 2** machine, whose controller firmware
+we have not analysed, so it is not yet confirmed that Gen 2 uses the same bits. Covered by the UI self-test (EN + DA,
+also as a 32-bit ARM binary), `sim/selftest.py` and the full simulator E2E suite (EN + DA) incl. `fault_water_tank`.
 
 **v6.23 (2026-11-23, auto off 30 min by default):** `merakiplus` (`79cdf911…`), `merakiplus_sim_arm` and the two
 host SIM builds were rebuilt from the v6.23 source with the official zig 0.17.1. The change is the AUTO OFF default
@@ -125,14 +135,14 @@ self-test and the simulator E2E suite.
 
 | File | md5 (this repo) | Built with |
 |---|---|---|
-| `merakiplus` (V6.23) | `79cdf911d6ea5b4784ddea0b6bf18564` | `./build.sh` → `build/merakiplus` |
-| `merakiplus_sim_arm` (V6.23) | `4b5aff7b2f45aa7479af0477d65a1474` | `./build.sh` → `build/merakiplus_sim_arm` |
+| `merakiplus` (V6.24) | `9182753f4d277821f9f06b810a066096` | `./build.sh` → `build/merakiplus` |
+| `merakiplus_sim_arm` (V6.24) | `1c2b4ac4b1de1474b654ac4679d68537` | `./build.sh` → `build/merakiplus_sim_arm` |
 | `merakiplus_snd` (V6.18.1) | `a7659c176b8ef78385b0b612a69e81ca` | `./build.sh` → `build/merakiplus_snd` |
 | `switcher` | `e02a463c16278545c04b8e4022b8369f` | `./build.sh` → `build/switcher` |
 | `tinj_hold` | `e9806fb92e9b8a7e506a34639173c648` | `./build.sh` → `build/tinj_hold` |
 | `keyinj` | `a0cbd4bc2a670abe0e250ec34a193843` | `./build.sh` → `build/keyinj` |
-| `merakiplus_sim-linux-x86_64` (V6.23) | `3934fdac812746e7f1e6d1bf289a5de1` | `zig cc -target x86_64-linux-musl -DMERAKIPLUS_SIM -O2 -static -s src/merakiplus.c -lm` |
-| `merakiplus_sim-macos-arm64` (V6.23) | `d59c5c116bc77cdb1af5be48f3fafa1c` | `zig cc -DMERAKIPLUS_SIM -O2 -s src/merakiplus.c -lm` (Mach-O builds are not bit-reproducible) |
+| `merakiplus_sim-linux-x86_64` (V6.24) | `8994c3a10ae40c2eceaca597c3d9c977` | `zig cc -target x86_64-linux-musl -DMERAKIPLUS_SIM -O2 -static -s src/merakiplus.c -lm` |
+| `merakiplus_sim-macos-arm64` (V6.24) | `f4b59e4452839d8549a9cb8c65ec6fdb` | `zig cc -DMERAKIPLUS_SIM -O2 -s src/merakiplus.c -lm` (Mach-O builds are not bit-reproducible) |
 
 The ARM builds above are reproducible: running `./build.sh` on the same sources with the **official**
 zig 0.17.1 release (the ziglang.org tarball CI installs) gives the same md5 on macOS and Linux,

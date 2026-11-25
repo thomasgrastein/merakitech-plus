@@ -537,3 +537,11 @@ The contract and ADDENDUM v6.4/v6.5/v6.6 (UI work stream) are unchanged. Full do
 * **merakiplus SIM build, state JSON `sched`:** `auto_off` is **30** when the sandbox has no schedule file (v6.16–v6.22: 0); `file` is `default` until the first SAVE.
 * **`schedule_prewarm`:** + 4 state checks (mode `all`): `sched.auto_off = 30` and `sched.file = "default"` in [1.0, 1.8] s, `sched.auto_off = 30` and `sched.file = "file"` in [4.5, 6.0] s. They fail against a v6.22 SIM build (39/41).
 * No runner, `mcu_sim.py` or scenario timing change. Scenarios last ≤ 80 s, far below the 30-min auto off, so no other scenario is affected.
+
+## ADDENDUM v6.24 — water tank messages (state.err, fault_water_tank)
+
+**Date:** 2026-11-25 · **Applies to:** the merakiplus SIM build's state JSON (one additive key) and the new scenario `sim/scenarios/fault_water_tank.json`. The contract above is unchanged.
+
+* **merakiplus SIM build, state JSON `err`:** `null` while words 34/35/36 are all 0; otherwise `{"id": "<TX_ER_…>", "code": "E1|E2|E3|?"}` — the string id of HOME's error sub-line (`err_id()`, language-neutral) and the dimmed code. v6.24 adds `TX_ER_E3_TANK` (word 36 & `0x8000`), `TX_ER_E3_LOW` (word 36 & `0x0001`), `TX_ER_E2_NOFLOW` (word 35 & `0x8000`) after the existing ids; every other unmapped bit stays `TX_ER_UNKNOWN` / `?`.
+* **`fault_water_tank`** (`ui_only`, 22 s, 35 checks): `fault` events `e3 = 32768` (3–7 s), `e3 = 1` (10–13 s), `e2 = 32768` (16–19 s) via the existing `mcu_sim.py` fault injection; asserts `err.id` / `err.code`, `shown.sub` contains `TANK` (true in EN and DA) and never `UNKNOWN` / `UKENDT` while the tank is missing, `toast.id = TX_G_ERROR` for a brew start with no frame sent, READY + `err = null` after each fault. Fails against the v6.23 SIM build (22/35).
+* No runner, `mcu_sim.py` or timing change; `--quick` is unchanged.

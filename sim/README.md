@@ -142,6 +142,7 @@ For an interactive browser view of the simulator, see [PLAY.md](PLAY.md).
 | `audio_power_cycle` | 46 s | **v6.18 (merakiplus-only):** hot boilers at a cold boot → jingle + tones; button OFF → silent; wake → jingle + tones again; READY TONE = steam only (sound file via `sandbox_files`) |
 | `audio_sound_off` | 40 s | **v6.18 (merakiplus-only):** ctrl SAVE `sound` = 0 → both boiler events logged `off`; SOUND on + READY TONE = brew → only the extract tone after the next cool-down |
 | `fault_e1/e2/e3` | 12–16 s | error bits words 34/35/36 → error UI + safety stop of the activity |
+| `fault_water_tank` | 22 s | **v6.24 (merakiplus-only, issue #1):** word 36 `0x8000` (tank missing) → `err.id` = `TX_ER_E3_TANK` / E3, sub-line names the tank (not UNKNOWN FAULT), brew start refused (`TX_G_ERROR`, no frame), clears → READY; word 36 `0x0001` → `TX_ER_E3_LOW` / E3; word 35 `0x8000` → `TX_ER_E2_NOFLOW` / E2 (35 checks; 22/35 against the v6.23 SIM) |
 | `crc_garbage` | 12 s | garbage stream + CRC corruption → resync, the link is kept |
 | `no_ack` | 12 s | **SAVE is blocked** (retransmit→FAIL, config unchanged) → recovery with the normal profile |
 | `offline` | 14 s | link silent → OFFLINE after 1.5 s → recovery. A real pty close (`link closed` → a new pty on reopen) is proven in selftest T10. |
