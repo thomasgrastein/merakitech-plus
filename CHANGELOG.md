@@ -3,6 +3,9 @@
 All notable changes to Meraki+. Details (with evidence, frames and test figures) are in
 [docs/dev/UI_v6.md](docs/dev/UI_v6.md) under *CHANGES-v6.x*. All dates are 2026.
 
+Features are merged under **Unreleased** and carry no version number; the version is assigned only by the
+maintainer's release PR ([docs/release-process.md](docs/release-process.md)).
+
 ## Unreleased — pull-request workflow (repository process only)
 No code or binary changed. Details: [CONTRIBUTING.md](CONTRIBUTING.md#how-changes-reach-main), [docs/release-process.md](docs/release-process.md).
 ### Changed
@@ -27,6 +30,47 @@ No device binary changed. Details: [docs/signing.md](docs/signing.md), [docs/ota
   ARMv7 binary in an arm32v7 container — not shipped yet (phase 3).
 - Tests: `tests/test_upd.py` (118 checks), installer scenario *2: signed release manifest*, hygiene check that the
   pinned keys agree and that no private key is in the tree.
+
+## Unreleased — MQTT / Home Assistant (feature; no version until released)
+**MQTT / Home Assistant — read-only, off by default** (issue [#2](https://github.com/thomasgrastein/merakitech-plus/issues/2), phase 1 MVP of
+[docs/integrations.md](docs/integrations.md)). Switch it on and the machine publishes what it is doing to an MQTT broker on your
+own network; Home Assistant discovers it. Details and a test guide without a machine:
+[docs/integrations.md §15–16](docs/integrations.md#15-implemented-unreleased-mqtt--home-assistant-mvp). **Not yet verified on a machine.**
+### Added
+- **SYSTEM › MQTT**: PUBLISH DATA (OFF / ON), STATUS (CONNECTED, DISCONNECTED, NOT SET UP, BROKER NOT LOCAL, LOGIN
+  REFUSED, …) and LAST PUBLISH, EN + DA. Meraki+'s own file `/new_customer/merakiplus/mqtt.conf` (mode 0600, written
+  atomically; the screen changes only its `enabled` line). No file = OFF. `config.json` is never read or written for it.
+- **`tools/merakiplus.py mqtt --ip ADDR --host BROKER --user USER`** sets up the broker (password asked without echo,
+  local broker only, device id kept across runs, ACL advice); `--show`, `--disable`, `--dry-run`. `./revert.sh` removes
+  `mqtt.conf`.
+- **`merakiplus_mqtt`**, a publish-only MQTT 3.1.1 helper (static ARMv7, 82 KB) shipped in the release directory and
+  started only when MQTT is on: no SUBSCRIBE in the binary, an incoming PUBLISH ends the connection, private /
+  link-local / unique-local brokers only, last will `offline`, reconnect with back-off, Home Assistant device
+  discovery (29 entities: temperatures, weights, activity, ready, water low, faults, mains, firmware, last shot,
+  brews, machine event; live entities disabled by default).
+- **The feed** (UI → helper over a one-way socketpair; the UI never reads it and never blocks): `info`, `state`
+  (on change, else every 5 s), `live` (2/s during an activity), `event` (`grind_started/finished`,
+  `brew_started`, **`shot_finished`**, `water_*`, `steam_*`, `brew_ready`, `steam_ready`, `error`, `error_cleared`)
+  and **one shot record per brew** (`merakiplus.shot/1`): times (clock jump-safe, `clock_ok`), pre-infusion, first
+  drip, settled yield, dose (the grind before it, else the target), ratio, targets, set temperatures, pre-infusion
+  settings, raw pump values + a labelled estimate, `completion_reason` (target_weight / manual_stop / fault), and the
+  weight curve in Beanconqueror's delta encoding. Key names follow Meraki Companion's where the meaning is the same.
+- `tools/mqtt_demo.py` (the real helper + a canned session against your broker), `sim/mqtt_broker.py` (mock broker).
+### Unchanged
+- **Observe only:** no UART frame, frame-policy rule, guard or control path changed — the self-test compares the frames of
+  a brew with the feed on and off. Meraki+ still contains no `kill()`; the helper ends on EOF.
+- SYSTEM gets a fifth section (MQTT, after STOCK UI): closed, the first five rows are in view and DIAGNOSTICS is one
+  short drag away (v6.17: no scrolling).
+### Security notes
+- Plain MQTT (no TLS) in this version; anyone on your network can read `mqtt.conf` via the display's open telnet —
+  use a **dedicated broker user that may only publish to `merakiplus/#`** (docs/integrations.md §15.5).
+### Verification
+- UI self-test **620 / 0** EN and DA (new section *MQTT*: 28 checks), also as a 32-bit ARMv7 binary (EN + DA).
+- `tests/test_mqtt.py` **46 / 0** (helper ↔ mock broker, discovery, no SUBSCRIBE, password only in CONNECT, outage,
+  refusals); helper self-test 14 / 0 (host + ARMv7).
+- SIM E2E: `mqtt_shot`, `mqtt_stop_brew`, `mqtt_off_default`, `mqtt_toggle`, `mqtt_broker_outage` (101 checks);
+  `ia_navigation` updated for the sixth SYSTEM row.
+- Installer suite ALL PASS (new scenario: helper in the release, `mqtt` command, revert); `tests/test_upd.py` 115 / 0.
 
 ## [6.24] — 2026-11-25
 **Water tank: a real message instead of *UNKNOWN FAULT*** (fixes [#1](https://github.com/thomasgrastein/merakitech-plus/issues/1)).

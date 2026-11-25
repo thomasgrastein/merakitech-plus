@@ -1,0 +1,109 @@
+{
+  "name": "mqtt_toggle",
+  "description": "MQTT: the switch — mqtt.conf set up but enabled = 0: OFF, no connection. SAVE PUBLISH DATA = ON → the helper starts, connects, publishes discovery + online; SAVE = OFF → it publishes offline, disconnects and ends (EOF, never signalled). Only the 'enabled' line of mqtt.conf changes; config.json is never written",
+  "ui_only": true,
+  "duration_s": 16,
+  "mqtt": {
+    "conf": {
+      "enabled": 0
+    }
+  },
+  "events": [
+    {
+      "t": 3,
+      "target": "ui",
+      "cmd": "save",
+      "param": "mqtt",
+      "value": 1
+    },
+    {
+      "t": 10,
+      "target": "ui",
+      "cmd": "save",
+      "param": "mqtt",
+      "value": 0
+    }
+  ],
+  "expect": [
+    {
+      "kind": "state",
+      "t0": 0.5,
+      "t1": 2.5,
+      "path": "mqtt.status",
+      "equals": "off",
+      "mode": "all"
+    },
+    {
+      "kind": "state",
+      "t0": 5,
+      "t1": 9.5,
+      "path": "mqtt.status",
+      "equals": "connected"
+    },
+    {
+      "kind": "state",
+      "t0": 12,
+      "t1": 15.5,
+      "path": "mqtt.status",
+      "equals": "off",
+      "mode": "all"
+    },
+    {
+      "kind": "state",
+      "t0": 13,
+      "t1": 15.5,
+      "path": "mqtt.helper_pid",
+      "equals": 0
+    },
+    {
+      "kind": "state",
+      "t0": 13,
+      "t1": 15.5,
+      "path": "mqtt.exits",
+      "equals": 1
+    },
+    {
+      "kind": "state",
+      "t0": 1,
+      "t1": 15.5,
+      "path": "config_writes",
+      "equals": 0,
+      "mode": "all"
+    },
+    {
+      "kind": "mqtt_packets",
+      "allowed": [
+        "CONNECT",
+        "PUBLISH",
+        "PINGREQ",
+        "DISCONNECT"
+      ],
+      "will": true,
+      "no_secret": true,
+      "connections_min": 1,
+      "connections_max": 1
+    },
+    {
+      "kind": "mqtt",
+      "topic": "homeassistant/device/merakiplus_{id}/config",
+      "min": 1,
+      "retain": true
+    },
+    {
+      "kind": "mqtt",
+      "topic": "{base}/availability",
+      "min": 2,
+      "payload": "offline"
+    },
+    {
+      "kind": "mqtt_packets",
+      "allowed": [
+        "CONNECT",
+        "PUBLISH",
+        "PINGREQ",
+        "DISCONNECT"
+      ],
+      "connections_max": 1
+    }
+  ]
+}

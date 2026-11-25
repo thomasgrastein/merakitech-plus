@@ -36,7 +36,7 @@ import merakiplus as mp  # noqa: E402
 DEFAULT_KEY = pathlib.Path.home() / ".merakiplus" / "signing_ed25519.pem"
 ZIG_VERSION = "0.17.1"
 # release directory (switches atomically, docs/ota-plan.md §5.2): name inside rel/<x>/ <- release asset, mode
-RELEASE_FILES = [("demo_v9", "merakiplus", "755"), ("merakiplus_snd", "merakiplus_snd", "755")] + \
+RELEASE_FILES = [("demo_v9", "merakiplus", "755"), ("merakiplus_snd", "merakiplus_snd", "755"), ("merakiplus_mqtt", "merakiplus_mqtt", "755")] + \
                 [("audio/" + n, n, "644") for n in sorted(mp.AUDIO_MD5)]
 # fixed-path platform components (updated separately, §5.6): component <- release asset
 PLATFORM_FILES = [("grab_shim.so", "grab_shim.so"), ("launcher", "merakiplus_boot"), ("switcher", "switcher")]

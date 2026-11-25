@@ -127,8 +127,8 @@ def run(work, arm):
     check("manifest == canonical re-serialization", mp.manifest_bytes(m) == data)
     check("every asset listed with size + sha256", {e["name"] for e in m["assets"]} == set(assets)
           and all(re.fullmatch(r"[0-9a-f]{64}", e["sha256"]) for e in m["assets"]))
-    check("release section = UI, sound helper, WAVs (like the installer's release directory)",
-          [e["name"] for e in m["release"]] == ["demo_v9", "merakiplus_snd"] + ["audio/" + n for n in st.AUDIO_ASSETS])
+    check("release section = UI, sound helper, MQTT helper, WAVs (like the installer's release directory)",
+          [e["name"] for e in m["release"]] == ["demo_v9", "merakiplus_snd", "merakiplus_mqtt"] + ["audio/" + n for n in st.AUDIO_ASSETS])
     check("platform section = launcher, switcher, shim", sorted(e["src"] for e in m["platform"]) ==
           ["grab_shim.so", "merakiplus_boot", "switcher"])
     check("base_url pins the tag", m["base_url"].endswith(f"/releases/download/v{mp.VERSION}/"))
@@ -230,7 +230,7 @@ def run(work, arm):
     for e in m["release"]:
         shutil.copy(rel / e["src"], rd / e["name"])
     r = subprocess.run([str(upd), "verify", str(man), str(sig), "--release-dir", str(rd)], capture_output=True, text=True)
-    check("release directory matches the signed manifest", r.returncode == 0 and "files=5" in r.stdout, r.stdout)
+    check("release directory matches the signed manifest (UI, sound helper, MQTT helper, 3 WAVs)", r.returncode == 0 and "files=6" in r.stdout, r.stdout)
     (rd / "demo_v9").write_bytes(b"\x7fELF not ours")
     r = subprocess.run([str(upd), "verify", str(man), str(sig), "--release-dir", str(rd)], capture_output=True, text=True)
     check("replaced demo_v9 in the release directory rejected", r.returncode == 6, r.stdout)

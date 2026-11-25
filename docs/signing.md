@@ -59,7 +59,7 @@ implementations can never read the same signed bytes differently.
                {"name": "launcher", "src": "merakiplus_boot", …}, {"name": "switcher", "src": "switcher", …} ],
  "product": "merakiplus",
  "release": [ {"mode": "755", "name": "demo_v9", "src": "merakiplus", "sha256": "…", "size": 320680},
-              {"mode": "755", "name": "merakiplus_snd", …}, {"mode": "644", "name": "audio/start.wav", …}, … ],
+              {"mode": "755", "name": "merakiplus_snd", …}, {"mode": "755", "name": "merakiplus_mqtt", …}, {"mode": "644", "name": "audio/start.wav", …}, … ],
  "released": "2026-11-23",
  "seq": 1,
  "tag": "v6.23",

@@ -1,6 +1,9 @@
-# Integrations — one read-only data interface (design, not implemented)
+# Integrations — one read-only data interface
 
-Status: **design for review. Nothing in this file is implemented, and no release contains it.**
+Status: **phase 1 MVP implemented (unreleased)** (MQTT + Home Assistant, the feed, the shot record — see
+[§15](#15-implemented-unreleased-mqtt--home-assistant-mvp) for exactly what, and [§16](#16-try-it-in-home-assistant) to try it).
+It is prepared on a branch and **not released or hardware-verified yet**. Sections 1–13 are the design it follows;
+the journal files (§8), `recipe` / `maintenance` records and the bridges (§9) are not implemented.
 It is the technical background for [issue #2](https://github.com/thomasgrastein/merakitech-plus/issues/2)
 (shot history, coffee journal, MQTT and Home Assistant). Research date: **2026-11-25**.
 
@@ -36,6 +39,8 @@ The short version:
 12. [Phases](#12-phases)
 13. [Coordination and open questions](#13-coordination-and-open-questions)
 14. [Sources](#14-sources)
+15. [Implemented (unreleased): MQTT + Home Assistant MVP](#15-implemented-unreleased-mqtt--home-assistant-mvp)
+16. [Try it in Home Assistant](#16-try-it-in-home-assistant)
 
 ## 1. Rules this design must keep
 
@@ -346,7 +351,7 @@ Word numbers below refer to [registermap.md](registermap.md).
 ### 5.2 `info` — static facts (sent on connect)
 
 ```json
-{"schema": "merakiplus.info/1", "feed_major": 1, "ui_version": "6.25", "model": "gen1",
+{"schema": "merakiplus.info/1", "feed_major": 1, "ui_version": "6.x", "model": "gen1",
  "controller_fw": "V5.1.4", "mains_set_v": 220,
  "caps": ["temps", "weights", "flow_raw", "pump_raw", "preinfusion", "water_dosing", "heat_stage"]}
 ```
@@ -430,7 +435,7 @@ codes. The key is named `event_type` because that is what Home Assistant's event
  "temps": {"brew_boiler_start_c": 93.1, "group_start_c": 88.0, "group_avg_c": 90.4},
  "pump": {"preinfusion_raw": 358, "extraction_raw": 1346, "pressure_est_bar": 9.1},
  "preset": null, "bean": null,
- "machine": {"model": "gen1", "controller_fw": "V5.1.4", "ui_version": "6.25"},
+ "machine": {"model": "gen1", "controller_fw": "V5.1.4", "ui_version": "6.x"},
  "curve": {"fidelity": "full", "t": [0, 250, 250], "weight": [0, 0, 1],
            "flow_raw": [0, 180, 205], "pump_raw": [350, 361, 358]}}
 ```
@@ -523,7 +528,7 @@ MQTT discovery (the 2024.11 line or newer; to be confirmed in the first test). A
 ```json
 {
   "dev": {"ids": ["merakiplus_3fa9c2d1"], "name": "Meraki", "mf": "MerakiTech",
-          "mdl": "Gen 1 with Meraki+", "sw": "6.25", "hw": "controller V5.1.4"},
+          "mdl": "Gen 1 with Meraki+", "sw": "6.x", "hw": "controller V5.1.4"},
   "o": {"name": "merakiplus_mqtt", "sw": "1", "url": "https://github.com/thomasgrastein/merakitech-plus"},
   "avty_t": "merakiplus/3fa9c2d1/availability",
   "cmps": {
@@ -776,3 +781,257 @@ All read on 2026-11-25.
 
 Product names belong to their owners and are used only to say what the data is meant to work with. This project
 is not affiliated with any of them.
+
+## 15. Implemented (unreleased): MQTT + Home Assistant MVP
+
+The maintainer's brief for the first version: *a switch in the menu; then it publishes and Home Assistant picks it
+up; a `shot_finished` event is required.* Everything below runs in the simulator and the tests; **none of it has run on
+a machine yet.**
+
+### 15.1 What is built
+
+| Part | Where | What it does |
+|---|---|---|
+| The switch | *SYSTEM › MQTT* (last section) | **PUBLISH DATA** OFF / ON, **STATUS** (OFF, NOT SET UP, CONNECTING, CONNECTED, DISCONNECTED, BROKER NOT LOCAL, LOGIN REFUSED, NO HELPER, HELPER FAILED), **LAST PUBLISH** (seconds). The section header shows the status. EN + DA. |
+| Settings file | `/new_customer/merakiplus/mqtt.conf`, mode 0600 | Meraki+'s own file (§4.5). Missing = OFF. The screen writes only its `enabled` line (atomically: tmp, fsync, re-read, rename, fsync of the directory); every other line is kept byte for byte. `config.json` is never read or written for MQTT. The UI notices a changed file within 2 s, so a new broker applies without a restart. |
+| Setup tool | `python3 tools/merakiplus.py mqtt --ip <display> --host <broker> --user merakiplus` | Asks for the password without echo (or `--password-file`), refuses a broker that is not on the local network, keeps the device id on later runs, prints the recommended broker ACL. `--show` (password hidden), `--disable`, `--dry-run`. `./revert.sh` removes `mqtt.conf` (it holds the password). |
+| The feed | `src/merakiplus.c`, "MQTT / HOME ASSISTANT" | Named records from the register mirror and the phase model: `info`, `state`, `live`, `event`, `shot` (+ `shotsum`). Sends no controller frame. |
+| The helper | `merakiplus_mqtt` (`src/merakiplus_mqtt.c`), static ARMv7, 82 KB, about 150 KB static buffers, no heap of its own | MQTT 3.1.1 client: CONNECT (clean session, keep-alive 30 s, last will `offline`), PUBLISH QoS 0/1, PINGREQ, DISCONNECT. **It contains no SUBSCRIBE.** Accepts only CONNACK, PUBACK, PINGRESP; anything else — including a PUBLISH — ends the connection. Local broker only (private, link-local, unique-local, loopback; no override). Reconnect 2 → 60 s with jitter. Home Assistant device discovery. |
+| Test broker | `sim/mqtt_broker.py` | A stdlib MQTT mock that records every packet; also usable by hand (`--port 1883`). |
+| Demo | `tools/mqtt_demo.py` | Runs the real helper with the UI's canned session against your broker — no machine needed (§16). |
+
+### 15.2 How the UI and the helper are connected
+
+The design (§4.2) proposed a pipe. The implementation uses a **socketpair** (a UNIX-domain socket pair with no address), as the
+implementation brief asked, and keeps every property of the pipe:
+
+* The UI starts the helper with one end as its standard input and keeps the other. The UI **shuts down its receiving
+  direction** and never reads the socket; the helper's end is shut down for sending. The kernel refuses anything the
+  helper writes back — there is no path from the network to the UI or the controller.
+* The UI writes with `MSG_DONTWAIT`. A 16 KB queue absorbs a slow helper; a line that does not fit is dropped and
+  counted. Brewing never waits for the network.
+* The helper is never signalled (Meraki+ still contains no `kill()`): switching off closes the UI's end, the helper
+  reads EOF, publishes `offline` (retained), sends DISCONNECT and exits; the UI reaps it with `waitpid(WNOHANG)`.
+  A helper that dies is restarted after 2, 4, 8, 16 s; after five short-lived runs it stays off (*HELPER FAILED*)
+  until the switch is toggled. The UI's end is close-on-exec, so no other child (the stock UI after *SWITCH TO
+  ORIGINAL NOW*, `wpa_supplicant`, the sound helper) keeps it open.
+* The helper reports its state in `/tmp/merakiplus_mqtt.status` (RAM), one line the UI parses into STATUS and LAST
+  PUBLISH. Its log is `/tmp/merakiplus_mqtt.log`, at most 2 × 8 KB, and never contains the password.
+
+### 15.3 Topics as implemented
+
+With `base = merakiplus` and the random `id` from `mqtt.conf`:
+
+| Topic | Record | QoS | Retained | When |
+|---|---|---|---|---|
+| `merakiplus/<id>/availability` | `online` / `offline` | 1 | yes | connect / clean stop + last will |
+| `merakiplus/<id>/info` | `merakiplus.info/1` | 1 | yes | every connect, firmware change |
+| `merakiplus/<id>/state` | `merakiplus.state/1` | 0 | yes | at once on a change of activity, readiness or faults (≤ 1/s), else every 5 s |
+| `merakiplus/<id>/live` | `merakiplus.live/1` | 0 | no | 2/s while something runs (`live = 1`); dropped while disconnected |
+| `merakiplus/<id>/event` | `merakiplus.event/1` | 1 | no | transitions; up to 32 queued while disconnected, resent until PUBACK |
+| `merakiplus/<id>/shot` | `merakiplus.shot/1` **with** `curve` | 1 | yes | shot finished |
+| `merakiplus/<id>/shot/summary` | the same record without `curve` | 1 | yes | shot finished |
+| `homeassistant/device/merakiplus_<id>/config` | discovery (29 components) | 1 | yes | every connect |
+
+**Deltas from the design (§5–§7), and why:**
+
+* `shot` carries the **complete** record including the curve, so a subscriber that logs only that topic gets
+  everything (brief). Home Assistant's *Last shot* attributes come from `shot/summary`, so the curve never reaches
+  the recorder (§7's rule holds). The design's `shot/full` is not used.
+* Event names follow the brief: `grind_started`, `grind_finished`, `brew_started`, **`shot_finished`**,
+  `water_started`, `water_finished`, `steam_started`, `steam_finished`, `brew_ready`, `steam_ready`, `error`,
+  `error_cleared` (design: `shot_start`/`shot_end`/…/`fault`). The water-tank states are faults (`error` with
+  `faults: ["water_tank_low"]` / `["water_tank_missing"]`) and `state.water_low` / `state.water_tank_missing`.
+* Not in this version: `recipe`, `maintenance`, the journal files and catch-up (§8), the bridges (§9), TLS.
+  Instead of the maintenance counters, the shot counter `seq` survives a reboot (own file `/new_customer/merakiplus/shots`,
+  one small write per shot) and Home Assistant gets a *Brews* total from it.
+* `info.model` is not sent: the UI does not know the generation (missing key = not reported, §5.1).
+
+### 15.4 `shot_finished` and the shot record
+
+* **Start**: `work_sta` bits 1+2 set (the brew bits; pre-infusion until bit 9). **Stop**: bits 1+2 clear — the
+  controller's own weight stop, STOP BREW on the screen, or a fault.
+* **Pre-infusion → extraction**: bit 9 (pump drive) set for ≥ 1 s. The real controller pulses bit 9 for about 0.2 s
+  inside the pre-infusion (visible in the recorded capture the simulator replays); a pulse is not the end of it.
+* **Finished** = the cup weight has settled: at least 5 s after the stop and the last four 250 ms samples within
+  0.2 g (Companion's rule, §3.3). If the cup is lifted (the weight falls more than 3 g below its post-stop peak) the
+  record is finished at once with the peak as the yield and `yield_settled: false`; after 15 s it is finished anyway.
+  A new activity or a lost link also finishes it.
+* **Then**, in this order: `shot` (full record), `shotsum`, and the event `shot_finished`.
+* **Dose**: the settled grinder weight (word 38) of a grind that ended at most 300 s before the brew started
+  (`dose_source: "measured"`, plus `grind_workflow`), otherwise the dose target (word 4, `dose_source: "target"`).
+* **Yield**: `settled_yield_g` (Companion's key) and `yield_at_stop_g` (word 39 at the stop). **Ratio** = yield / dose.
+* **`completion_reason`**: `manual_stop` (STOP BREW on this screen during this brew), `fault` (an error word set at the
+  stop), `target_weight` (the controller stopped at ≥ 85 % of the yield target — its stop is predictive), else
+  `other`. **`kind`**: `short` under 15 s or under 2 g (a flush), else `espresso`.
+* **Time**: `start_utc` / `end_utc` are computed when the record is finished as *wall clock now − monotonic time
+  since the event*, so a clock that is set during or after the brew (the display boots without a valid clock;
+  [time-scheduling.md](time-scheduling.md)) cannot split or misdate the record. `clock_ok` says whether the wall clock
+  was valid; `uptime_s` is the monotonic start; `seq` orders shots across reboots.
+* **Pressure**: the record carries raw pump-side values (`pump.preinfusion_raw`, `extraction_raw`, `max_raw`, the
+  `pump_raw` curve) and `pump.pressure_est_bar`, the UI's single-anchor estimate ([calibration.md](calibration.md)).
+  With the reference capture that estimate reads about 15 bar during the extraction, which is not plausible as a
+  puck pressure — word 51 may be a pump drive level ([registermap.md](registermap.md) word 51). Treat it as a label,
+  not a measurement; the Home Assistant entity is disabled by default and named *Pressure (estimate)*.
+* **Curve**: `t` (ms since the previous sample), `weight` (0.1 g since the previous sample) — Beanconqueror's `flow`
+  encoding, usable as it is — plus absolute `flow_raw` and `pump_raw`; 4 samples/s from the start until the record is
+  finished (the drips included), halved once a brew passes 60 s (`fidelity: "downsampled"`, `period_ms` doubles).
+  `stop_ms` marks the stop. Σ`weight` = the last sample's weight.
+
+Example `shot_finished` event (from `merakiplus_preview --feed-demo`, the canned session):
+
+```json
+{"schema":"merakiplus.event/1","event_type":"shot_finished","uptime_s":348.0,"utc":"2026-11-18T15:35:28Z","clock_ok":true,
+ "seq":418,"kind":"espresso","completion_reason":"target_weight","duration_estimate_s":28.6,"settled_yield_g":36.6,
+ "dose_g":18.6,"dose_source":"measured","ratio":1.97}
+```
+
+Example shot record (`shot/summary` = this without `curve`; the curve is shortened here):
+
+```json
+{"schema":"merakiplus.shot/1","source":"Meraki+","seq":418,
+ "start_utc":"2026-11-18T15:34:55Z","end_utc":"2026-11-18T15:35:23Z","clock_ok":true,"uptime_s":314.4,
+ "machine":{"id":"3fa9c2d1","ui_version":"6.x","controller_fw":"V5.1.4"},
+ "kind":"espresso","complete":true,"completion_reason":"target_weight","yield_settled":true,
+ "duration_estimate_s":28.6,"preinfusion_s":6.6,"first_drip_s":9.1,"settled_yield_g":36.6,"yield_at_stop_g":34.4,
+ "dose_g":18.6,"dose_source":"measured","ratio":1.97,"dose_target_g":18.5,"yield_target_g":36.0,
+ "brew_set_c":87.0,"group_set_c":70,"grind_setting":16,
+ "pre_infusion":{"enabled":1,"pressure_choice":4,"duration_setting_s":6},
+ "grind_workflow":{"duration_estimate_s":9.5,"dose_setting_g":18.5,"settled_dose_g":18.6,"grind_setting":16,"ended_before_s":3.4},
+ "temps":{"basis":"controller sensors","brew_boiler_start_c":99.9,"group_start_c":70.2,"group_avg_c":70.2},
+ "pump":{"basis":"raw pump-side value (word 51), not a measured puck pressure","preinfusion_raw":357,"extraction_raw":1359,
+         "pressure_est_bar":15.2,"max_raw":1481},
+ "preset":null,"bean":null,
+ "curve":{"encoding":"beanconqueror_flow","fidelity":"full","period_ms":250,"stop_ms":28578,
+          "t":[0,250,250,250],"weight":[-3,0,0,0],"flow_raw":[360,360,360,360],"pump_raw":[353,354,356,359]}}
+```
+
+Companion alignment (§3.3, §9): `start_utc`, `complete`, `completion_reason`, `duration_estimate_s`,
+`settled_yield_g`, `dose_target_g`, `yield_target_g`, `grind_setting`, `pre_infusion` and `grind_workflow` have
+Companion's names and meaning. `brew_set_c` stays deliberately different from Companion's `brew_target_c` (the +5 °C
+question, §3.5 / J5).
+
+### 15.5 Security, as built
+
+| Rule | As built |
+|---|---|
+| R1 read-only | No SUBSCRIBE in the helper (a static test checks the packet types it can build); an incoming PUBLISH ends the connection (tested); discovery has no command topic and only `sensor` / `binary_sensor` / `event` (tested); the feed code contains no frame or queue call (tested) and the frames of a brew are byte-identical with the feed on and off (self-test). |
+| R2 outbound-only | No bind / listen / accept in the helper (static test); the UI↔helper socketpair has no address. |
+| R3 local | Address rule in the helper (unit test: private, link-local, ULA, loopback, v4-mapped accepted; public v4/v6, CGNAT, NAT64 refused) and the same rule in the setup tool. |
+| R4 opt-in | No `mqtt.conf` = OFF: no helper, no connection (E2E `mqtt_off_default`). |
+| R5 own file | `mqtt.conf` (0600); `config.json` untouched (self-test md5, E2E `config_writes = 0`). |
+| R6 no secrets | Named fields only; no serial block, Wi-Fi name, register dump or password in any record (self-test with markers in words 96–111 and the config; E2E with a marker password: only inside CONNECT). |
+| R7 isolation | Separate process, non-blocking writes, never signalled; E2E `mqtt_broker_outage`: the brew is unchanged while the broker is down; queued events arrive after the reconnect. |
+| R8 resources | 82 KB binary, about 150 KB static buffers; UI queue 16 KB; no flash writes except one tiny counter file per shot. Resident memory on the device: **not measured yet** (the ARMv7 container runs it under qemu, whose numbers are the emulator's). |
+
+**What remains, stated plainly** (unchanged from §10.2): the display's open root telnet lets anyone on your network
+read `mqtt.conf`, so use a **dedicated broker user that may only publish to `merakiplus/#` and its one discovery
+topic** and nothing else; phase 1 is **plain MQTT** (no TLS), so the password and the data cross your network
+unencrypted — do not reuse a password; the setup tool pushes the file over the installer's unencrypted channel.
+Mosquitto example (`acl_file`):
+
+```
+user merakiplus
+topic write merakiplus/#
+topic write homeassistant/device/merakiplus_<id>/config
+```
+
+### 15.6 Tests
+
+| Suite | What |
+|---|---|
+| UI self-test, section *MQTT* (EN + DA, also as a 32-bit ARM binary) | opt-in default, `mqtt.conf` writes (0600, only `enabled`, unwritable dir), file watch, status rows + texts, the feed of a grind + shot (events, every shot field, curve encoding, summary), manual stop, fault, lifted cup, clock set mid-brew, no secrets, frames unchanged |
+| `tests/test_mqtt.py` | record schemas + units in key names; discovery; helper ↔ mock broker: CONNECT + will, every topic / QoS / retain, payloads byte for byte, no SUBSCRIBE, password only in CONNECT, EOF → offline + DISCONNECT; unsolicited PUBLISH; outage + queued events; public brokers, refused login, bad configs |
+| `merakiplus_mqtt --selftest` | address rule, packet bytes, the four-type packet builder, discovery, `mqtt.conf` parsing |
+| SIM E2E `mqtt_shot`, `mqtt_stop_brew`, `mqtt_off_default`, `mqtt_toggle`, `mqtt_broker_outage` | the real UI SIM build + the host helper + the mock broker, driven by `mcu_sim` |
+| Installer suite, scenario *MQTT* | helper in the release, `mqtt` command (dry-run, public refused, 0600, id kept, `--disable`, `--show`, `#` refused), revert removes `mqtt.conf` |
+
+## 16. Try it in Home Assistant
+
+You need Home Assistant with the MQTT integration and a broker on your network (Mosquitto add-on or your own). No
+coffee machine is needed for steps 1–3.
+
+**1. A broker user for Meraki+** (recommended): in the Mosquitto add-on, add a login `merakiplus` with a password
+and, if you use an ACL file, the three lines from §15.5.
+
+**2. The quickest test: the real helper with a canned session** (needs this repository and zig 0.17.1):
+
+```sh
+./build.sh host
+printf '%s' 'your-broker-password' > ~/.merakiplus_mqtt_pw
+python3 tools/mqtt_demo.py --host 192.168.1.50 --user merakiplus --password-file ~/.merakiplus_mqtt_pw
+```
+
+In Home Assistant: *Settings → Devices & services → MQTT* shows a device **Meraki** (id `demo0001`) with
+temperatures, weights, *Activity*, *Brew ready*, *Fault*, *Last shot* (yield, time, dose, ratio, *Brews*) and
+*Machine event*. During the demo *Machine event* fires `grind_started` … `shot_finished` … `error_cleared`; at the
+end the device turns *unavailable* (`offline`). `--speed 1` runs it in real time (about 2.5 minutes).
+
+**3. Without any build: publish example payloads by hand** with `mosquitto_pub` (from the Mosquitto client tools).
+A short discovery document with three entities, then a state, a shot summary and the `shot_finished` event:
+
+```sh
+B="-h 192.168.1.50 -u merakiplus -P your-broker-password"
+mosquitto_pub $B -r -t homeassistant/device/merakiplus_3fa9c2d1/config -m '{
+ "device":{"identifiers":["merakiplus_3fa9c2d1"],"name":"Meraki","manufacturer":"MerakiTech","model":"Meraki+ display UI","sw_version":"6.x"},
+ "origin":{"name":"merakiplus_mqtt","sw_version":"1","support_url":"https://github.com/thomasgrastein/merakitech-plus"},
+ "availability_topic":"merakiplus/3fa9c2d1/availability",
+ "components":{
+  "brew_boiler":{"platform":"sensor","name":"Brew boiler","unique_id":"merakiplus_3fa9c2d1_brew_boiler","state_topic":"merakiplus/3fa9c2d1/state",
+                 "value_template":"{{ value_json.brew_boiler_c }}","device_class":"temperature","unit_of_measurement":"°C","state_class":"measurement"},
+  "last_shot":{"platform":"sensor","name":"Last shot","unique_id":"merakiplus_3fa9c2d1_last_shot","state_topic":"merakiplus/3fa9c2d1/shot/summary",
+               "value_template":"{{ value_json.end_utc if value_json.clock_ok else None }}","device_class":"timestamp",
+               "json_attributes_topic":"merakiplus/3fa9c2d1/shot/summary"},
+  "machine_event":{"platform":"event","name":"Machine event","unique_id":"merakiplus_3fa9c2d1_machine_event","state_topic":"merakiplus/3fa9c2d1/event",
+                   "event_types":["brew_started","shot_finished","error","error_cleared"]}}}'
+mosquitto_pub $B -r -t merakiplus/3fa9c2d1/availability -m online
+mosquitto_pub $B -r -t merakiplus/3fa9c2d1/state -m '{"schema":"merakiplus.state/1","activity":"idle","brew_boiler_c":92.8,"brew_ready":true,"faults":[],"e1":0,"e2":0,"e3":0,"clock_ok":true}'
+mosquitto_pub $B -r -t merakiplus/3fa9c2d1/shot/summary -m '{"schema":"merakiplus.shot/1","source":"Meraki+","seq":418,"start_utc":"2026-11-18T15:34:55Z","end_utc":"2026-11-18T15:35:23Z","clock_ok":true,"kind":"espresso","completion_reason":"target_weight","duration_estimate_s":28.6,"settled_yield_g":36.6,"dose_g":18.6,"ratio":1.97}'
+mosquitto_pub $B -t merakiplus/3fa9c2d1/event -m '{"schema":"merakiplus.event/1","event_type":"shot_finished","utc":"2026-11-18T15:35:28Z","clock_ok":true,"seq":418,"kind":"espresso","completion_reason":"target_weight","duration_estimate_s":28.6,"settled_yield_g":36.6,"dose_g":18.6,"ratio":1.97}'
+mosquitto_pub $B -r -t merakiplus/3fa9c2d1/availability -m offline      # the device turns unavailable
+```
+
+The full document the helper publishes (29 components) is printed by
+`build/merakiplus_mqtt_host --discovery <mqtt.conf> '{"ui_version":"6.x","controller_fw":"V5.1.4"}'`.
+To remove a test device: publish an empty retained message to its config topic
+(`mosquitto_pub $B -r -t homeassistant/device/merakiplus_3fa9c2d1/config -n`) and to the retained `merakiplus/<id>/…`
+topics, or delete the device in Home Assistant.
+
+**4. A notification on every shot** (Home Assistant automation; the event entity's id may differ — check it under the
+device):
+
+```yaml
+alias: Espresso done
+triggers:
+  - trigger: state
+    entity_id: event.meraki_machine_event
+conditions:
+  - condition: template
+    value_template: "{{ trigger.to_state.attributes.event_type == 'shot_finished' }}"
+actions:
+  - action: notify.notify
+    data:
+      title: "Shot {{ trigger.to_state.attributes.seq }}"
+      message: >-
+        {{ trigger.to_state.attributes.settled_yield_g }} g in
+        {{ trigger.to_state.attributes.duration_estimate_s }} s
+        (dose {{ trigger.to_state.attributes.dose_g }} g, ratio {{ trigger.to_state.attributes.ratio }},
+        {{ trigger.to_state.attributes.completion_reason }})
+```
+
+**5. A shot journal without writing code** (Node-RED: MQTT in → one JSON line per shot in a file). Import this flow
+(*Menu → Import*), set the broker in the MQTT node:
+
+```json
+[{"id":"mp_in","type":"mqtt in","name":"Meraki+ shots","topic":"merakiplus/+/shot","qos":"1","datatype":"utf8","broker":"","nl":false,"rap":true,"rh":0,"wires":[["mp_file"]]},
+ {"id":"mp_file","type":"file","name":"shots.jsonl","filename":"/data/merakiplus-shots.jsonl","filenameType":"str","appendNewline":true,"createDir":true,"overwriteFile":"false","encoding":"utf8","wires":[]}]
+```
+
+Each line is a complete `merakiplus.shot/1` record with its curve. Note that `shot` is retained: when Node-RED
+reconnects it receives the last shot again — deduplicate by `machine.id` + `seq` if that matters.
+
+**6. On the machine** (after the MQTT feature is released and installed): `python3 tools/merakiplus.py mqtt --ip <display>
+--host <broker> --user merakiplus`, then *gear → SYSTEM → MQTT*: PUBLISH DATA ON is already set by the tool; STATUS
+should read CONNECTED within a few seconds, LAST PUBLISH counts up to 5 s and resets. Pull one shot and compare the
+*Last shot* attributes with the screen (weight, time). Switch the machine off and on: *unavailable*, then back with
+the same entities. Stop the broker during a brew: the brew is unaffected, and the shot arrives after the broker is back.

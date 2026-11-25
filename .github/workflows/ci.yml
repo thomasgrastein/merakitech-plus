@@ -103,10 +103,16 @@ jobs:
           zig cc -DMERAKIPLUS_PREVIEW -O2 -o build/merakiplus_preview src/merakiplus.c -lm
           ./build/merakiplus_preview --selftest sim/fixtures/config.json > build/ui_selftest.txt 2>&1 || { tail -50 build/ui_selftest.txt; exit 1; }
           tail -n 1 build/ui_selftest.txt
+      - name: MQTT helper + feed (mock broker, discovery, no SUBSCRIBE, shot record)
+        run: python3 tests/test_mqtt.py
       - name: Simulator self-test
         run: python3 sim/selftest.py
       - name: E2E quick (5 core scenarios against the real UI SIM build)
         run: python3 sim/run_e2e.py --all --quick --parallel 4
+      - name: E2E MQTT (helper against a mock broker, shot_finished + shot record)
+        run: |
+          mkdir -p build/mqtt_scen && cp sim/scenarios/mqtt_*.json build/mqtt_scen/
+          python3 sim/run_e2e.py --all --scen-dir build/mqtt_scen --parallel 5 --run-name mqtt
       - name: Gesture switcher end-to-end (file mode)
         run: python3 boot/test_switcher.py
       - name: Launcher (vendor-watchdog model + power-cut replay)

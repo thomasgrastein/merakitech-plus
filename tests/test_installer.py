@@ -737,8 +737,52 @@ def signed_install(srv, root):
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def mqtt_setup(srv, root):
+    """MQTT: the MQTT helper ships in the release; `mqtt` writes mqtt.conf (0600, own file), keeps the id, refuses a public broker,
+    never prints the password; --disable / --show; revert removes mqtt.conf (it holds the broker password)."""
+    rc, out = run(srv, root, "install")
+    check("MQTT: install exits 0", rc == 0)
+    mq = root / mp.REL_DIR.lstrip("/") / REL / "merakiplus_mqtt"
+    check("MQTT: the MQTT helper is installed in the release (md5-gated, executable); no mqtt.conf = MQTT stays OFF",
+          mq.is_file() and md5f(mq) == mp.BIN_MD5["merakiplus_mqtt"] and (mq.stat().st_mode & 0o111) != 0
+          and not (root / mp.MQTT_CONF.lstrip("/")).exists())
+    conf = root / mp.MQTT_CONF.lstrip("/")
+    cfg = root / "customer/config.json"
+    cfg0 = md5f(cfg)
+    pw = root.parent / "pw.txt"
+    pw.write_text("PWMARK-inst-42\n")
+    before = tree_digest(root)
+    rc, out = run(srv, root, "mqtt", "--dry-run", "--host", "192.168.1.50", "--user", "merakiplus", "--password-file", str(pw))
+    check("MQTT: mqtt --dry-run changes nothing", rc == 0 and tree_digest(root) == before, out[-300:])
+    rc, out = run(srv, root, "mqtt", "--host", "8.8.8.8", "--user", "merakiplus", "--password-file", str(pw))
+    check("MQTT: a public broker address is refused, nothing written", rc == 1 and "not on your local network" in out and not conf.exists())
+    rc, out = run(srv, root, "mqtt", "--host", "192.168.1.50", "--user", "merakiplus", "--password-file", str(pw))
+    c = mp.mqtt_parse(conf.read_text()) if conf.exists() else {}
+    check("MQTT: mqtt writes mqtt.conf (mode 0600): enabled 1, host, port 1883, user, password, a random 8-hex id, base, discovery, live",
+          rc == 0 and (conf.stat().st_mode & 0o777) == 0o600 and c.get("enabled") == "1" and c.get("host") == "192.168.1.50"
+          and c.get("port") == "1883" and c.get("user") == "merakiplus" and c.get("pass") == "PWMARK-inst-42"
+          and len(c.get("id", "")) == 8 and c.get("base") == "merakiplus" and c.get("discovery") == "1", (out[-400:], c))
+    check("MQTT: the password is never printed (only '(set)'); the ACL advice is shown; config.json untouched",
+          "PWMARK" not in out and "(set)" in out and "topic write merakiplus/#" in out and md5f(cfg) == cfg0)
+    mid = c.get("id")
+    rc, out = run(srv, root, "mqtt", "--host", "192.168.1.100", "--broker-port", "1884", "--user", "merakiplus", "--password-file", str(pw))
+    c2 = mp.mqtt_parse(conf.read_text())
+    check("MQTT: a second setup keeps the device id (Home Assistant keeps its entities)", rc == 0 and c2.get("id") == mid and c2.get("host") == "192.168.1.100" and c2.get("port") == "1884")
+    rc, out = run(srv, root, "mqtt", "--disable")
+    c3 = mp.mqtt_parse(conf.read_text())
+    check("MQTT: --disable sets enabled 0 and keeps every other setting", rc == 0 and c3.get("enabled") == "0" and {k: v for k, v in c3.items() if k != "enabled"} == {k: v for k, v in c2.items() if k != "enabled"})
+    rc, out = run(srv, root, "mqtt", "--show")
+    check("MQTT: --show prints the settings with the password hidden and the helper's status", rc == 0 and "(set)" in out and "PWMARK" not in out and "helper:" in out, out[-300:])
+    pw.write_text("bad#pw\n")
+    rc, out = run(srv, root, "mqtt", "--host", "192.168.1.50", "--user", "merakiplus", "--password-file", str(pw))
+    check("MQTT: a password with '#' (mqtt.conf comment) is refused, the file is unchanged", rc == 1 and mp.mqtt_parse(conf.read_text()) == c3)
+    rc, out = run(srv, root, "revert")
+    check("MQTT: revert removes mqtt.conf (it holds the broker password)", rc == 0 and not conf.exists())
+
+
 if __name__ == "__main__":
     scenario("fresh machine running stock from slot A", "stock_a", stock_a)
+    scenario("MQTT helper in the release + the mqtt setup command", "stock_a", mqtt_setup)
     scenario("machine running a vendor update from slot B", "vendor_b", vendor_b)
     scenario("slot B empty", "empty_b", empty_b)
     scenario("not a MerakiTech display", "stock_a", not_a_display)

@@ -1,0 +1,278 @@
+{
+  "name": "mqtt_shot",
+  "description": "MQTT ON (mqtt.conf set up) — the UI starts the publish-only helper against a mock broker; a brew (pre-infusion, MCU weight stop) gives brew_started + shot_finished events and ONE retained shot record (merakiplus.shot/1, curve in Beanconqueror's encoding) + its summary; Home Assistant discovery, availability online → offline (EOF at exit), state/info/live. The helper never subscribes; the password is only in CONNECT. The brew itself (phases, frames, auto-stop) is exactly the brew scenario's",
+  "ui_only": true,
+  "duration_s": 44,
+  "mqtt": {
+    "conf": {}
+  },
+  "events": [
+    {
+      "t": 3,
+      "target": "ui",
+      "cmd": "action",
+      "name": "brew"
+    },
+    {
+      "t": 15,
+      "target": "runner",
+      "op": "snapshot",
+      "label": "extraction"
+    },
+    {
+      "t": 40,
+      "target": "runner",
+      "op": "snapshot",
+      "label": "after"
+    }
+  ],
+  "expect": [
+    {
+      "kind": "phase_seq",
+      "t0": 0,
+      "t1": 44,
+      "values": [
+        "READY",
+        "PRE",
+        "EXT",
+        "READY"
+      ]
+    },
+    {
+      "kind": "phase",
+      "t": 5,
+      "window": 1.5,
+      "value": "PRE"
+    },
+    {
+      "kind": "phase",
+      "t": 13,
+      "window": 2,
+      "value": "EXT"
+    },
+    {
+      "kind": "state",
+      "t0": 2,
+      "t1": 40,
+      "path": "mqtt.status",
+      "equals": "connected"
+    },
+    {
+      "kind": "state",
+      "t0": 1,
+      "t1": 44,
+      "path": "mqtt.helper_pid",
+      "min": 1,
+      "mode": "any"
+    },
+    {
+      "kind": "mqtt_packets",
+      "allowed": [
+        "CONNECT",
+        "PUBLISH",
+        "PINGREQ",
+        "DISCONNECT"
+      ],
+      "will": true,
+      "no_secret": true,
+      "connections_min": 1,
+      "connections_max": 1
+    },
+    {
+      "kind": "mqtt",
+      "topic": "homeassistant/device/merakiplus_{id}/config",
+      "min": 1,
+      "retain": true,
+      "qos": 1,
+      "json": {
+        "device.identifiers": [
+          "merakiplus_e2e0test"
+        ],
+        "availability_topic": "{base}/availability",
+        "components.machine_event.platform": "event",
+        "components.last_shot.json_attributes_topic": "{base}/shot/summary"
+      }
+    },
+    {
+      "kind": "mqtt",
+      "topic": "{base}/availability",
+      "min": 2,
+      "retain": true,
+      "qos": 1,
+      "payload": "offline"
+    },
+    {
+      "kind": "mqtt",
+      "topic": "{base}/info",
+      "min": 1,
+      "retain": true,
+      "qos": 1,
+      "json": {
+        "schema": "merakiplus.info/1",
+        "ui_version": "6.24",
+        "controller_fw": "V5.1.4"
+      }
+    },
+    {
+      "kind": "mqtt",
+      "topic": "{base}/state",
+      "min": 5,
+      "retain": true,
+      "qos": 0,
+      "json": {
+        "schema": "merakiplus.state/1",
+        "activity": "idle",
+        "link": true
+      },
+      "present": [
+        "brew_boiler_c",
+        "group_c",
+        "steam_boiler_c",
+        "milk_c",
+        "brew_weight_g",
+        "faults",
+        "e1",
+        "e2",
+        "e3",
+        "mains_v",
+        "mains_hz",
+        "water_low"
+      ]
+    },
+    {
+      "kind": "mqtt",
+      "topic": "{base}/live",
+      "min": 30,
+      "retain": false,
+      "qos": 0,
+      "where": {
+        "activity": "brew"
+      },
+      "present": [
+        "brew_weight_g",
+        "pump_raw",
+        "flow_raw",
+        "t_s",
+        "phase"
+      ]
+    },
+    {
+      "kind": "mqtt",
+      "topic": "{base}/event",
+      "min": 1,
+      "max": 1,
+      "retain": false,
+      "qos": 1,
+      "where": {
+        "event_type": "brew_started"
+      }
+    },
+    {
+      "kind": "mqtt",
+      "topic": "{base}/event",
+      "min": 1,
+      "max": 1,
+      "retain": false,
+      "qos": 1,
+      "where": {
+        "event_type": "shot_finished"
+      },
+      "json": {
+        "seq": 1,
+        "kind": "espresso",
+        "completion_reason": "target_weight",
+        "settled_yield_g": [
+          30,
+          42
+        ],
+        "duration_estimate_s": [
+          20,
+          34
+        ]
+      }
+    },
+    {
+      "kind": "mqtt",
+      "topic": "{base}/shot",
+      "min": 1,
+      "max": 1,
+      "retain": true,
+      "qos": 1,
+      "json": {
+        "schema": "merakiplus.shot/1",
+        "source": "Meraki+",
+        "seq": 1,
+        "kind": "espresso",
+        "complete": true,
+        "completion_reason": "target_weight",
+        "yield_settled": true,
+        "duration_estimate_s": [
+          20,
+          34
+        ],
+        "preinfusion_s": [
+          4,
+          9
+        ],
+        "settled_yield_g": [
+          30,
+          42
+        ],
+        "yield_at_stop_g": [
+          25,
+          40
+        ],
+        "dose_source": "target",
+        "machine.id": "e2e0test",
+        "machine.ui_version": "6.24",
+        "machine.controller_fw": "V5.1.4",
+        "curve.encoding": "beanconqueror_flow",
+        "pre_infusion.enabled": 1
+      },
+      "present": [
+        "start_utc",
+        "end_utc",
+        "clock_ok",
+        "dose_g",
+        "ratio",
+        "dose_target_g",
+        "yield_target_g",
+        "brew_set_c",
+        "group_set_c",
+        "grind_setting",
+        "temps",
+        "pump",
+        "curve"
+      ]
+    },
+    {
+      "kind": "mqtt",
+      "topic": "{base}/shot/summary",
+      "min": 1,
+      "max": 1,
+      "retain": true,
+      "qos": 1,
+      "json": {
+        "schema": "merakiplus.shot/1",
+        "seq": 1
+      },
+      "absent": [
+        "curve"
+      ]
+    },
+    {
+      "kind": "feed",
+      "channel": "shot",
+      "min": 1,
+      "max": 1,
+      "json": {
+        "completion_reason": "target_weight"
+      }
+    },
+    {
+      "kind": "phase",
+      "t": 42,
+      "value": "READY"
+    }
+  ]
+}

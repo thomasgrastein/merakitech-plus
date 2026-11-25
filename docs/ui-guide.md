@@ -17,7 +17,7 @@ swiping) with one root and sheets — the reasoning is in [ux-audit-v617.md](ux-
 ```
 HOME ─ icon, tap ─► GRIND / BREW / WATER / STEAM   (live line · that feature's settings · HOLD TO START)
      ─ icon, hold ► starts the activity (650 ms)
-     ─ gear ──────► SYSTEM ─ DISPLAY · SOUND · CLOCK · SCHEDULE · STOCK UI (sections, one open at a time)
+     ─ gear ──────► SYSTEM ─ DISPLAY · SOUND · CLOCK · SCHEDULE · STOCK UI · MQTT (sections, one open at a time)
      │                     └ DIAGNOSTICS ─► DIAGNOSTICS
      └ error / offline hint, tap ─► DIAGNOSTICS
 ```
@@ -32,7 +32,7 @@ whole header is the target), or swipe right. There are no page dots, no edge zon
 | **BREW** | tap the cup icon | live line *BOILER 92.4° · GROUP 70°* · BREW WEIGHT, BREW TEMP, PRE-INFUSION, PRE-INF. TIME, PRE-INF. PRESSURE, GROUP HEAD (4 in view, the list scrolls) · HOLD TO START |
 | **WATER** | tap the drop icon | live line *WATER 99.9°* (word 40 — the "water sensor") · HOT WATER, WATER MODE · HOLD TO START. **v6.22:** on a controller that cannot dose (≤ 5.1.2, version unknown, scale fault) no rows — *MANUAL HOT WATER · RUNS UNTIL YOU TAP STOP* + the reason (§21) |
 | **STEAM** | tap the steam icon | live line *BOILER 130° · MILK 22.6°* · MILK TEMP, STEAM LEVEL · HOLD TO START |
-| **SYSTEM** | the gear | *MERAKI+ V6.18.1* · four section headers with a summary (**DISPLAY · SOUND** *ENGLISH* · **CLOCK** *16:35* · **SCHEDULE** *06:30 / OFF* · **STOCK UI**) + the **DIAGNOSTICS** row (*OK* / the error code / *DOWN*). Closed: 5 rows, no scrolling. A tap on a header opens it (and closes the other) |
+| **SYSTEM** | the gear | *MERAKI+ V6.24* · five section headers with a summary (**DISPLAY · SOUND** *ENGLISH* · **CLOCK** *16:35* · **SCHEDULE** *06:30 / OFF* · **STOCK UI** · **MQTT** *OFF / CONNECTED*, unreleased) + the **DIAGNOSTICS** row (*OK* / the error code / *DOWN*). Closed: 6 rows — DIAGNOSTICS is one short drag away (v6.17–v6.24: 5 rows, no scrolling). A tap on a header opens it (and closes the other) |
 | **DIAGNOSTICS** | SYSTEM's last row, or a tap on HOME's error / offline hint | STATUS, BOOT · SLOT · SWITCHER, NET, GRAPH (smooth / raw), PRESSURE · ESTIMATE, RAW COUNTERS, POWER BUTTON, TIME · SCHEDULE, SOUND (v6.18), ABOUT — scrolls vertically. Its chevron returns to where it was opened from |
 
 A feature page's live line turns **amber and names the reason** when a start is not possible (*NO
@@ -434,3 +434,32 @@ but **these specific bits are not yet confirmed on Gen 2** — issue #1 awaits t
   shows an icon, Meraki+ therefore also blocks starts while the tank is low — unchanged from v6.23.
 * **Tests:** UI self-test section *v6.24 water tank messages* (14 bit combinations × EN/DA, guards unchanged, clear →
   READY, text widths); SIM scenario `fault_water_tank` (SIM state `err.id` / `err.code`).
+
+## 23. MQTT / Home Assistant (unreleased)
+
+*SYSTEM › MQTT* is the fifth SYSTEM section, after STOCK UI. Closed, SYSTEM now has six rows: the five section headers
+are in view and the DIAGNOSTICS row is one short drag (52 px) away (v6.17–v6.24: five rows, no scrolling). The header's
+summary is the connection status.
+
+| Row | Values (EN / DA) | What |
+|---|---|---|
+| **PUBLISH DATA** / *SEND DATA* | OFF / ON (*FRA* / *TIL*) | the switch; SAVE writes only the `enabled` line of Meraki+'s own `/new_customer/merakiplus/mqtt.conf` (0600, atomic). Note: *READ-ONLY · TO YOUR OWN BROKER* |
+| **STATUS** (read-only) | OFF, NOT SET UP, CONNECTING, CONNECTED, DISCONNECTED, BROKER NOT LOCAL, LOGIN REFUSED, NO HELPER, HELPER FAILED (*FRA, IKKE SAT OP, FORBINDER, FORBUNDET, AFBRUDT, FJERN BROKER, LOGIN AFVIST, INGEN HJÆLPER, HJÆLPER FEJLEDE*) | the helper's state. Note: *SET UP ON A PC:* `merakiplus.py mqtt` |
+| **LAST PUBLISH** / *SIDST SENDT* (read-only) | seconds, `--` before the first message | time since the helper's last message to the broker |
+
+* **No file = OFF** (opt-in). Switching ON without a broker creates the file with `enabled = 1` and a random id
+  (toast *MQTT ON · NO BROKER SET UP YET*); STATUS then reads NOT SET UP. The broker (host, port, user, password) is set
+  up from a computer: `python3 tools/merakiplus.py mqtt --ip <display> --host <broker> --user merakiplus`. A file the
+  tool writes is picked up within 2 s; a running helper restarts with it. If the file cannot be written, the switch
+  applies to this session only (toast *ACTIVE · FILE NOT SAVED*).
+* **What it starts:** with PUBLISH DATA ON and a broker set up, Meraki+ starts the helper `merakiplus_mqtt` from its
+  release directory and feeds it read-only records over a one-way socket; OFF closes that socket and the helper
+  publishes *offline* and ends (never signalled). A helper that keeps dying is given up after five tries (*HELPER
+  FAILED*) until the switch is toggled.
+* **Observe only:** no frame, guard or setting changes because of MQTT. Records, topics, the shot record and the Home
+  Assistant entities: [integrations.md §15](integrations.md#15-implemented-unreleased-mqtt--home-assistant-mvp).
+* **Strings:** `TX_SEC_MQTT` … `TX_T_MQ_NOSETUP` (one block; Appendix A of [dev/UI_v6.md](dev/UI_v6.md)). All fit their
+  pixel budgets in both languages (selftest; *BROKER IKKE LOKAL* was too wide for the value field → *FJERN BROKER*).
+* **Previews:** `113_system_closed_mqtt`, `114_system_mqtt_off`, `115_system_mqtt_connected`, `116_detail_mqtt`.
+* **Tests:** UI self-test section *MQTT*; SIM scenarios `mqtt_shot`, `mqtt_stop_brew`, `mqtt_off_default`,
+  `mqtt_toggle`, `mqtt_broker_outage`; `tests/test_mqtt.py`.

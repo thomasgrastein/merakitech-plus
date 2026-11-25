@@ -51,6 +51,7 @@ import os
 import pathlib
 import random
 import re
+import secrets
 import socket
 import sys
 import tempfile
@@ -65,10 +66,11 @@ RAW_AUDIO = "https://raw.githubusercontent.com/" + REPO + "/{ref}/audio/{name}"
 
 # md5 of the shipped device binaries in bin/ (kept in sync with bin/MD5SUMS by CI).
 BIN_MD5 = {
-    "merakiplus": "9182753f4d277821f9f06b810a066096",
+    "merakiplus": "a17c3e053960032efdb46d21aef1a5d5",
     "switcher": "e02a463c16278545c04b8e4022b8369f",
     "grab_shim.so": "c42076c807c54d477a5868977404186d",
     "merakiplus_snd": "a7659c176b8ef78385b0b612a69e81ca",
+    "merakiplus_mqtt": "00556874f3d4631a492748d551919bfd",
     "merakiplus_boot": "c0035acd75049bea2570a6ea99c4ab5d",
 }
 # v6.18: Meraki+'s own sounds (tools/gen_audio.py; docs/audio.md; v6.19: marimba / glockenspiel timbres) — installed next to the sound helper
@@ -80,10 +82,11 @@ AUDIO_MD5 = {
 # SHA-256 of the same files (docs/ota-plan.md phase 1a). Checked on the computer before upload, and on the display
 # when its busybox has sha256sum. md5 stays as well (the display always has md5sum; older docs/scripts quote it).
 BIN_SHA256 = {
-    "merakiplus": "df92571082c0dc975b92314f266d81b69c5d55666241624fa26ebf69f3685057",
+    "merakiplus": "0ae1884c588dc425e801ca07c8fb38e16ba198af494ae4f70832c2976f48d87c",
     "switcher": "6af721e297e8d13dedc9ad9c14bf39d925eb7d4cc7ae9fab49f99b428873d5bf",
     "grab_shim.so": "c02f61b53ec4613f04950966bcfab7e7aa2ad53dfe1035eae22a542861d268d7",
     "merakiplus_snd": "84c06c507a04d0c06ae9250a60405f10bcf05b105e481144869180fd30d479cb",
+    "merakiplus_mqtt": "19f3dc7b241341a44314436ca6f0f6889874babd165f720d391268b4e7ada781",
     "merakiplus_boot": "4cbcc5fb20469ba25b79ee1523b4639a2a81af84e96b996e97d2af0d535fd8ed",
 }
 AUDIO_SHA256 = {
@@ -108,9 +111,12 @@ BAK_SH = BOOTDIR + "/demo.sh.bak"                       # original /customer/dem
 STATE = BOOTDIR + "/merakiplus.state"
 SND_HELPER = OURDIR + "/merakiplus_snd"                 # v6.18: plays a sound via the display's own libmi_ao.so
 AUDIO_DIR = OURDIR + "/audio"                           # v6.18: start.wav, ready_extract.wav, ready_steam.wav
+MQTT_CONF = OURDIR + "/mqtt.conf"                       # MQTT: Meraki+'s own MQTT settings incl. the broker password (never config.json)
+MQTT_SHOTS = OURDIR + "/shots"                          # MQTT: the shot counter ("seq=N")
+MQTT_STATUS = "/tmp/merakiplus_mqtt.status"             # MQTT: written by the helper (RAM)
 SWITCHER, SHIM = BOOTDIR + "/switcher", BOOTDIR + "/grab_shim.so"
 # v6.21 (docs/ota-plan.md §5.2): release directories + the launcher's state
-REL_DIR = OURDIR + "/rel"                               # rel/<version>-<sha8>/{demo_v9, merakiplus_snd, audio/, MANIFEST}
+REL_DIR = OURDIR + "/rel"                               # rel/<version>-<sha8>/{demo_v9, merakiplus_snd, merakiplus_mqtt, audio/, MANIFEST}
 OTA_DIR = OURDIR + "/ota"
 OTA_STATE = OTA_DIR + "/state"                          # the commit point: current / previous / pending / tries / last
 OTA_HEALTHY = OTA_DIR + "/healthy"                      # written by a UI on trial once it is healthy
@@ -468,7 +474,7 @@ class Device:
                          f"case \"$e\" in */{name}|*'/{name} (deleted)') echo \"P ${{d##*/}}\";; esac; done", check=False)
         return [int(l.split()[1]) for l in out.splitlines() if l.startswith("P ") and l.split()[1].isdigit()]
 
-    def push(self, local_bytes, dest, mode="755"):
+    def push(self, local_bytes, dest, mode="755", secret=False):
         """Raw upload via the display's busybox `nc -l`, written to dest.part on dest's own
         filesystem, md5-verified (+ SHA-256 when available), synced, then renamed over dest.
 
@@ -483,7 +489,7 @@ class Device:
         dpath = self.d(dest)
         part = dpath + ".part"
         if self.dry:
-            self.o.say(f"  [dry-run] would upload {len(local_bytes)} bytes (md5 {want}) -> {dest}")
+            self.o.say(f"  [dry-run] would upload {len(local_bytes)} bytes" + ("" if secret else f" (md5 {want})") + f" -> {dest}")
             return want
         last_err = None
         self.changed = True
@@ -524,10 +530,10 @@ class Device:
                 self.sh(f"mv -f {part} {dpath} && sync")             # ... then the atomic rename
                 if self.md5(dest) != want or (self.has_sha256() and self.sha256(dest) != want256):
                     raise Abort(f"checksum mismatch after rename: {dest}")
-                self.o.debug(f"push ok {dest} {want}")
+                self.o.debug(f"push ok {dest}" + ("" if secret else f" {want}"))   # MQTT: no checksum of a file with a password
                 return want
             self.sh(f"rm -f {part}", check=False)
-            last_err = last_err or f"md5 {got} != {want}"
+            last_err = last_err or ("checksum mismatch" if secret else f"md5 {got} != {want}")
             self.o.warn(f"upload attempt {attempt + 1} failed ({last_err}); retrying")
         raise Abort(f"Could not upload {dest}: {last_err}")
 
@@ -1305,6 +1311,8 @@ def cmd_install(dev, o, args):
     want = BIN_MD5["merakiplus"]
     snd = get_binary("merakiplus_snd", args, o)                  # v6.18: sound helper + our own sounds
     check_arm_elf(snd, "merakiplus_snd")
+    mqtt = get_binary("merakiplus_mqtt", args, o)                # MQTT: the publish-only MQTT helper (started only when MQTT is ON)
+    check_arm_elf(mqtt, "merakiplus_mqtt")
     boot = get_binary("merakiplus_boot", args, o)                # v6.21: the launcher (/new_customer/demo_v9)
     check_arm_elf(boot, "merakiplus_boot")
     sounds = {n: get_binary(n, args, o, sub="audio") for n in AUDIO_MD5}
@@ -1317,11 +1325,11 @@ def cmd_install(dev, o, args):
         check_arm_elf(extra["grab_shim.so"], "grab_shim.so", shared=True)
     # OTA phase 2: the release's signed manifest (Ed25519, offline key) must list every file we install
     max_seq = int(st["ota"]["max_seq"]) if st["ota"].get("max_seq", "").isdigit() else None
-    signed = check_signed_release(args, o, {"merakiplus": merakiplus, "merakiplus_snd": snd, "merakiplus_boot": boot,
+    signed = check_signed_release(args, o, {"merakiplus": merakiplus, "merakiplus_snd": snd, "merakiplus_mqtt": mqtt, "merakiplus_boot": boot,
                                             **sounds, **extra}, max_seq)
     rel = rel_name(VERSION, merakiplus)
     rel_exe = f"{REL_DIR}/{rel}/demo_v9"
-    files = [("demo_v9", merakiplus), ("merakiplus_snd", snd)] + [("audio/" + n, b) for n, b in sounds.items()]
+    files = [("demo_v9", merakiplus), ("merakiplus_snd", snd), ("merakiplus_mqtt", mqtt)] + [("audio/" + n, b) for n, b in sounds.items()]
     man = manifest(VERSION, files)
     # free space: the new release + the launcher (+ its upload) + a migrated copy of the running build + margin
     need_kb = (sum(len(b) for _, b in files) * 2 + len(boot) * 2 + sum(map(len, extra.values()))) // 1024 + 512
@@ -1697,10 +1705,10 @@ def cmd_revert(dev, o, args):
         dev.w(f"rm -rf {dev.d(OURDIR)} {dev.d(LEGACY_DIR)} && sync")
         o.ok(f"{OURDIR} removed (backups, language file and settings backups included)")
     else:
-        dev.w(f"rm -f {dev.d(STAGE)} {dev.d(STATE)} {dev.d(SND_HELPER)} {dev.d(LAUNCHER_NEW)}; "
+        dev.w(f"rm -f {dev.d(STAGE)} {dev.d(STATE)} {dev.d(SND_HELPER)} {dev.d(LAUNCHER_NEW)} {dev.d(MQTT_CONF)}; "
               f"rm -rf {dev.d(AUDIO_DIR)} {dev.d(REL_DIR)} {dev.d(OTA_DIR)}; sync")
-        o.say(f"  backups kept in {BOOTDIR} (remove with --purge); the launcher's releases ({REL_DIR}), its state and "
-              f"the sound player were removed")
+        o.say(f"  backups kept in {BOOTDIR} (remove with --purge); the launcher's releases ({REL_DIR}), its state, "
+              f"the sound player and the MQTT settings (mqtt.conf, incl. the broker password) were removed")
     dev.w(f"rm -f {dev.d(HMARK)} {dev.d(RELOAD)} {dev.d(LAUNCH_VOL)}")
 
     o.step("6/6 Verifying")
@@ -1719,6 +1727,121 @@ def cmd_revert(dev, o, args):
 
 
 # ============================================================ scan / status
+# ============================================================ MQTT / Home Assistant setup (docs/integrations.md §15)
+MQTT_KEYS = ("enabled", "host", "port", "user", "pass", "id", "base", "discovery", "discovery_prefix", "live")
+MQTT_ACL = """  Recommended broker setup (Mosquitto): a dedicated user that may only PUBLISH to its own topics and read nothing:
+      user merakiplus
+      topic write merakiplus/#
+      topic write homeassistant/device/merakiplus_{id}/config
+  The display has the manufacturer's open telnet, so anyone on your network can read mqtt.conf: with this rule a stolen
+  password allows fake coffee data and nothing else. Do not reuse a password. Plain MQTT (no TLS) in this version."""
+
+
+def mqtt_parse(text):
+    """mqtt.conf -> {key: value} ('#' comments, 'key = value'; unknown keys are kept)"""
+    out = {}
+    for line in text.splitlines():
+        line = line.split("#", 1)[0]
+        if "=" in line:
+            k, v = line.split("=", 1)
+            out[k.strip()] = v.strip()
+    return out
+
+
+def mqtt_text(c):
+    lines = ["# Meraki+ MQTT (docs/integrations.md §15) — written by tools/merakiplus.py mqtt. Own file; never config.json.",
+             "# SYSTEM > MQTT > PUBLISH DATA on the display changes only the 'enabled' line."]
+    lines += [f"{k} = {c[k]}" for k in MQTT_KEYS if c.get(k, "") != ""]
+    lines += [f"{k} = {v}" for k, v in c.items() if k not in MQTT_KEYS and v != ""]
+    return "\n".join(lines) + "\n"
+
+
+def mqtt_local(host):
+    """(ok, addresses): the same rule as the helper — private, link-local, unique-local or loopback; a name must resolve to such"""
+    def loc(a):
+        ip = ipaddress.ip_address(a.split("%")[0])
+        if ip.version == 6 and ip.ipv4_mapped:
+            ip = ip.ipv4_mapped
+        if ip.version == 4:
+            return any(ip in ipaddress.ip_network(n) for n in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16", "127.0.0.0/8"))
+        return ip == ipaddress.ip_address("::1") or ip in ipaddress.ip_network("fc00::/7") or ip in ipaddress.ip_network("fe80::/10")
+    try:
+        try:
+            addrs = [str(ipaddress.ip_address(host))]
+        except ValueError:
+            addrs = sorted({ai[4][0] for ai in socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)})
+        return bool(addrs) and all(loc(a) for a in addrs), addrs
+    except (OSError, ValueError):
+        return False, []
+
+
+def cmd_mqtt(dev, o, args):
+    """write /new_customer/merakiplus/mqtt.conf over the installer's channel (or show / disable it). Read-only feature:
+    the display only PUBLISHES; nothing here opens a port on it."""
+    o.step("1/3 Reading the display (read-only)")
+    st = inspect(dev)
+    if not st.get("b_ours"):
+        o.warn("Meraki+ is not installed in slot B — the settings are written anyway and used once Meraki+ " + VERSION + " runs")
+    cur = mqtt_parse(dev.read(MQTT_CONF).decode("utf-8", "replace")) if dev.exists(MQTT_CONF) else {}
+    if args.show:
+        o.say(f"  {MQTT_CONF}: " + ("missing (MQTT is OFF)" if not cur else ""))
+        for k in MQTT_KEYS:
+            if k in cur:
+                o.say(f"    {k:17s}= " + (("(set)" if cur[k] else "(empty)") if k == "pass" else cur[k]))
+        _, s = dev.sh(f"cat {dev.d(MQTT_STATUS)} 2>/dev/null; true", check=False)
+        m = re.search(r"mqtt1 (\S+) (\d+) (\d+) (\d+)", s)
+        o.say("  helper: " + (f"{m.group(1)} · {m.group(2)} published · {m.group(3)} dropped · {m.group(4)} reconnects" if m else "not running"))
+        return
+    if args.disable:
+        if not cur:
+            o.ok("MQTT is already off (no mqtt.conf)")
+            return
+        new = dict(cur, enabled="0")
+    else:
+        if not args.host:
+            raise Abort("Give the broker with --host ADDR (an address on your own network), or use --show / --disable.")
+        ok, addrs = mqtt_local(args.host)
+        if not ok:
+            raise Abort(f"The broker {args.host} ({', '.join(addrs) or 'does not resolve'}) is not on your local network. Meraki+ only "
+                        f"publishes to a private, link-local or unique-local address (docs/integrations.md R3). Nothing was changed.")
+        for k, v, pat in (("user", args.user or "", r"[A-Za-z0-9_.@-]{0,63}"), ("base", args.base, r"[A-Za-z0-9_-]+(/[A-Za-z0-9_-]+)*"),
+                          ("discovery_prefix", args.discovery_prefix, r"[A-Za-z0-9_-]{1,32}")):
+            if not re.fullmatch(pat, v) or len(v) > 63:
+                raise Abort(f"--{k.replace('_', '-')} {v!r}: only letters, digits, _ - (and / inside --base). Nothing was changed.")
+        if not 1 <= args.broker_port <= 65535:
+            raise Abort("--broker-port must be 1..65535")
+        pw = ""
+        if args.password_file:
+            pw = pathlib.Path(args.password_file).read_text().rstrip("\r\n")
+        elif args.user and not args.no_password:
+            import getpass
+            pw = getpass.getpass(f"  Broker password for {args.user} (not shown, not logged; empty = none): ")
+            if pw and getpass.getpass("  Again: ") != pw:
+                raise Abort("The two passwords differ. Nothing was changed.")
+        if any(ord(ch) < 32 for ch in pw) or len(pw) > 95 or "#" in pw or pw != pw.strip():
+            raise Abort("The password must be printable, at most 95 characters, without '#' and without leading/trailing spaces "
+                        "(mqtt.conf is 'key = value' text). Nothing was changed.")
+        mid = cur.get("id") if re.fullmatch(r"[A-Za-z0-9_-]{1,12}", cur.get("id", "")) else secrets.token_hex(4)
+        new = {"enabled": "1", "host": args.host, "port": str(args.broker_port), "user": args.user or "", "pass": pw, "id": mid,
+               "base": args.base, "discovery": "0" if args.no_discovery else "1", "discovery_prefix": args.discovery_prefix,
+               "live": "0" if args.no_live else "1"}
+    o.step("2/3 Writing " + MQTT_CONF + " (mode 600)")
+    for k in MQTT_KEYS:
+        if new.get(k, "") != "":
+            o.say(f"    {k:17s}= " + ("(set)" if k == "pass" else new[k]))
+    if not dev.dry and not confirm("  Write these MQTT settings to the display?", args.yes):
+        raise Abort("Cancelled by user. Nothing was changed.")
+    dev.push(mqtt_text(new).encode(), MQTT_CONF, mode="600", secret=True)
+    o.ok(f"mqtt.conf written ({'MQTT ON' if new.get('enabled') == '1' else 'MQTT OFF'}); Meraki+ picks it up within a few seconds")
+    o.step("3/3 Next")
+    if new.get("enabled") == "1":
+        o.say(f"  On the display: gear -> SYSTEM -> MQTT shows STATUS CONNECTED once the broker accepts the login.")
+        o.say(f"  Home Assistant: the device 'Meraki' appears under Settings -> Devices (MQTT), topics merakiplus/{new['id']}/#.")
+        o.say(MQTT_ACL.format(id=new["id"]))
+    else:
+        o.say("  The helper publishes 'offline' and stops. Retained data stays on the broker until you clear it there.")
+
+
 def local_ipv4():
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
@@ -1809,6 +1932,19 @@ def main(argv=None):
     p.add_argument("--purge", action="store_true", help="also delete /new_customer/merakiplus (backups, language, settings backups)")
     p = sub.add_parser("status", help="read-only overview")
     common(p)
+    p = sub.add_parser("mqtt", help="set up MQTT / Home Assistant publishing (writes mqtt.conf on the display)")
+    common(p)
+    p.add_argument("--host", help="the broker's address on your network (private / link-local / unique-local only)")
+    p.add_argument("--broker-port", type=int, default=1883, help="the broker's port (default 1883, plain MQTT)")
+    p.add_argument("--user", help="broker user (recommended: a dedicated publish-only user)")
+    p.add_argument("--password-file", help="read the broker password from this file instead of asking")
+    p.add_argument("--no-password", action="store_true", help="the broker user has no password")
+    p.add_argument("--base", default="merakiplus", help="topic base (default merakiplus)")
+    p.add_argument("--discovery-prefix", default="homeassistant", help="Home Assistant discovery prefix (default homeassistant)")
+    p.add_argument("--no-discovery", action="store_true", help="do not publish the Home Assistant discovery document")
+    p.add_argument("--no-live", action="store_true", help="do not publish the 2/s live samples during an activity")
+    p.add_argument("--disable", action="store_true", help="switch MQTT off (keeps the other settings)")
+    p.add_argument("--show", action="store_true", help="show the settings (password hidden) and the helper's status; change nothing")
     p = sub.add_parser("scan", help="find displays on the local network")
     p.add_argument("--subnet")
     p = sub.add_parser("verify-release", help="verify a downloaded release (manifest.json + manifest.sig + assets)")
@@ -1844,6 +1980,10 @@ def main(argv=None):
             if args.dry_run:
                 o.say("DRY-RUN: reads only, nothing on the display will be changed.")
             cmd_revert(dev, o, args)
+        elif args.cmd == "mqtt":
+            if args.dry_run:
+                o.say("DRY-RUN: reads only, nothing on the display will be changed.")
+            cmd_mqtt(dev, o, args)
         if logfile:
             o.say(f"Log: {logfile}")
         return 0

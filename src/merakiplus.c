@@ -2,6 +2,15 @@
  * 480x480 screen, v6.16: feature parity (settings + activity control), its own visual
  * design system, boot-slot integration, product name + two languages — and from v6.4 a SIM build.
  *
+ * UNRELEASED feature (on top of v6.24, no version until released): MQTT / HOME ASSISTANT, read-only (docs/integrations.md §15, docs/ui-guide.md §23). OFF by default. SYSTEM › MQTT: PUBLISH DATA
+ *  OFF / ON (Meraki+'s own file /new_customer/merakiplus/mqtt.conf, mode 0600, only its "enabled" line is written here; the broker is set up
+ *  from a computer with tools/merakiplus.py mqtt), STATUS and LAST PUBLISH (read-only, from the helper's status file). When ON and set up,
+ *  the UI starts the publish-only helper merakiplus_mqtt (src/merakiplus_mqtt.c: MQTT 3.1.1 client, no SUBSCRIBE, local broker only) with
+ *  one end of a socketpair as stdin and feeds it named records (info / state / live / event / shot); our receive direction is shut down,
+ *  writes never block, the helper is never signalled (EOF ends it). The shot record (merakiplus.shot/1) is finished when the cup weight has
+ *  settled after the brew bits clear: time, pre-infusion, yield, dose (the grind before it), targets, temperatures, raw pump + a labelled
+ *  estimate, and the weight curve in Beanconqueror's delta encoding; event shot_finished. OBSERVE ONLY: no frame, setting, guard or
+ *  control path changed (the selftest compares the frames with the feed on and off); config.json is not touched.
  * v6.24 = v6.23 + WATER TANK MESSAGES (issue #1, docs/ui-guide.md §22): removing the water tank showed ERROR · UNKNOWN FAULT. The
  *  controller reports the tank in word 36 (0x8000 = tank missing, 0x0001 = tank low) and a pump running dry in word 35 (0x8000); stock
  *  shows them as water-tank icons, Meraki+ had no text for them. HOME now says WATER TANK MISSING / WATER TANK LOW · PLEASE REFILL /
@@ -1405,6 +1414,25 @@ enum { K0=0, KT, KSUB, KLAB, KCHIP, KBTN, KBTNS, KTITLE, KPSUB, KSPL, KDL, KDV, 
  X(TX_ER_E3_TANK, KSUB, "WATER TANK MISSING", "VANDTANKEN MANGLER") \
  X(TX_ER_E3_LOW, KSUB, "WATER TANK LOW · PLEASE REFILL", "LAVT VANDNIVEAU · FYLD TANKEN") \
  X(TX_ER_E2_NOFLOW, KSUB, "NO WATER FLOW · CHECK THE TANK", "INTET VANDFLOW · TJEK TANKEN") \
+ /* MQTT / Home Assistant — one contiguous block (TX_SEC_MQTT .. TX_T_MQ_NOSETUP; the v6.17 string-count rule leaves it out) */ \
+ X(TX_SEC_MQTT, K0, "MQTT", "MQTT") \
+ X(TX_SL_MQTT, K0, "PUBLISH DATA", "SEND DATA") \
+ X(TX_SL_MQSTAT, K0, "STATUS", "STATUS") \
+ X(TX_SL_MQLAST, K0, "LAST PUBLISH", "SIDST SENDT") \
+ X(TX_SN_MQTT, KNOTE, "READ-ONLY · TO YOUR OWN BROKER", "KUN LÆSNING · TIL DIN EGEN BROKER") \
+ X(TX_SN_MQSTAT, KNOTE, "SET UP ON A PC: " LC "merakiplus.py mqtt", "SÆT OP PÅ EN PC: " LC "merakiplus.py mqtt") \
+ X(TX_SN_MQLAST, KNOTE, "SECONDS SINCE THE LAST MESSAGE", "SEKUNDER SIDEN SIDSTE BESKED") \
+ X(TX_E_MQ_NOSETUP, K0, "NOT SET UP", "IKKE SAT OP") \
+ X(TX_E_MQ_NOHELPER, K0, "NO HELPER", "INGEN HJÆLPER") \
+ X(TX_E_MQ_FAILED, K0, "HELPER FAILED", "HJÆLPER FEJLEDE") \
+ X(TX_E_MQ_CONNECTING, K0, "CONNECTING", "FORBINDER") \
+ X(TX_E_MQ_CONNECTED, K0, "CONNECTED", "FORBUNDET") \
+ X(TX_E_MQ_DISC, K0, "DISCONNECTED", "AFBRUDT") \
+ X(TX_E_MQ_NOTLOCAL, K0, "BROKER NOT LOCAL", "FJERN BROKER") \
+ X(TX_E_MQ_AUTH, K0, "LOGIN REFUSED", "LOGIN AFVIST") \
+ X(TX_T_MQ_ON, KT, "MQTT ON", "MQTT TIL") \
+ X(TX_T_MQ_OFF, KT, "MQTT OFF", "MQTT FRA") \
+ X(TX_T_MQ_NOSETUP, KT, "MQTT ON · NO BROKER SET UP YET", "MQTT TIL · INGEN BROKER SAT OP") \
  X(TX_A_GRIND, K0, "GRIND", "KVÆRN") \
  X(TX_A_BREW, K0, "BREW", "BRYG") \
  X(TX_A_WATER, K0, "WATER", "VAND") \
@@ -2185,6 +2213,7 @@ enum { M_NONE=0, M_W4, M_W23, M_W11, M_W112, M_W113, M_W114, M_W25, M_W14, M_W17
 #define SF_OWN    128 /* v6.16: own file (schedule) */
 #define SF_HHMM   256 /* v6.16: minutes after midnight, shown as hh:mm (12/24 h per timemode) */
 #define SF_SND    512 /* v6.18: own file (sound) */
+#define SF_MQ    1024 /* MQTT: own file (mqtt.conf) or the MQTT helper's status (read-only rows) */
 typedef struct {
     const char *key; short label, unit;
     int tier, ptier, min, max, step, dec, kind;
@@ -2207,12 +2236,13 @@ static const short OPT_TUNIT[]={TX_U_F,TX_U_C};                         /* 0=°F
 static const short OPT_LANG[]={TX_LG_EN,TX_LG_DE,TX_LG_FR,TX_LG_IT,TX_LG_ES,TX_LG_PL,TX_LG_AR,TX_LG_ZHS,TX_LG_ZHT,TX_LG_KO,TX_LG_JA};   /* stock: index 0..10 [strings @0x166d84] */
 static const short OPT_UILANG[]={TX_UL_EN,TX_UL_DA};
 static const short OPT_SOUND[]={TX_E_OFF,TX_E_ON,TX_E_SND_STOCK};                  /* v6.18: 0 off, 1 Meraki+ tones, 2 the stock UI's own mp3 files (if present) */
+static const short OPT_MQSTAT[]={TX_E_OFF,TX_E_MQ_NOSETUP,TX_E_MQ_NOHELPER,TX_E_MQ_FAILED,TX_E_MQ_CONNECTING,TX_E_MQ_CONNECTED,TX_E_MQ_DISC,TX_E_MQ_NOTLOCAL,TX_E_MQ_AUTH};   /* MQTT: = MQS_* */
 static const short OPT_SNDRDY[]={TX_E_OFF,TX_E_RDY_BREW,TX_E_RDY_STEAM,TX_E_RDY_BOTH};   /* v6.18: bit 0 = brew (extract) boiler, bit 1 = steam boiler */                    /* v6.3: = LANG_EN, LANG_DA */
 _Static_assert(TX_UL_DA==TX_UL_EN+LANG_DA,"TX_UL_* must follow LANG_*");
 enum { S_GRINDW=0, S_GRINDMODE, S_BREWW, S_BREWT, S_PISW, S_PITIME, S_PIPRESS, S_BREAK, S_HEADT,
        S_STEAMT, S_STEAMG, S_HOTW, S_HOTMODE, S_HOTT,
        S_UILANG, S_BL, S_VOL, S_TUNIT, S_LANG, S_HOTSC, S_DST, S_CLEARTIP, S_TIMEMODE, S_AUTOTIME, S_TZ,
-       S_PREHEAT, S_PHAT, S_PHREP, S_AUTOOFF, S_SOUND, S_SNDRDY, NSET };   /* v6.16: + the time rows (merakiplus's own file); v6.18: + sound (own file) */
+       S_PREHEAT, S_PHAT, S_PHREP, S_AUTOOFF, S_SOUND, S_SNDRDY, S_MQTT, S_MQSTAT, S_MQLAST, NSET };   /* + MQTT (own file mqtt.conf + 2 read-only status rows) */   /* v6.16: + the time rows (merakiplus's own file); v6.18: + sound (own file) */
 static Setting SET[NSET]={
  /*              key                   label            unit    page,spec-tier  min   max step dec kind   opts        mcu    flags                    def hard  note, hint */
  /* v6.17: page = the list page the row belongs to (0 GRIND, 1 BREW, 2 WATER, 3 STEAM, 4 SYSTEM); the row ORDER on a page and the
@@ -2255,6 +2285,11 @@ static Setting SET[NSET]={
   *      config "volume" (S_VOL, shared with the stock UI, which caps it at 70 like merakiplus) ---- */
  [S_SOUND]    ={0,                    TX_SL_SOUND,     TX_NONE,  4,0,    0,   2,  1, 0,K_ENUM,OPT_SOUND, M_NONE,SF_SND,                   1,   2,TX_SN_SOUND,0},
  [S_SNDRDY]   ={0,                    TX_SL_SNDRDY,    TX_NONE,  4,0,    0,   3,  1, 0,K_ENUM,OPT_SNDRDY,M_NONE,SF_SND,                   3,   3,TX_SN_SNDRDY,0},
+ /* ---- MQTT — merakiplus's OWN file (/new_customer/merakiplus/mqtt.conf), not config.json, no MCU word. Only the on/off switch is
+  *      edited here; the broker is set up from a computer (tools/merakiplus.py mqtt). CONNECTION + LAST PUBLISH are read-only (the helper's status) ---- */
+ [S_MQTT]     ={0,                    TX_SL_MQTT,      TX_NONE,  4,0,    0,   1,  1, 0,K_ENUM,OPT_OFFON, M_NONE,SF_MQ,                    0,   1,TX_SN_MQTT,0},
+ [S_MQSTAT]   ={0,                    TX_SL_MQSTAT,    TX_NONE,  4,0,    0,   8,  1, 0,K_ENUM,OPT_MQSTAT,M_NONE,SF_MQ|SF_LOCK,            0,   8,TX_SN_MQSTAT,0},
+ [S_MQLAST]   ={0,                    TX_SL_MQLAST,    TX_U_S,   4,0,    0,99999, 1, 0,K_NUM, 0,         M_NONE,SF_MQ|SF_LOCK,            0,99999,TX_SN_MQLAST,0},
 };
 static const short TIER_NAME[5]={TX_A_GRIND,TX_A_BREW,TX_A_WATER,TX_A_STEAM,TX_PG_SYSTEM};   /* v6.17: the list pages' titles (page = SET[].tier) */
 static int sv(int i){ return SET[i].val; }
@@ -2547,6 +2582,66 @@ static int snd_cfg_save(void){
     if(cn!=n||memcmp(chk,d,n)||rename(tmp,snd_path)!=0){ unlink(tmp); sndc.src=SCS_SESSION; return 0; }
     fsync_dir(snd_path); sndc.src=SCS_FILE; return 1;
 }
+/* ---- MQTT: mqtt.conf — merakiplus's OWN file for the MQTT helper (docs/integrations.md §4.5 + §15) ----
+ * "key = value" lines: enabled, host, port, user, pass, id, base, discovery, discovery_prefix, live ('#' starts a comment). Written by the
+ * setup tool (tools/merakiplus.py mqtt) and — ONLY the "enabled" line — by SYSTEM › MQTT › PUBLISH DATA. The UI reads enabled, host, port,
+ * id and live; it never keeps, shows, logs or publishes the password, and every other line is kept byte for byte when it switches.
+ * No file = OFF (opt-in). Switching ON without a file creates "enabled = 1" + a random id (urandom, never from hardware); the broker is then
+ * still "NOT SET UP". Written atomically with mode 0600 (tmp + fsync + re-read/compare + rename + fsync of the directory). The stock
+ * config.json is never read or written for MQTT. */
+static char mq_path[256]="/new_customer/merakiplus/mqtt.conf";
+static struct { int enabled, port, live, has_host, has_id, src; char host[64], id[16]; } mqc={0,1883,1,0,0,SCS_DEFAULT,"",""};
+static char* mq_trim(char*s){ while(*s==' '||*s=='\t') s++; char*e=s+strlen(s); while(e>s&&(e[-1]==' '||e[-1]=='\t'||e[-1]=='\r')) *--e=0; return s; }
+static void mq_conf_load(void){
+    mqc.enabled=0; mqc.port=1883; mqc.live=1; mqc.has_host=mqc.has_id=0; mqc.host[0]=mqc.id[0]=0; mqc.src=SCS_DEFAULT;
+    char b[2048]; int fd=open(mq_path,O_RDONLY); if(fd<0) return;
+    int n=(int)read(fd,b,sizeof b-1); close(fd); if(n<0) return; b[n]=0; mqc.src=SCS_FILE;
+    for(char*l=strtok(b,"\n");l;l=strtok(NULL,"\n")){
+        char*h=strchr(l,'#'); if(h) *h=0;
+        char*e=strchr(l,'='); if(!e) continue; *e++=0; char*k=mq_trim(l), *v=mq_trim(e);
+        if(!strcmp(k,"enabled")) mqc.enabled=atoi(v)==1;
+        else if(!strcmp(k,"host")){ snprintf(mqc.host,sizeof mqc.host,"%s",v); mqc.has_host=v[0]!=0; }
+        else if(!strcmp(k,"port")) mqc.port=atoi(v);
+        else if(!strcmp(k,"id")){ snprintf(mqc.id,sizeof mqc.id,"%s",v); mqc.has_id=v[0]!=0; }
+        else if(!strcmp(k,"live")) mqc.live=atoi(v)==1;
+    }
+    memset(b,0,sizeof b);                                         /* the password line does not stay in a stack buffer */
+}
+static void mq_rand_id(char*o,size_t n){                          /* 8 hex digits from /dev/urandom (time + pid as a fallback) */
+    uint8_t r[4]={0}; int fd=open("/dev/urandom",O_RDONLY); int ok=fd>=0&&read(fd,r,4)==4; if(fd>=0) close(fd);
+    if(!ok){ uint32_t x=(uint32_t)time(NULL)^((uint32_t)getpid()<<16)^(uint32_t)now_ms(); memcpy(r,&x,4); }
+    snprintf(o,n,"%02x%02x%02x%02x",r[0],r[1],r[2],r[3]);
+}
+/* the key of one "key = value" line (comments and spaces stripped; "" = none) */
+static void mq_line_key(const char*src,int L,char*key,size_t kn){
+    char ln[96]; int c=L<(int)sizeof ln-1?L:(int)sizeof ln-1; memcpy(ln,src,(size_t)c); ln[c]=0; key[0]=0;
+    char*h=strchr(ln,'#'); if(h) *h=0; char*q=strchr(ln,'='); if(!q) return; *q=0; snprintf(key,kn,"%s",mq_trim(ln));
+}
+/* rewrite only the "enabled" line (or create the file); 1 = saved */
+static int mq_conf_save_enabled(int on){
+    static char old[4096], d[4400], chk[4400]; char tmp[280], idb[16], key[32]; int on_=0, n=0, have_en=0, have_id=0, done=0;
+    int fd=open(mq_path,O_RDONLY); if(fd>=0){ on_=(int)read(fd,old,sizeof old); close(fd); if(on_<0) on_=0; if(on_>=(int)sizeof old) return 0; }
+    if(on_==0) n+=snprintf(d+n,sizeof d-n,"# Meraki+ MQTT (docs/integrations.md). Set up the broker from a computer: tools/merakiplus.py mqtt\n");
+    for(int s=0;s<on_;){ int e=s; while(e<on_&&old[e]!='\n') e++; mq_line_key(old+s,e-s,key,sizeof key);
+        if(!strcmp(key,"enabled")) have_en=1; if(!strcmp(key,"id")) have_id=1; s=e+1; }
+    if(!have_en) n+=snprintf(d+n,sizeof d-n,"enabled = %d\n",on?1:0);
+    for(int s=0;s<on_;){                                          /* every other line byte for byte (a missing last newline is added) */
+        int e=s; while(e<on_&&old[e]!='\n') e++; mq_line_key(old+s,e-s,key,sizeof key);
+        if(!strcmp(key,"enabled")&&!done){ done=1; n+=snprintf(d+n,sizeof d-n,"enabled = %d\n",on?1:0); }
+        else { memcpy(d+n,old+s,(size_t)(e-s)); n+=e-s; d[n++]='\n'; }
+        s=e+1;
+    }
+    if(!have_id){ mq_rand_id(idb,sizeof idb); n+=snprintf(d+n,sizeof d-n,"id = %s\n",idb); }
+    snprintf(tmp,sizeof tmp,"%s.tmp",mq_path);
+    int ok=0; fd=open(tmp,O_WRONLY|O_CREAT|O_TRUNC,0600);
+    if(fd>=0){ int off=0; ok=fchmod(fd,0600)==0; while(ok&&off<n){ int k=(int)write(fd,d+off,(size_t)(n-off)); if(k<=0) ok=0; else off+=k; }
+        if(ok&&fsync(fd)!=0) ok=0; close(fd); }
+    if(ok){ fd=open(tmp,O_RDONLY); int cn=fd>=0?(int)read(fd,chk,sizeof chk):-1; if(fd>=0) close(fd); ok=cn==n&&!memcmp(chk,d,(size_t)n); }
+    if(ok&&rename(tmp,mq_path)!=0) ok=0;
+    if(ok) fsync_dir(mq_path); else unlink(tmp);
+    memset(old,0,sizeof old); memset(d,0,sizeof d); memset(chk,0,sizeof chk);   /* the password does not stay in a static buffer */
+    return ok;
+}
 /* stock performSleepActions 0x148324 for ONE entry (hm = minutes after midnight, mask = REP_MASK): the next occurrence strictly after
  * `now` (minute resolution). Returns the days ahead (0..7); *ad = the day of month (wrapped like stock w. the month's length). */
 static int sched_next(const struct tm*now,int hm,int mask,int*ad){
@@ -2581,7 +2676,7 @@ static int64_t sched_once_target(int64_t u){
  * a value outside spec is shown as it is, marked, and blocks activity start
  * until the user has chosen a valid value. */
 static void settings_load(void){
-    cfg_read(); sched_load(); snd_cfg_load();
+    cfg_read(); sched_load(); snd_cfg_load(); mq_conf_load();
     for(int i=0;i<NSET;i++){
         Setting*s=&SET[i]; int v;
         s->lo=s->min; s->hi=s->max;
@@ -2589,6 +2684,7 @@ static void settings_load(void){
         if(s->flags&SF_LOCAL){ s->val=ui_lang; s->loaded=1; continue; }      /* v6.3: the UI language comes from the lang file, not config.json */
         if(s->flags&SF_OWN){ s->val=sched_val(i); s->loaded=1; continue; }   /* v6.16: the schedule file (sched_load) */
         if(s->flags&SF_SND){ s->val=i==S_SOUND?sndc.mode:sndc.ready; s->loaded=1; continue; }   /* v6.18: the sound file (snd_cfg_load) */
+        if(s->flags&SF_MQ){ s->val=i==S_MQTT?mqc.enabled:0; s->loaded=i!=S_MQLAST; continue; }   /* MQTT: mqtt.conf; the status rows follow the helper (mq_rows) */
         if(cfg_get_int(s->key,&v)){ s->val=v; s->loaded=1; }
         else { s->val=s->def; s->loaded=0; }
         if(s->flags&SF_LOCK){ s->lo=s->hi=s->val; continue; }
@@ -3867,7 +3963,7 @@ static void toast_show(const char*m,uint32_t col,ms_t now){
  *                   the two system actions BOOT UI / SWITCH TO ORIGINAL NOW) + the DIAGNOSTICS entry (RK_DIAG)
  * Every setting of SET[] is in exactly one of the two tables — except the WATER SENSOR (read-only word 40), which the WATER page shows
  * as its live line instead of as a row that looks like a setting (the selftest checks both). */
-enum { SEC_DISPLAY=0, SEC_CLOCK, SEC_SCHED, SEC_STOCK, NSEC };
+enum { SEC_DISPLAY=0, SEC_CLOCK, SEC_SCHED, SEC_STOCK, SEC_MQTT, NSEC };   /* + MQTT (after STOCK UI: the first four keep their place) */
 enum { RK_SET=0, RK_SEC, RK_X, RK_DIAG };
 typedef struct { signed char kind, a; } Row;      /* a: SET[] index / section / X_BOOTUI|X_SWITCH / 0 */
 #define ROW_MAX 20
@@ -3881,8 +3977,9 @@ static const signed char SEC_ROWS[NSEC][10]={
  [SEC_DISPLAY]={S_UILANG,S_BL,S_TUNIT,S_SOUND,S_SNDRDY,S_VOL,-1},          /* v6.18: + sound; VOLUME moved here (it now sets Meraki+'s sounds too) */
  [SEC_CLOCK]  ={S_TIMEMODE,S_DST,S_TZ,-1},
  [SEC_SCHED]  ={S_PREHEAT,S_PHAT,S_PHREP,S_AUTOOFF,-1},
- [SEC_STOCK]  ={RX(X_BOOTUI),RX(X_SWITCH),S_LANG,S_HOTSC,S_CLEARTIP,S_AUTOTIME,S_BREAK,-1} };   /* what only matters to / leads to the stock UI */
-static const short SEC_NAME[NSEC]={TX_SEC_DISPLAY,TX_SEC_CLOCK,TX_SEC_SCHED,TX_SEC_STOCK};
+ [SEC_STOCK]  ={RX(X_BOOTUI),RX(X_SWITCH),S_LANG,S_HOTSC,S_CLEARTIP,S_AUTOTIME,S_BREAK,-1},   /* what only matters to / leads to the stock UI */
+ [SEC_MQTT]   ={S_MQTT,S_MQSTAT,S_MQLAST,-1} };                                            /* MQTT: the switch + the helper's status (read-only) */
+static const short SEC_NAME[NSEC]={TX_SEC_DISPLAY,TX_SEC_CLOCK,TX_SEC_SCHED,TX_SEC_STOCK,TX_SEC_MQTT};
 static int sec_open=-1;                           /* SYSTEM: the open section (-1 = all closed: five rows, no scrolling) */
 static int pg_feat(int pg){ return pg>=PG_GRIND&&pg<=PG_STEAM; }
 static int pg_list(int pg){ return pg>=PG_GRIND&&pg<=PG_SYS; }
@@ -3955,7 +4052,7 @@ static void fmt_t10(char*b,size_t n,int v10,int dec){   /* temperature in 0.1 °
 static const char* t_unit(void){ return TR(use_c()?TX_U_C:TX_U_F); }
 static void set_fmt(int i,int v,char*b,size_t n){
     const Setting*s=&SET[i];
-    if((s->flags&SF_SENSOR)&&!s->loaded){ snprintf(b,n,"--"); return; }
+    if((s->flags&(SF_SENSOR|SF_MQ))&&!s->loaded){ snprintf(b,n,"--"); return; }   /* MQTT: LAST PUBLISH before the first message */
     if(s->kind==K_ENUM){ if(v>=s->min&&v<=s->max) snprintf(b,n,"%s",TR(s->opts[v-s->min])); else snprintf(b,n,"(%d)",v); return; }
     if(s->flags&SF_HHMM){ fmt_hm(b,n,v/60,v%60,1); return; }                               /* v6.16 */
     if(i==S_TZ&&v>=0&&v<TZ_N){ snprintf(b,n,"%s",TZT[v].utc); return; }                 /* v6.16: the stock label "UTC+01:00" */
@@ -4009,6 +4106,7 @@ static void act_request(int kind,ms_t now){
 static void detail_close(ms_t now);
 static void boot_push_resave(void);
 static void snd_preview(ms_t now);                                   /* v6.18 (the sound engine is after sched_step) */
+static void mq_apply(ms_t now);                                      /* MQTT (the feed + helper are after the sound engine) */
 static void save_begin(ms_t now){
     if(sav.active||sel<0) return;
     Setting*s=&SET[sel];
@@ -4028,6 +4126,13 @@ static void save_begin(ms_t now){
         int ok=sched_save(); idle_kick(now);
         if(sch.on&&!clk_valid(clk_utc())) toast_show(TR(TX_T_NOCLOCK),C_WARN,now);
         else toast_show(TR(ok?TX_T_OWN_SAVED:TX_T_OWN_NOFILE),ok?C_OK:C_WARN,now);
+        detail_close(now); return;
+    }
+    if(s->flags&SF_MQ){      /* MQTT on/off — merakiplus's own file mqtt.conf (only its "enabled" line); no MCU write, no config.json */
+        int ok=mq_conf_save_enabled(edit_val); mq_conf_load();
+        if(!ok){ mqc.enabled=edit_val; mqc.src=SCS_SESSION; }       /* not saved: applies to this session only */
+        s->val=mqc.enabled; mq_apply(now);
+        toast_show(TR(!ok?TX_T_OWN_NOFILE:(!mqc.enabled?TX_T_MQ_OFF:(mqc.has_host?TX_T_MQ_ON:TX_T_MQ_NOSETUP))),ok?C_OK:C_WARN,now);
         detail_close(now); return;
     }
     if(s->flags&SF_SND){     /* v6.18: sound on/off + ready tones — merakiplus's own file; no MCU write, no config.json */
@@ -4712,6 +4817,483 @@ static uint32_t snd_diag_text(char*m,size_t mn,char*l,size_t ln){
     else snprintf(l,ln,"%s",TR(TX_DV_T_NONE));
     return c;
 }
+/* ================= MQTT / HOME ASSISTANT — the read-only FEED + the publish-only helper (docs/integrations.md §15) =================
+ * The UI already mirrors the controller's registers and knows every activity's phase. The FEED turns that into named records, one line
+ * "<channel>\t<JSON>\n" each: info (on helper start / firmware change), state (on change, at most 1/s; else every 5 s), live (2/s while
+ * something runs), event (transitions: grind/brew/water/steam started + finished, shot_finished, brew_ready, steam_ready, error,
+ * error_cleared) and shot + shotsum (one record per finished brew, schema merakiplus.shot/1, with and without the curve).
+ *  - OBSERVE ONLY: the feed reads reg[] and the phase model. It sends no controller frame, changes no setting and no guard; the frame policy
+ *    and every control path are untouched (the selftest compares the frames with the feed on and off).
+ *  - ONE WAY: the helper gets one end of a socketpair as stdin. The UI shuts down its own RECEIVE direction (the kernel then refuses
+ *    anything the helper writes back) and never reads the socket. Writes never block: a line that does not fit in the 16 KB queue is
+ *    dropped and counted. No network code in the UI: socketpair() has no address.
+ *  - The helper is started only when mqtt.conf says enabled = 1 AND has a host + id (opt-in; no file = nothing starts). It is never
+ *    signalled (0 kill() calls): switching off closes our end, the helper sees EOF, publishes "offline" and exits; the UI reaps it with
+ *    waitpid(WNOHANG). A helper that dies is restarted after 2, 4, 8, 16 s; after 5 short-lived runs it stays off (HELPER FAILED) until
+ *    the switch is toggled. FD_CLOEXEC: no other child (stock UI, wpa_supplicant, sound helper) inherits our end.
+ *  - SHOT RECORD: brew start = work_sta bits 1+2 set; stop = they clear (the MCU's weight stop or STOP BREW). The record is finished when
+ *    the cup weight has settled (Companion's rule: 3+ samples >= 5 s after the stop within 0.2 g), or the cup was lifted (weight falls
+ *    > 3 g below its post-stop peak: the peak is the yield), or after 15 s. Times: start_utc/end_utc = the wall clock NOW minus the
+ *    monotonic time since the event, so a clock set during the brew (stock time sync after a boot) cannot split the record; clock_ok
+ *    says whether the wall clock was valid. The curve is Beanconqueror's "flow" delta encoding (t = ms since the previous sample,
+ *    weight = 0.1 g since the previous sample = the controller's own unit), 4 samples/s, halved when longer than 60 s. */
+#define FD_Q 16384
+#define FEED_SAMPLE_MS 250
+#define FEED_STATE_MS 5000
+#define FEED_LIVE_MS 500
+#define CURVE_N 240
+#define SHOT_SETTLE_MS 5000
+#define SHOT_TMO_MS 15000
+#define SHOT_LIFT_DG 30
+#define DOSE_WINDOW_MS 300000
+#define MQ_STATUS "/tmp/merakiplus_mqtt.status"
+#define MQ_LOG "/tmp/merakiplus_mqtt.log"
+#ifdef MSG_NOSIGNAL
+#define MQ_NOSIG MSG_NOSIGNAL
+#else
+#define MQ_NOSIG 0
+#endif
+enum { MQS_OFF=0, MQS_NOSETUP, MQS_NOHELPER, MQS_FAILED, MQS_CONNECTING, MQS_CONNECTED, MQS_DISC, MQS_NOTLOCAL, MQS_AUTH };
+static char sh_path[256]="/new_customer/merakiplus/shots";          /* the shot counter ("seq=N"): survives a reboot, written once per shot */
+static struct {
+    int fd, pid, init, info_due, stopped, fails;
+    char q[FD_Q]; int qn;
+    long n_lines, n_drop, n_spawn, n_exit;
+    ms_t t_next, t_spawn, t_sample, t_state, t_live, t_stat, t_sig;
+    uint32_t sig; char fw[20];
+    /* the helper's status file */
+    int h_have, h_exists; char h_st[16]; long h_pub, h_drop, h_reconn; double h_last;
+    /* activity edges (only while the link is up) */
+    int grind, brew, water, steam, rdy[2], e_ok; uint16_t e[3], ec[3]; ms_t t_ec;
+    ms_t w_t0, s_t0; int s_kind;
+    /* selftest: capture instead of a socket */
+    char*cap; int capn, capsz;
+} fe={.fd=-1};
+#ifdef SIM_RT
+static FILE*fe_tap=NULL;                                              /* MERAKIPLUS_SIM_FEED_LOG: every feed line (sim/run_e2e.py) */
+#endif
+typedef struct { int32_t t; int16_t w; uint16_t f,p; } CSamp;
+static struct {
+    int st;                                                           /* 0 idle, 1 running, 2 settling (stopped, waiting for the drips) */
+    ms_t t0, tstop, pre_end, t_samp, b9_t; int n, step, sub; CSamp c[CURVE_N];
+    long pre_sum, pre_n, ext_sum, ext_n, pend_sum, pend_n, grp_sum, grp_n; int pmax, first_drip, drip_run;
+    int w_stop, w_max, ring[4], rn, settled, lifted, complete, manual, fault;
+    int dose_t, yield_t, brew_set, group_set, grind_set, w112, w113, boiler0, group0;
+    int seq, seq_loaded; long n_shots;
+} br;
+static struct { int st; ms_t t0, tstop, done_t; int dose_set, grind_set, w_max, ring[4], rn, dose, valid, dur_ms; } gd;   /* the grind before a shot */
+static int feed_on(void){
+#ifdef SIM_RT
+    if(fe_tap) return 1;
+#endif
+    return fe.fd>=0||fe.cap!=NULL;
+}
+static void feed_flush(void){
+#if defined(DEVICE_RT)||defined(SIM_RT)
+    while(fe.fd>=0&&fe.qn>0){
+        ssize_t w=send(fe.fd,fe.q,(size_t)fe.qn,MSG_DONTWAIT|MQ_NOSIG);
+        if(w>0){ memmove(fe.q,fe.q+w,(size_t)(fe.qn-(int)w)); fe.qn-=(int)w; continue; }
+        if(w<0&&errno==EINTR) continue;
+        if(w<0&&(errno==EAGAIN||errno==EWOULDBLOCK)) break;             /* the helper is slow: keep the rest for the next tick */
+        close(fe.fd); fe.fd=-1; fe.qn=0; break;                        /* the helper is gone (EPIPE): reaped by mq_service */
+    }
+#endif
+}
+static void feed_put(const char*ch,const char*js,int n){
+    int cl=(int)strlen(ch), need=cl+n+2; fe.n_lines++;
+#ifdef SIM_RT
+    if(fe_tap){ fprintf(fe_tap,"%s\t%.*s\n",ch,n,js); fflush(fe_tap); }
+#endif
+    if(fe.cap){ if(fe.capn+need+1<fe.capsz){ memcpy(fe.cap+fe.capn,ch,(size_t)cl); fe.capn+=cl; fe.cap[fe.capn++]='\t'; memcpy(fe.cap+fe.capn,js,(size_t)n); fe.capn+=n; fe.cap[fe.capn++]='\n'; fe.cap[fe.capn]=0; } else fe.n_drop++; }
+    if(fe.fd<0) return;
+    if(fe.qn+need>FD_Q){ fe.n_drop++; return; }                       /* never block, never grow: the line is dropped and counted */
+    memcpy(fe.q+fe.qn,ch,(size_t)cl); fe.qn+=cl; fe.q[fe.qn++]='\t'; memcpy(fe.q+fe.qn,js,(size_t)n); fe.qn+=n; fe.q[fe.qn++]='\n';
+    feed_flush();
+}
+/* ---- a tiny JSON writer (bounded; an overflow drops the record) ---- */
+typedef struct { char*b; int n, k; } FJ;
+static void fj(FJ*j,const char*fmt,...){
+    if(j->k>=j->n) return;
+    va_list ap; va_start(ap,fmt); int w=vsnprintf(j->b+j->k,(size_t)(j->n-j->k),fmt,ap); va_end(ap);
+    if(w<0||w>=j->n-j->k) j->k=j->n; else j->k+=w;
+}
+static int fj_ok(const FJ*j){ return j->k<j->n; }
+static void fj_d10(FJ*j,const char*key,int w){ if(reg_seen[w]) fj(j,",\"%s\":%.1f",key,(double)(int)reg[w]/10.0); }        /* 0.1 units, unsigned */
+static void fj_s10(FJ*j,const char*key,int w){ if(reg_seen[w]) fj(j,",\"%s\":%.1f",key,(double)s16(w)/10.0); }             /* 0.1 units, signed */
+static void fj_u(FJ*j,const char*key,int w){ if(reg_seen[w]) fj(j,",\"%s\":%u",key,(unsigned)reg[w]); }
+static void fe_utc(char*o,size_t n,int64_t u){
+    time_t t=(time_t)u; struct tm tm; gmtime_r(&t,&tm);
+    snprintf(o,n,"%04d-%02d-%02dT%02d:%02d:%02dZ",tm.tm_year+1900,tm.tm_mon+1,tm.tm_mday,tm.tm_hour,tm.tm_min,tm.tm_sec);
+}
+/* the wall-clock time of a moment `at` (monotonic) = now's wall clock minus the monotonic distance: a clock jump in between does not matter */
+static void fj_time(FJ*j,const char*key,ms_t at,ms_t now){ char b[24]; fe_utc(b,sizeof b,clk_utc()-(int64_t)((now-at)/1000)); fj(j,",\"%s\":\"%s\"",key,b); }
+static int fe_clock_ok(void){ return clk_valid(clk_utc()); }
+static void fe_ver(char*o,size_t n){ snprintf(o,n,"%s",&MERAKIPLUS_VERSION[1]); }                   /* "V6.24" -> "6.24" */
+/* fault names, the UI's own table (err_id), every set bit — stable keys; unknown bits -> "unknown" (raw e1/e2/e3 are always sent too) */
+static void fj_faults(FJ*j){
+    static const struct { unsigned char w; uint16_t m; const char*k; } F[]={
+        {36,0x0010,"brew_boiler_overtemp"},{36,0x0020,"steam_boiler_overtemp"},{34,0x0020,"group_overtemp"},{34,0x0001,"mains"},
+        {35,0x0001,"brew_boiler_sensor"},{35,0x0002,"group_sensor"},{35,0x0008,"steam_boiler_sensor"},{35,0x0010,"milk_sensor"},
+        {35,0x1400,"scale"},{36,0x8000,"water_tank_missing"},{36,0x0001,"water_tank_low"},{35,0x8000,"no_water_flow"}};
+    uint16_t left[3]={reg[34],reg[35],reg[36]}; int n=0; fj(j,",\"faults\":[");
+    for(unsigned i=0;i<sizeof F/sizeof F[0];i++) if(reg[F[i].w]&F[i].m){ fj(j,"%s\"%s\"",n++?",":"",F[i].k); left[F[i].w-34]&=(uint16_t)~F[i].m; }
+    if(left[0]|left[1]|left[2]) fj(j,"%s\"unknown\"",n?",":"");
+    fj(j,"],\"e1\":%u,\"e2\":%u,\"e3\":%u",reg[34],reg[35],reg[36]);
+}
+static const char* fe_activity(ms_t now){
+    if(!link_up(now)) return "offline";
+    int pm=phase_main(now), st=steam_bits();
+    if(pm==PH_GRIND) return "grind";
+    if(pm==PH_PRE||pm==PH_EXT) return st?"brew_steam":"brew";
+    if(pm==PH_WATER) return "water";
+    if(st) return "steam";
+    if(phase_raw(now)==PH_SLEEP) return "sleep";
+    return "idle";
+}
+/* ---- info: static facts (no serial, no address, no host name: R6) ---- */
+static void fe_info(ms_t now){
+    char b[700], v[12], fw[20]; int vv[3]; FJ j={b,sizeof b,0}; fe_ver(v,sizeof v);
+    fj(&j,"{\"schema\":\"merakiplus.info/1\",\"feed_major\":1,\"ui_version\":\"%s\",\"uptime_s\":%.1f",v,(double)now/1000.0);
+    if(mcu_ver_read(fw,sizeof fw,vv)==MV_OK){ fj(&j,",\"controller_fw\":\"%s\"",fw); snprintf(fe.fw,sizeof fe.fw,"%s",fw); } else fe.fw[0]=0;
+    if(reg_seen[67]&&(reg[67]==120||reg[67]==220)) fj(&j,",\"mains_set_v\":%u",reg[67]);
+    fj(&j,",\"caps\":["); int n=0;
+#define CAP(c,k) if(c) fj(&j,"%s\"%s\"",n++?",":"",k)
+    CAP(reg_seen[41]&&reg_seen[42]&&reg_seen[47]&&reg_seen[48],"temps"); CAP(reg_seen[38]&&reg_seen[39],"weights"); CAP(reg_seen[52],"flow_raw");
+    CAP(reg_seen[51],"pump_raw"); CAP(reg_seen[112]&&reg_seen[113],"preinfusion"); CAP(reg_seen[62]&&reg_seen[63],"heat_stage");
+    CAP(reg_seen[49]&&reg_seen[61],"mains"); CAP(wd_ver_dosing(),"water_dosing");
+#undef CAP
+    fj(&j,"]}"); if(fj_ok(&j)) feed_put("info",b,j.k);
+}
+/* ---- state: slow values ---- */
+static void fe_state(ms_t now){
+    char b[1200]; FJ j={b,sizeof b,0}; int up=link_up(now); const char*a=fe_activity(now);
+    fj(&j,"{\"schema\":\"merakiplus.state/1\",\"uptime_s\":%.1f,\"link\":%s,\"activity\":\"%s\"",(double)now/1000.0,up?"true":"false",a);
+    if(up){
+        int pm=phase_main(now);
+        fj(&j,",\"grinding\":%s,\"brewing\":%s,\"steaming\":%s,\"water\":%s",pm==PH_GRIND?"true":"false",(pm==PH_PRE||pm==PH_EXT)?"true":"false",steam_bits()?"true":"false",pm==PH_WATER?"true":"false");
+        fj_d10(&j,"brew_boiler_c",41); fj_d10(&j,"group_c",42); fj_d10(&j,"steam_boiler_c",47); fj_d10(&j,"milk_c",48);
+        fj_s10(&j,"brew_weight_g",39); fj_s10(&j,"grind_weight_g",38);
+        if(reg_seen[62]) fj(&j,",\"brew_heat_stage\":%u,\"brew_ready\":%s",reg[62],reg[62]>=100?"true":"false");
+        if(reg_seen[63]) fj(&j,",\"steam_heat_stage\":%u,\"steam_ready\":%s",reg[63],reg[63]>=100?"true":"false");
+        if(reg_seen[36]) fj(&j,",\"water_low\":%s,\"water_tank_missing\":%s",(reg[36]&0x0001)?"true":"false",(reg[36]&0x8000)?"true":"false");
+        if(reg_seen[34]&&reg_seen[35]&&reg_seen[36]) fj_faults(&j);
+        fj_u(&j,"mains_v",49); fj_u(&j,"mains_hz",61);
+    }
+    fj(&j,",\"clock_ok\":%s}",fe_clock_ok()?"true":"false");
+    if(fj_ok(&j)) feed_put("state",b,j.k);
+}
+static uint32_t fe_state_sig(ms_t now){   /* what makes a state record due at once (at most 1/s): activity, readiness, faults, link */
+    uint32_t h=2166136261u; const char*a=fe_activity(now); for(const char*p=a;*p;p++){ h^=(unsigned char)*p; h*=16777619u; }
+    uint32_t v[5]={reg[62]>=100,reg[63]>=100,reg[34],reg[35],reg[36]}; for(int i=0;i<5;i++){ h^=v[i]; h*=16777619u; }
+    return h;
+}
+/* ---- live: during an activity, 2/s ---- */
+static int fe_cupflow(int*out){   /* slope of the brew weight over the trailing 2 s, 0.01 g/s, from the curve (brew only) */
+    if(br.st==0||br.n<2) return 0;
+    const CSamp*l=&br.c[br.n-1]; int k=br.n-1; while(k>0&&l->t-br.c[k-1].t<=2000) k--;
+    const CSamp*f=&br.c[k]; if(l->t-f->t<500) return 0;
+    *out=(int)((int64_t)(l->w-f->w)*1000*10/(l->t-f->t)); return 1;
+}
+static void fe_live(ms_t now){
+    char b[640]; FJ j={b,sizeof b,0}; int pm=phase_main(now), cf=0; const char*a=fe_activity(now);
+    ms_t t0=pm==PH_GRIND?gd.t0:((pm==PH_PRE||pm==PH_EXT)?br.t0:(pm==PH_WATER?fe.w_t0:fe.s_t0));
+    fj(&j,"{\"schema\":\"merakiplus.live/1\",\"uptime_s\":%.1f,\"activity\":\"%s\"",(double)now/1000.0,a);
+    if(pm==PH_PRE||pm==PH_EXT) fj(&j,",\"phase\":\"%s\"",pm==PH_PRE?"preinfusion":"extraction");
+    if(t0>0&&now>=t0) fj(&j,",\"t_s\":%.1f",(double)(now-t0)/1000.0);
+    fj_s10(&j,"brew_weight_g",39); fj_s10(&j,"grind_weight_g",38);
+    if(fe_cupflow(&cf)) fj(&j,",\"cup_flow_gs\":%.2f",(double)cf/100.0);
+    fj_u(&j,"flow_raw",52); fj_u(&j,"pump_raw",51);
+    if(reg_seen[51]&&(pm==PH_PRE||pm==PH_EXT)){ float pb=p_bar((float)reg[51]); if(pb>=0.f) fj(&j,",\"pressure_est_bar\":%.1f",(double)pb); }
+    fj_d10(&j,"group_c",42); if(steam_bits()) fj_d10(&j,"milk_c",48);
+    fj(&j,"}"); if(fj_ok(&j)) feed_put("live",b,j.k);
+}
+/* ---- events ---- */
+static void fe_event(const char*type,const char*extra,ms_t now){
+    if(!feed_on()) return;
+    char b[900]; FJ j={b,sizeof b,0};
+    fj(&j,"{\"schema\":\"merakiplus.event/1\",\"event_type\":\"%s\",\"uptime_s\":%.1f",type,(double)now/1000.0);
+    fj_time(&j,"utc",now,now); fj(&j,",\"clock_ok\":%s",fe_clock_ok()?"true":"false");
+    if(extra&&*extra) fj(&j,",%s",extra);
+    fj(&j,"}"); if(fj_ok(&j)) feed_put("event",b,j.k);
+}
+/* ---- the shot counter (own file, atomic; a reboot does not restart it) ---- */
+static void sh_seq_load(void){
+    br.seq_loaded=1; br.seq=0; char b[64]; int fd=open(sh_path,O_RDONLY); if(fd<0) return;
+    int n=(int)read(fd,b,sizeof b-1); close(fd); if(n<=0) return; b[n]=0; char*q=strstr(b,"seq="); if(q) br.seq=atoi(q+4); if(br.seq<0) br.seq=0;
+}
+static int sh_seq_save(void){
+    char d[32], tmp[280]; int n=snprintf(d,sizeof d,"seq=%d\n",br.seq); snprintf(tmp,sizeof tmp,"%s.tmp",sh_path);
+    if(!write_all(tmp,d,n,0)||rename(tmp,sh_path)!=0){ unlink(tmp); return 0; }
+    fsync_dir(sh_path); return 1;
+}
+/* ---- grind: dose = the settled grinder weight after the stop ---- */
+static void gr_finish(ms_t now){
+    int w=gd.rn?gd.ring[(gd.rn-1)&3]:s16(38); if(gd.w_max-w>SHOT_LIFT_DG) w=gd.w_max;   /* portafilter lifted: the peak was the dose */
+    gd.dose=w; gd.valid=1; gd.done_t=gd.tstop; gd.st=0;
+    char x[200]; snprintf(x,sizeof x,"\"grind_time_s\":%.1f,\"dose_g\":%.1f,\"dose_target_g\":%.1f",(double)gd.dur_ms/1000.0,(double)gd.dose/10.0,(double)gd.dose_set/10.0);
+    fe_event("grind_finished",x,now);
+}
+static void gr_sample(ms_t now){
+    if(gd.st!=2) return;
+    int w=s16(38); if(w>gd.w_max) gd.w_max=w; gd.ring[gd.rn&3]=w; gd.rn++;
+    int mn=w,mx=w,k=gd.rn<4?gd.rn:4; for(int i=0;i<k;i++){ int v=gd.ring[(gd.rn-1-i)&3]; if(v<mn) mn=v; if(v>mx) mx=v; }
+    if(gd.w_max-w>SHOT_LIFT_DG||(now-gd.tstop>=1500&&k==4&&mx-mn<=2)||now-gd.tstop>=8000) gr_finish(now);
+}
+/* ---- brew: the shot record ---- */
+static void br_sample(ms_t now){
+    if(br.st==0) return;
+    int w=s16(39);
+    if(br.st==1){
+        /* pump means per phase; a bit-9 sample before the extraction is confirmed (fe_edges: 1 s of bit 9) waits in "pend" */
+        if(reg_seen[51]){ int p=reg[51]; if(p<16000){ if(br.pre_end){ br.ext_sum+=p; br.ext_n++; } else if(reg[33]&0x0200){ br.pend_sum+=p; br.pend_n++; } else { br.pre_sum+=p; br.pre_n++; } }
+            if(p>br.pmax&&p<16000) br.pmax=p; }
+        if(reg_seen[42]){ br.grp_sum+=reg[42]; br.grp_n++; }
+        if(reg[34]|reg[35]|reg[36]) br.fault=1;
+        if(br.first_drip<0){ if(w>=3){ if(++br.drip_run>=2) br.first_drip=(int)(now-br.t0)-FEED_SAMPLE_MS; } else br.drip_run=0; }
+    }
+    /* the curve: every br.step-th 250 ms sample; full -> every other sample is kept and the step doubles */
+    if(br.sub++%br.step==0){
+        if(br.n==CURVE_N){ for(int i=0;i<CURVE_N/2;i++) br.c[i]=br.c[2*i+1]; br.n=CURVE_N/2; br.step*=2; br.sub=1; }
+        CSamp*c=&br.c[br.n++]; c->t=(int32_t)(now-br.t0); c->w=(int16_t)w; c->f=reg_seen[52]?reg[52]:0; c->p=reg_seen[51]?reg[51]:0;
+    }
+    if(br.st==2){
+        if(w>br.w_max) br.w_max=w; br.ring[br.rn&3]=w; br.rn++;
+    }
+}
+static void br_start(ms_t now){
+    memset(br.c,0,sizeof br.c); int seq=br.seq, sl=br.seq_loaded; long ns=br.n_shots;
+    memset(&br,0,sizeof br); br.seq=seq; br.seq_loaded=sl; br.n_shots=ns;
+    br.st=1; br.t0=now; br.step=1; br.first_drip=-1; br.complete=1;
+    br.dose_t=reg_seen[4]?reg[4]:-1; br.yield_t=reg_seen[23]?reg[23]:-1; br.brew_set=reg_seen[11]?reg[11]:-1; br.group_set=reg_seen[114]?reg[114]:-1;
+    br.grind_set=reg_seen[37]?reg[37]:-1; br.w112=reg_seen[112]?reg[112]:-1; br.w113=reg_seen[113]?reg[113]:-1;
+    br.boiler0=reg_seen[41]?reg[41]:-1; br.group0=reg_seen[42]?reg[42]:-1;
+    if(gd.st==2) gr_finish(now);                                       /* the brew started before the grinder weight settled */
+    br_sample(now); br.t_samp=now;
+    char x[200]; int k=0; x[0]=0;
+    if(br.yield_t>=0) k+=snprintf(x+k,sizeof x-k,"\"yield_target_g\":%.1f",(double)br.yield_t/10.0);
+    if(br.brew_set>=0) k+=snprintf(x+k,sizeof x-k,"%s\"brew_set_c\":%.1f",k?",":"",(double)br.brew_set/10.0);
+    fe_event("brew_started",x,now);
+}
+static void br_stop(ms_t now,int link_lost){
+    if(!br.pre_end&&br.b9_t){ br.pre_end=br.b9_t; br.ext_sum+=br.pend_sum; br.ext_n+=br.pend_n; }   /* stopped < 1 s into the extraction */
+    else { br.pre_sum+=br.pend_sum; br.pre_n+=br.pend_n; }
+    br.pend_sum=br.pend_n=0;
+    br.st=2; br.tstop=now; br.w_stop=s16(39); br.w_max=br.w_stop; br.rn=0;
+    br.manual=stp.n_req>0&&stp.kind==ACT_BREW&&stp.t_req>=br.t0;   /* STOP BREW on this screen (v6.13) during this brew */
+    if(reg[34]|reg[35]|reg[36]) br.fault=1;                           /* the controller stopped it with a fault */
+    if(link_lost) br.complete=0;
+}
+static void br_finish(ms_t now,int interrupted){
+    static char b[12288]; FJ j={b,sizeof b,0}; char v[12], fw[20]; int vv[3]; fe_ver(v,sizeof v);
+    if(br.st==1) br_stop(now,1);
+    br.st=0; br.n_shots++;
+    if(!br.seq_loaded) sh_seq_load();
+    br.seq++; sh_seq_save();
+    int last=br.rn?br.ring[(br.rn-1)&3]:s16(39);
+    br.lifted=br.w_max-last>SHOT_LIFT_DG;
+    int yield=br.lifted?br.w_max:last;
+    int mn=last,mx=last,k=br.rn<4?br.rn:4; for(int i=0;i<k;i++){ int q=br.ring[(br.rn-1-i)&3]; if(q<mn) mn=q; if(q>mx) mx=q; }
+    br.settled=!interrupted&&!br.lifted&&k==4&&mx-mn<=2&&now-br.tstop>=SHOT_SETTLE_MS;
+    double dur=(double)(br.tstop-br.t0)/1000.0;
+    int measured=gd.valid&&br.t0-gd.done_t>=0&&br.t0-gd.done_t<=DOSE_WINDOW_MS&&gd.dose>=10;
+    int dose=measured?gd.dose:br.dose_t;
+    const char*reason=br.manual?"manual_stop":(br.fault?"fault":((br.yield_t>0&&br.w_stop*100>=br.yield_t*85)?"target_weight":"other"));
+    int is_short=dur<15.0||yield<20;
+    fj(&j,"{\"schema\":\"merakiplus.shot/1\",\"source\":\"Meraki+\",\"seq\":%d",br.seq);
+    fj_time(&j,"start_utc",br.t0,now); fj_time(&j,"end_utc",br.tstop,now);
+    fj(&j,",\"clock_ok\":%s,\"uptime_s\":%.1f",fe_clock_ok()?"true":"false",(double)br.t0/1000.0);
+    fj(&j,",\"machine\":{"); { int c=0; if(mqc.has_id){ fj(&j,"\"id\":\"%s\"",mqc.id); c=1; } fj(&j,"%s\"ui_version\":\"%s\"",c?",":"",v);
+        if(mcu_ver_read(fw,sizeof fw,vv)==MV_OK) fj(&j,",\"controller_fw\":\"%s\"",fw); } fj(&j,"}");
+    fj(&j,",\"kind\":\"%s\",\"complete\":%s,\"completion_reason\":\"%s\",\"yield_settled\":%s",is_short?"short":"espresso",br.complete?"true":"false",reason,br.settled?"true":"false");
+    fj(&j,",\"duration_estimate_s\":%.1f",dur);
+    { double pre=br.pre_end?(double)(br.pre_end-br.t0)/1000.0:(br.ext_n?0.0:dur); fj(&j,",\"preinfusion_s\":%.1f",pre); }
+    if(br.first_drip>=0) fj(&j,",\"first_drip_s\":%.1f",(double)(br.first_drip<0?0:br.first_drip)/1000.0);
+    fj(&j,",\"settled_yield_g\":%.1f,\"yield_at_stop_g\":%.1f",(double)yield/10.0,(double)br.w_stop/10.0);
+    if(dose>0){ fj(&j,",\"dose_g\":%.1f,\"dose_source\":\"%s\"",(double)dose/10.0,measured?"measured":"target"); if(yield>0) fj(&j,",\"ratio\":%.2f",(double)yield/(double)dose); }
+    if(br.dose_t>=0) fj(&j,",\"dose_target_g\":%.1f",(double)br.dose_t/10.0);
+    if(br.yield_t>=0) fj(&j,",\"yield_target_g\":%.1f",(double)br.yield_t/10.0);
+    if(br.brew_set>=0) fj(&j,",\"brew_set_c\":%.1f",(double)br.brew_set/10.0);
+    if(br.group_set>=0) fj(&j,",\"group_set_c\":%d",br.group_set);
+    if(br.grind_set>=0) fj(&j,",\"grind_setting\":%d",br.grind_set);
+    if(br.w112>=0&&br.w113>=0) fj(&j,",\"pre_infusion\":{\"enabled\":%d,\"pressure_choice\":%d,\"duration_setting_s\":%d}",(br.w112&0xFF00)?1:0,br.w112&0xFF,br.w113>>8);
+    if(measured) fj(&j,",\"grind_workflow\":{\"duration_estimate_s\":%.1f,\"dose_setting_g\":%.1f,\"settled_dose_g\":%.1f,\"grind_setting\":%d,\"ended_before_s\":%.1f}",
+                    (double)gd.dur_ms/1000.0,(double)gd.dose_set/10.0,(double)gd.dose/10.0,gd.grind_set,(double)(br.t0-gd.done_t)/1000.0);
+    fj(&j,",\"temps\":{\"basis\":\"controller sensors\""); if(br.boiler0>=0) fj(&j,",\"brew_boiler_start_c\":%.1f",(double)br.boiler0/10.0);
+    if(br.group0>=0) fj(&j,",\"group_start_c\":%.1f",(double)br.group0/10.0); if(br.grp_n) fj(&j,",\"group_avg_c\":%.1f",(double)br.grp_sum/br.grp_n/10.0); fj(&j,"}");
+    fj(&j,",\"pump\":{\"basis\":\"raw pump-side value (word 51), not a measured puck pressure\"");
+    if(br.pre_n) fj(&j,",\"preinfusion_raw\":%ld",br.pre_sum/br.pre_n);
+    if(br.ext_n){ long e=br.ext_sum/br.ext_n; float pb=p_bar((float)e); fj(&j,",\"extraction_raw\":%ld",e); if(pb>=0.f) fj(&j,",\"pressure_est_bar\":%.1f",(double)pb); }
+    if(br.pmax) fj(&j,",\"max_raw\":%d",br.pmax);
+    fj(&j,"},\"preset\":null,\"bean\":null");
+    int sum_end=j.k;                                                   /* the summary = everything before the curve */
+    fj(&j,",\"curve\":{\"encoding\":\"beanconqueror_flow\",\"fidelity\":\"%s\",\"period_ms\":%d,\"stop_ms\":%d,\"t\":[",br.step>1?"downsampled":"full",FEED_SAMPLE_MS*br.step,(int)(br.tstop-br.t0));
+    for(int i=0;i<br.n;i++) fj(&j,"%s%d",i?",":"",(int)(br.c[i].t-(i?br.c[i-1].t:0)));
+    fj(&j,"],\"weight\":["); for(int i=0;i<br.n;i++) fj(&j,"%s%d",i?",":"",br.c[i].w-(i?br.c[i-1].w:0));
+    fj(&j,"],\"flow_raw\":["); for(int i=0;i<br.n;i++) fj(&j,"%s%u",i?",":"",br.c[i].f);
+    fj(&j,"],\"pump_raw\":["); for(int i=0;i<br.n;i++) fj(&j,"%s%u",i?",":"",br.c[i].p);
+    fj(&j,"]}}");
+    if(fj_ok(&j)){
+        feed_put("shot",b,j.k);
+        static char s[4096]; if(sum_end+2<(int)sizeof s){ memcpy(s,b,(size_t)sum_end); s[sum_end]='}'; feed_put("shotsum",s,sum_end+1); }
+    } else fe.n_drop++;
+    char x[400]; int q=snprintf(x,sizeof x,"\"seq\":%d,\"kind\":\"%s\",\"completion_reason\":\"%s\",\"duration_estimate_s\":%.1f,\"settled_yield_g\":%.1f",br.seq,is_short?"short":"espresso",reason,dur,(double)yield/10.0);
+    if(dose>0&&q<(int)sizeof x) q+=snprintf(x+q,sizeof x-q,",\"dose_g\":%.1f,\"dose_source\":\"%s\"",(double)dose/10.0,measured?"measured":"target");
+    if(dose>0&&yield>0&&q<(int)sizeof x) snprintf(x+q,sizeof x-q,",\"ratio\":%.2f",(double)yield/(double)dose);
+    fe_event("shot_finished",x,now);
+}
+static void br_settle_check(ms_t now){
+    if(br.st!=2) return;
+    int last=br.rn?br.ring[(br.rn-1)&3]:s16(39), k=br.rn<4?br.rn:4, mn=last, mx=last;
+    for(int i=0;i<k;i++){ int q=br.ring[(br.rn-1-i)&3]; if(q<mn) mn=q; if(q>mx) mx=q; }
+    if(br.w_max-last>SHOT_LIFT_DG||(now-br.tstop>=SHOT_SETTLE_MS&&k==4&&mx-mn<=2)||now-br.tstop>=SHOT_TMO_MS) br_finish(now,0);
+}
+/* ---- activity edges (called on every tick; reg[] changes at the poll rate) ---- */
+static void fe_edges(ms_t now){
+    uint16_t ws=reg[33]; int g=(ws&0x0040)!=0, b=(ws&0x0006)==0x0006, w=(ws&0x000A)==0x000A&&!b, s=steam_bits();
+    if(!fe.init){ fe.grind=g; fe.brew=b; fe.water=w; fe.steam=s; fe.rdy[0]=reg[62]>=100; fe.rdy[1]=reg[63]>=100;
+        fe.e[0]=fe.ec[0]=reg[34]; fe.e[1]=fe.ec[1]=reg[35]; fe.e[2]=fe.ec[2]=reg[36]; fe.t_ec=now; fe.init=1; return; }
+    char x[200];
+    if(g&&!fe.grind){ gd.st=1; gd.t0=now; gd.dose_set=reg_seen[4]?reg[4]:0; gd.grind_set=reg_seen[37]?reg[37]:0; gd.valid=0;
+        snprintf(x,sizeof x,"\"dose_target_g\":%.1f",(double)gd.dose_set/10.0); fe_event("grind_started",x,now); }
+    if(!g&&fe.grind&&gd.st==1){ gd.st=2; gd.tstop=now; gd.dur_ms=(int)(now-gd.t0); gd.w_max=s16(38); gd.rn=0; }
+    if(b&&!fe.brew){ if(br.st==2) br_finish(now,1); br_start(now); }   /* a new brew while the last one settles: finish that one first */
+    /* pre-infusion -> extraction: bit 9 (pump drive) for >= 1 s. The real controller pulses bit 9 for ~0.2 s INSIDE the pre-infusion
+     * (the 2026-11-16 capture, replayed by mcu_sim): a pulse is not the end of the pre-infusion. */
+    if(b&&br.st==1&&!br.pre_end){
+        if(ws&0x0200){ if(!br.b9_t) br.b9_t=now; else if(now-br.b9_t>=1000){ br.pre_end=br.b9_t; br.ext_sum+=br.pend_sum; br.ext_n+=br.pend_n; br.pend_sum=br.pend_n=0; } }
+        else if(br.b9_t){ br.b9_t=0; br.pre_sum+=br.pend_sum; br.pre_n+=br.pend_n; br.pend_sum=br.pend_n=0; } }
+    if(!b&&fe.brew&&br.st==1) br_stop(now,0);
+    if(w&&!fe.water){ fe.w_t0=now; if(br.st==2) br_finish(now,1); fe_event("water_started",wd.man||water_manual()?"\"mode\":\"manual\"":"\"mode\":\"auto\"",now); }
+    if(!w&&fe.water){ snprintf(x,sizeof x,"\"water_time_s\":%.1f,\"water_g\":%.1f",(double)(now-fe.w_t0)/1000.0,(double)s16(39)/10.0); fe_event("water_finished",x,now); }
+    if(s&&!fe.steam){ fe.s_t0=now; fe.s_kind=SK_NONE; fe_event("steam_started",NULL,now); }
+    if(s&&stm.kind>fe.s_kind) fe.s_kind=stm.kind;                         /* AUTO is sticky (steam_track) */
+    if(!s&&fe.steam){ static const char*const K[]={"unknown","unknown","auto","wand"};
+        snprintf(x,sizeof x,"\"steam_time_s\":%.1f,\"steam_kind\":\"%s\"",(double)(now-fe.s_t0)/1000.0,K[fe.s_kind&3]);
+        if(reg_seen[48]){ size_t l=strlen(x); snprintf(x+l,sizeof x-l,",\"milk_c\":%.1f",(double)reg[48]/10.0); }
+        fe_event("steam_finished",x,now); }
+    for(int k=0;k<2;k++){ int r=reg_seen[62+k]&&reg[62+k]>=100; if(r&&!fe.rdy[k]) fe_event(k?"steam_ready":"brew_ready",NULL,now); fe.rdy[k]=r; }
+    /* faults: a new combination that holds for 1 s */
+    if(reg[34]!=fe.ec[0]||reg[35]!=fe.ec[1]||reg[36]!=fe.ec[2]){ fe.ec[0]=reg[34]; fe.ec[1]=reg[35]; fe.ec[2]=reg[36]; fe.t_ec=now; }
+    if(now-fe.t_ec>=1000&&(fe.ec[0]!=fe.e[0]||fe.ec[1]!=fe.e[1]||fe.ec[2]!=fe.e[2])){
+        int was=fe.e[0]|fe.e[1]|fe.e[2]; fe.e[0]=fe.ec[0]; fe.e[1]=fe.ec[1]; fe.e[2]=fe.ec[2];
+        if(fe.e[0]|fe.e[1]|fe.e[2]){ char fb[400]; FJ j={fb,sizeof fb,0}; fj_faults(&j); if(fj_ok(&j)) fe_event("error",fb+1,now); }
+        else if(was) fe_event("error_cleared",NULL,now);
+    }
+    fe.grind=g; fe.brew=b; fe.water=w; fe.steam=s;
+}
+/* ---- the helper: start, reap, status ---- */
+static double mono_raw_s(void){ struct timespec t; clock_gettime(CLOCK_MONOTONIC,&t); return (double)t.tv_sec+t.tv_nsec/1e9; }   /* the helper's clock (no SIM offset) */
+static const char* mq_helper(void){
+#ifdef SIM_RT
+    static char b[300]; const char*e=getenv("MERAKIPLUS_SIM_MQTT_HELPER"); snprintf(b,sizeof b,"%s",e?e:""); return b;   /* SIM: only when the runner names one */
+#else
+    static char b[360]; snprintf(b,sizeof b,"%s/merakiplus_mqtt",ota.dir[0]?ota.dir:OTA_DIR); return b;   /* the UI's own release directory */
+#endif
+}
+static int mq_want(void){ return mqc.enabled&&mqc.has_host&&mqc.has_id; }
+#if defined(DEVICE_RT)||defined(SIM_RT)
+static int mq_spawn(ms_t now){
+    const char*h=mq_helper(); if(!h[0]||access(h,X_OK)!=0) return -1;
+    int sv[2]; if(socketpair(AF_UNIX,SOCK_STREAM,0,sv)!=0) return -1;
+    char sp[300], lp[300], hp[300]; snprintf(sp,sizeof sp,"%s",rp(MQ_STATUS)); snprintf(lp,sizeof lp,"%s",rp(MQ_LOG)); snprintf(hp,sizeof hp,"%s",h);
+    unlink(sp);                                                       /* no stale status from an earlier helper */
+    fflush(stdout); fflush(stderr);
+    pid_t c=fork(); if(c<0){ close(sv[0]); close(sv[1]); return -1; }
+    if(c==0){
+        setsid(); if(chdir("/")!=0){}
+        int nul=open("/dev/null",O_RDWR);
+        dup2(sv[1],0); if(nul>=0){ dup2(nul,1); dup2(nul,2); }
+        for(int fd=3;fd<1024;fd++) close(fd);
+        shutdown(0,SHUT_WR);                                          /* the helper's end can only receive */
+        signal(SIGINT,SIG_DFL); signal(SIGTERM,SIG_DFL);
+        execl(hp,"merakiplus_mqtt",mq_path,sp,lp,(char*)NULL);
+        _exit(127);
+    }
+    close(sv[1]);
+    shutdown(sv[0],SHUT_RD);                                          /* our end can only send: nothing comes back from the helper */
+    fcntl(sv[0],F_SETFD,FD_CLOEXEC); fcntl(sv[0],F_SETFL,fcntl(sv[0],F_GETFL,0)|O_NONBLOCK);
+#ifdef SO_NOSIGPIPE
+    { int one=1; setsockopt(sv[0],SOL_SOCKET,SO_NOSIGPIPE,&one,sizeof one); }
+#endif
+    fe.fd=sv[0]; fe.pid=(int)c; fe.t_spawn=now; fe.n_spawn++; fe.qn=0; fe.info_due=1; fe.t_state=0; fe.h_have=0;
+    return (int)c;
+}
+#endif
+static void mq_status_read(void){
+    char b[200]; int fd=open(rp(MQ_STATUS),O_RDONLY); if(fd<0){ fe.h_have=0; return; }
+    int n=(int)read(fd,b,sizeof b-1); close(fd); if(n<=0){ fe.h_have=0; return; } b[n]=0;
+    char s[16]; long p=0,d=0,r=0; double l=-1;
+    if(sscanf(b,"mqtt1 %15s %ld %ld %ld %lf",s,&p,&d,&r,&l)==5){ snprintf(fe.h_st,sizeof fe.h_st,"%s",s); fe.h_pub=p; fe.h_drop=d; fe.h_reconn=r; fe.h_last=l; fe.h_have=1; }
+}
+/* mqtt.conf changed on disk (the setup tool wrote it over the installer's channel): reload it, restart a running helper with it.
+ * Our own SAVE calls mq_stat_sync() afterwards, so it never counts as a change. */
+static struct { int have, n; long long mt, sz, ino; ms_t t; } mqf;
+static void mq_stat_sync(void){ struct stat s; mqf.have=stat(mq_path,&s)==0; mqf.mt=mqf.have?(long long)s.st_mtime:0; mqf.sz=mqf.have?(long long)s.st_size:0; mqf.ino=mqf.have?(long long)s.st_ino:0; }
+static void mq_file_watch(ms_t now){
+    if(now-mqf.t<2000&&now>=mqf.t) return;
+    mqf.t=now; struct stat s; int h=stat(mq_path,&s)==0;
+    if(!mqf.n++){ mq_stat_sync(); return; }                           /* the first look: what settings_load() read */
+    if(h==mqf.have&&(!h||((long long)s.st_mtime==mqf.mt&&(long long)s.st_size==mqf.sz&&(long long)s.st_ino==mqf.ino))) return;
+    mq_stat_sync(); mq_conf_load(); SET[S_MQTT].val=mqc.enabled;
+    if(fe.fd>=0){ close(fe.fd); fe.fd=-1; fe.qn=0; }                  /* EOF: the helper ends; started again with the new file */
+    fe.stopped=0; fe.fails=0; fe.t_next=now+1000;
+}
+static void mq_service(ms_t now){
+    mq_file_watch(now);
+#if defined(DEVICE_RT)||defined(SIM_RT)
+    if(fe.pid>0){
+        int stt=0; pid_t r=waitpid(fe.pid,&stt,WNOHANG);
+        if(r==fe.pid||r<0){
+            fe.pid=0; fe.n_exit++; if(fe.fd>=0){ close(fe.fd); fe.fd=-1; fe.qn=0; }
+            if(mq_want()){ fe.fails=now-fe.t_spawn<30000?fe.fails+1:0; if(fe.fails>=5) fe.stopped=1; fe.t_next=now+(2000LL<<(fe.fails<4?fe.fails:4)); }
+        }
+    }
+    if(!mq_want()){ if(fe.fd>=0){ close(fe.fd); fe.fd=-1; fe.qn=0; } }   /* EOF: the helper says "offline" and exits by itself */
+    else if(fe.pid==0&&fe.fd<0&&!fe.stopped&&now>=fe.t_next&&mq_spawn(now)<0) fe.t_next=now+10000;
+#endif
+    if(now-fe.t_stat>=1000||now<fe.t_stat){ const char*h=mq_helper(); fe.t_stat=now; fe.h_exists=h[0]&&access(h,X_OK)==0; if(mq_want()) mq_status_read(); else fe.h_have=0; }
+}
+static int mq_status(void){
+    if(!mqc.enabled) return MQS_OFF;
+    if(!mqc.has_host||!mqc.has_id) return MQS_NOSETUP;
+    if(!fe.h_exists) return MQS_NOHELPER;
+    if(fe.stopped) return MQS_FAILED;
+    if(!fe.h_have) return MQS_CONNECTING;
+    if(!strcmp(fe.h_st,"connected")) return MQS_CONNECTED;
+    if(!strcmp(fe.h_st,"not_local")) return MQS_NOTLOCAL;
+    if(!strcmp(fe.h_st,"auth")) return MQS_AUTH;
+    if(!strcmp(fe.h_st,"config")) return MQS_NOSETUP;
+    if(!strcmp(fe.h_st,"waiting")||!strcmp(fe.h_st,"stopped")) return MQS_DISC;
+    return MQS_CONNECTING;
+}
+/* the two read-only rows (SYSTEM › MQTT): CONNECTION + LAST PUBLISH (s since the helper's last message to the broker) */
+static void mq_rows(void){
+    SET[S_MQTT].val=mqc.enabled; SET[S_MQSTAT].val=mq_status(); SET[S_MQSTAT].loaded=1;
+    int ok=mqc.enabled&&fe.h_have&&fe.h_last>=0; double age=ok?mono_raw_s()-fe.h_last:0; if(age<0) age=0; if(age>99999) age=99999;
+    SET[S_MQLAST].loaded=ok; SET[S_MQLAST].val=ok?(int)age:0;
+}
+static void mq_apply(ms_t now){ mq_stat_sync(); mqf.n=1; fe.stopped=0; fe.fails=0; fe.t_next=now; fe.t_stat=now-1000; mq_service(now); mq_rows(); }
+/* the main loop's call: helper lifecycle, edges, samples, records */
+static void feed_tick(ms_t now){
+    mq_service(now);
+    if(!feed_on()){ fe.init=0; br.st=0; gd.st=0; return; }
+    int up=link_up(now);
+    if(up) fe_edges(now);
+    else if(br.st==1&&now-last_rx_ms>3000) br_finish(now,1);         /* the link went away during a brew: an incomplete record */
+    if(now-fe.t_sample>=FEED_SAMPLE_MS||now<fe.t_sample){
+        fe.t_sample=now;
+        if(up){ br_sample(now); br_settle_check(now); gr_sample(now); }
+        char fw[20]; int vv[3]; if(mcu_ver_read(fw,sizeof fw,vv)!=MV_OK) fw[0]=0;
+        if(fe.info_due||strcmp(fw,fe.fw)){ fe.info_due=0; fe_info(now); }
+        uint32_t sg=fe_state_sig(now);
+        if(now-fe.t_state>=FEED_STATE_MS||(sg!=fe.sig&&now-fe.t_sig>=1000)||fe.t_state==0){ fe.sig=sg; fe.t_sig=now; fe.t_state=now; fe_state(now); }
+        if(up&&mqc.live&&(fe.grind||fe.brew||fe.water||fe.steam)&&now-fe.t_live>=FEED_LIVE_MS){ fe.t_live=now; fe_live(now); }
+    }
+    feed_flush();
+}
+#ifndef MERAKIPLUS_PREVIEW
+static void feed_close(void){ if(fe.fd>=0){ feed_flush(); close(fe.fd); fe.fd=-1; } }   /* exit: the helper sees EOF, says "offline", ends */
+#endif
 static void ui_touch(int ev,int x,int y,ms_t now){
     ui_kick=1;
     idle_kick(now);                                                  /* v6.16: every touch restarts the auto-off timer (stock touch_feedback_cb) */
@@ -4983,6 +5565,8 @@ static void ui_update(ms_t now){
             if(sys_locked()!=l0||switch_mode()!=m0||boot_next_kind()!=n0) static_dirty=1;     /* static text depends on the state */
         }
     }
+    /* MQTT: the MQTT rows follow mqtt.conf + the helper's status (read-only rows: the open detail follows too) */
+    mq_rows(); if(view==V_DETAIL&&sel>=0&&(SET[sel].flags&SF_MQ)&&(SET[sel].flags&SF_LOCK)) edit_val=edit_orig=SET[sel].val;
     /* sensor rows (read-only) follow the controller register */
     for(int i=0;i<NSET;i++){
         Setting*s=&SET[i]; if(!(s->flags&SF_SENSOR)) continue;
@@ -5374,6 +5958,7 @@ static void sec_summary(int sc,char*o,size_t n){
     if(sc==SEC_DISPLAY) snprintf(o,n,"%s",TR(TX_UL_EN+ui_lang));
     else if(sc==SEC_CLOCK){ if(!home_clock_text(o,n)) snprintf(o,n,"%s",TR(TX_DV_T_NOTSET)); }
     else if(sc==SEC_SCHED){ if(sch.on) fmt_hm(o,n,sch.hm/60,sch.hm%60,1); else snprintf(o,n,"%s",TR(TX_E_OFF)); }
+    else if(sc==SEC_MQTT) snprintf(o,n,"%s",TR(OPT_MQSTAT[clampi(SET[S_MQSTAT].val,0,8)]));   /* MQTT: OFF / CONNECTED / … */
 }
 /* the DIAGNOSTICS entry's status: OK / the error code / DOWN */
 static uint32_t diag_row_text(char*o,size_t n,ms_t now){
@@ -6274,6 +6859,11 @@ static void sim_env(void){
     else snprintf(sched_path,sizeof sched_path,"%s/new_customer/merakiplus/schedule",sysroot);   /* v6.16 */
     if((e=getenv("MERAKIPLUS_SOUNDFILE"))){ if(strlen(e)>=sizeof snd_path) sim_die(2,"MERAKIPLUS_SOUNDFILE is too long"); snprintf(snd_path,sizeof snd_path,"%s",e); }
     else snprintf(snd_path,sizeof snd_path,"%s/new_customer/merakiplus/sound",sysroot);         /* v6.18 */
+    if((e=getenv("MERAKIPLUS_MQTTFILE"))){ if(strlen(e)>=sizeof mq_path) sim_die(2,"MERAKIPLUS_MQTTFILE is too long"); snprintf(mq_path,sizeof mq_path,"%s",e); }
+    else snprintf(mq_path,sizeof mq_path,"%s/new_customer/merakiplus/mqtt.conf",sysroot);      /* MQTT */
+    if((e=getenv("MERAKIPLUS_SHOTSFILE"))){ if(strlen(e)>=sizeof sh_path) sim_die(2,"MERAKIPLUS_SHOTSFILE is too long"); snprintf(sh_path,sizeof sh_path,"%s",e); }
+    else snprintf(sh_path,sizeof sh_path,"%s/new_customer/merakiplus/shots",sysroot);          /* MQTT */
+    if((e=getenv("MERAKIPLUS_SIM_FEED_LOG"))&&*e){ fe_tap=fopen(e,"a"); if(!fe_tap) sim_die(2,"MERAKIPLUS_SIM_FEED_LOG: cannot open %s",e); }   /* MQTT: every feed line (run_e2e) */
     if((e=getenv("MERAKIPLUS_SIM_CLOCK"))&&*e){ int64_t u=sim_parse_utc(e); if(u<0) sim_die(2,"MERAKIPLUS_SIM_CLOCK: expected YYYY-MM-DDTHH:MM:SSZ"); clk_off=u-(int64_t)time(NULL); }   /* v6.16: the wall clock (UTC) */
     sim_env_path("MERAKIPLUS_SIM_TTY",sim_tty,sizeof sim_tty,1);
     sim_env_path("MERAKIPLUS_SIM_FB",sim_fb_path,sizeof sim_fb_path-8,1);
@@ -6332,6 +6922,16 @@ static void sim_touch_inject(int x,int y,int ms,ms_t now){
     sim_ev_push(EV_ABS,ABS_X,rx,due); sim_ev_push(EV_ABS,ABS_Y,ry,due); sim_ev_push(EV_KEY,BTN_TOUCH,1,due); sim_ev_push(EV_SYN,SYN_REPORT,0,due);
     sim_ev_push(EV_ABS,ABS_MT_TRACKING_ID,-1,due+ms); sim_ev_push(EV_KEY,BTN_TOUCH,0,due+ms); sim_ev_push(EV_SYN,SYN_REPORT,0,due+ms);
 }
+/* MQTT (additive): a vertical/horizontal DRAG through the same evdev path — down at (x0,y0), 8 moves, up at (x1,y1) after ms */
+static void sim_drag_inject(int x0,int y0,int x1,int y1,int ms,ms_t now){
+    ms_t due=now>sim_ev_last()?now:sim_ev_last()+1; if(ms<80) ms=80;
+    for(int k=0;k<=8;k++){ int x=x0+(x1-x0)*k/8, y=y0+(y1-y0)*k/8, rx=clampi((x*4096+479)/480,0,4095), ry=clampi((y*4096+479)/480,0,4095); ms_t d=due+(ms_t)ms*k/8;
+        if(!k) sim_ev_push(EV_ABS,ABS_MT_TRACKING_ID,1,d);
+        sim_ev_push(EV_ABS,ABS_MT_POSITION_X,rx,d); sim_ev_push(EV_ABS,ABS_MT_POSITION_Y,ry,d); sim_ev_push(EV_ABS,ABS_X,rx,d); sim_ev_push(EV_ABS,ABS_Y,ry,d);
+        if(!k) sim_ev_push(EV_KEY,BTN_TOUCH,1,d);
+        sim_ev_push(EV_SYN,SYN_REPORT,0,d); }
+    sim_ev_push(EV_ABS,ABS_MT_TRACKING_ID,-1,due+ms+16); sim_ev_push(EV_KEY,BTN_TOUCH,0,due+ms+16); sim_ev_push(EV_SYN,SYN_REPORT,0,due+ms+16);
+}
 /* no EVIOCGRAB and no EVIOCGABS in SIM: the raw range is 0..4095 (screen = raw*480/4096) */
 static void inp_open(void){
     struct stat st;
@@ -6381,7 +6981,8 @@ static const struct { const char*id; int idx; } SIM_PARAM[]={
  {"temp_unit",S_TUNIT},{"language",S_LANG},{"hotwater_shortcut",S_HOTSC},{"sumtime",S_DST},{"cleartip",S_CLEARTIP},
  {"timemode",S_TIMEMODE},{"automatically",S_AUTOTIME},{"timezone",S_TZ},
  {"preheat",S_PREHEAT},{"preheat_at",S_PHAT},{"preheat_repeat",S_PHREP},{"auto_off",S_AUTOOFF},   /* v6.16: merakiplus's own (schedule file) */
- {"sound",S_SOUND},{"ready_tone",S_SNDRDY}};                                                         /* v6.18: merakiplus's own (sound file) */
+ {"sound",S_SOUND},{"ready_tone",S_SNDRDY},                                                          /* v6.18: merakiplus's own (sound file) */
+ {"mqtt",S_MQTT},{"mqtt_status",S_MQSTAT},{"mqtt_last",S_MQLAST}};                                    /* MQTT: merakiplus's own (mqtt.conf) + the helper's status */
 #define SIM_NPARAM ((int)(sizeof SIM_PARAM/sizeof SIM_PARAM[0]))
 static int sim_param_idx(const char*id){
     for(int k=0;k<SIM_NPARAM;k++) if(!strcmp(SIM_PARAM[k].id,id)) return SIM_PARAM[k].idx;
@@ -6471,6 +7072,11 @@ static void sim_state_emit(ms_t now,int force){   /* force=0: only if the line's
       jb(&j,",\"n_suppressed\":%d,\"n_muted\":%d,\"n_off\":%d,\"log\":\"",snd.n_out[SO_SUPPRESSED],snd.n_out[SO_MUTED],snd.n_out[SO_OFF]);
       for(int k=snd.log_n-1;k>=0;k--) jb(&j,"%s%s:%s",k==snd.log_n-1?"":",",SE_KEY[(int)snd.log[k].ev],SO_KEY[(int)snd.log[k].out]);
       jb(&j,"\",\"file\":"); jb_s(&j,snd.last_file); jb(&j,",\"last\":"); if(snd.log_n) jb(&j,"\"%s\"",SE_KEY[(int)snd.log[0].ev]); else jb(&j,"null"); jb(&j,"}"); }
+    /* MQTT (addendum): the switch (mqtt.conf), the helper (pid, status file), the feed counters and the shot tracker */
+    { static const char*const MQK[]={"off","not_set_up","no_helper","failed","connecting","connected","disconnected","not_local","auth"};
+      jb(&j,",\"mqtt\":{\"enabled\":%s,\"set_up\":%s,\"file\":\"%s\",\"status\":\"%s\",\"helper_pid\":%d,\"spawns\":%ld,\"exits\":%ld,\"feed\":%s,\"lines\":%ld,\"dropped\":%ld,\"published\":%ld,\"shot_seq\":%d,\"shots\":%ld,\"shot_state\":%d}",
+         mqc.enabled?"true":"false",mq_want()?"true":"false",mqc.src==SCS_FILE?"file":(mqc.src==SCS_SESSION?"session":"default"),MQK[clampi(mq_status(),0,8)],fe.pid,fe.n_spawn,fe.n_exit,
+         feed_on()?"true":"false",fe.n_lines,fe.n_drop,fe.h_have?fe.h_pub:0,br.seq,br.n_shots,br.st); }
     /* v6.9 (addendum): display conditioning + latest chart scale (display only — regs above are raw) */
     jb(&j,",\"cond\":{\"raw\":%s,\"a_chart\":%.3f,\"a_hero\":%.3f,\"med\":%d,\"scale\":\"%s\",\"pct\":%d,\"hold\":%d,\"head\":%.2f,\"hero_snaps\":%d,\"wdb\":%.1f,\"gate\":%d}",
        cd.raw?"true":"false",cd.a_chart,cd.a_hero,cd.med,CS_KEY[cd.scale],cd.pct,cd.hold,cd.head,hf.n_snap,(double)CD_WDB,cd.gate);
@@ -6500,7 +7106,7 @@ static void sim_state_emit(ms_t now,int force){   /* force=0: only if the line's
     } else if(view==V_SYS){
         jb(&j,"\"x\":\"%s\",\"edit\":%d,\"locked\":%s",xsel==X_BOOTUI?"bootui":(xsel==X_SWITCH?"switch":"exit"),x_edit,sys_locked()?"true":"false");
     } else if(view==V_MAIN&&pg_list(page)){
-        static const char*const SECK[]={"display","clock","schedule","stock"}; char lv[96]; page_live_text(page,lv,sizeof lv,now);
+        static const char*const SECK[]={"display","clock","schedule","stock","mqtt"}; char lv[96]; page_live_text(page,lv,sizeof lv,now);
         jb(&j,"\"title\":"); jb_s(&j,page_title(page)); jb(&j,",\"rows\":%d,\"scroll\":%d,\"live\":",page_rows(page),(int)scroll[page]); jb_s(&j,lv);
         jb(&j,",\"section\":"); if(page==PG_SYS&&sec_open>=0) jb(&j,"\"%s\"",SECK[sec_open]); else jb(&j,"null");
     } else if(view==V_BYE){ jb(&j,"\"sub\":"); jb_s(&j,bye_sub()); }
@@ -6644,7 +7250,7 @@ static int sim_save_now(int idx,int val,const char*param,ms_t now){
     save_begin(now);
     if(sav.active){ ssave.state=SSV_PENDING; return 1; }
     if(was==val){ ssave.state=SSV_UNCHANGED; return 1; }    /* SAVE without a change just closes the editor */
-    if(s->flags&(SF_LOCAL|SF_OWN|SF_SND)){ ssave.state=SSV_OK; return 1; }
+    if(s->flags&(SF_LOCAL|SF_OWN|SF_SND|SF_MQ)){ ssave.state=SSV_OK; return 1; }
     ssave.state=SSV_REJECTED; if(view==V_DETAIL) detail_close(now);   /* a guard rejected it (toast shown): the user cancels */
     return 0;
 }
@@ -6728,7 +7334,7 @@ static void sim_dispatch(const char*line,char*out,size_t on,ms_t now){
         if(!strcmp(name,"settings")) np=PG_GRIND+clampi(js_int(kv,n,"tab",1),0,4);
         if(!strcmp(name,"home")) { if(page!=PG_HOME) go_page(PG_HOME,-1,now); }
         else if(np>=0){
-            if(np==PG_SYS){ static const char*const SECK[]={"display","clock","schedule","stock"}; sec_open=-1; scroll[PG_SYS]=0;
+            if(np==PG_SYS){ static const char*const SECK[]={"display","clock","schedule","stock","mqtt"}; sec_open=-1; scroll[PG_SYS]=0;
                 if(js_str(kv,n,"section",sn,sizeof sn)) for(int k=0;k<NSEC;k++) if(!strcmp(sn,SECK[k])){ sec_open=k; scroll[PG_SYS]=clampf((float)(k*ROW_P),0,scroll_max(PG_SYS)); } }
             if(page!=np) go_page(np,1,now); }
         else if(!strcmp(name,"diag")){ if(page!=PG_DIAG){ diag_from=PG_SYS; go_page(PG_DIAG,1,now); } }
@@ -6738,6 +7344,7 @@ static void sim_dispatch(const char*line,char*out,size_t on,ms_t now){
         jb(&j,"{\"ok\":%s,\"page\":\"%s\"",ok?"true":"false",sim_page_key());
     }
     else if(!strcmp(cmd,"touch")){ sim_touch_inject(js_int(kv,n,"x",CX),js_int(kv,n,"y",CY),js_int(kv,n,"ms",80),now); jb(&j,"{\"ok\":true"); }
+    else if(!strcmp(cmd,"drag")){ sim_drag_inject(js_int(kv,n,"x0",CX),js_int(kv,n,"y0",300),js_int(kv,n,"x1",CX),js_int(kv,n,"y1",200),js_int(kv,n,"ms",240),now); jb(&j,"{\"ok\":true"); }   /* MQTT */
     else if(!strcmp(cmd,"boot_flag")){                      /* SYSTEM -> BOOT UI -> choose -> SAVE (sys_confirm -> boot_flag_set w/ guard) */
         int want=js_int(kv,n,"value",0)!=0; struct stat st;
         sim_go_main(); sim_set_stock(); sys_open(X_BOOTUI,now); x_edit=want; sys_confirm(now);
@@ -6807,7 +7414,7 @@ static void sim_dispatch(const char*line,char*out,size_t on,ms_t now){
         } else if(view==V_MAIN){                                               /* v6.17: every page but HOME: "back" (the header) */
             LT_R("back",PBACK_X0,PBACK_Y0,PBACK_W,PBACK_H);
             if(pg_list(page)){
-                static const char*const SECK[]={"sec_display","sec_clock","sec_schedule","sec_stock"};
+                static const char*const SECK[]={"sec_display","sec_clock","sec_schedule","sec_stock","sec_mqtt"};
                 Row rw[ROW_MAX]; int nr=rows_get(page,rw), vy1=list_vy1(page);
                 for(int k=0;k<nr;k++){ int y=(int)(row_y0(page,k)-scroll[page]); if(y<LIST_VY0-4||y+ROW_H>vy1+4) continue;
                     LT_R(rw[k].kind==RK_SET?sim_param_id(rw[k].a):(rw[k].kind==RK_SEC?SECK[rw[k].a]:(rw[k].kind==RK_DIAG?"diag":(rw[k].a==X_BOOTUI?"boot_ui":"switch_now"))),64,y,352,ROW_H); }
@@ -6970,6 +7577,8 @@ int main(int argc,char**argv){
     if((e=getenv("MERAKIPLUS_LANGFILE"))) snprintf(lang_path,sizeof lang_path,"%s",e);
     if((e=getenv("MERAKIPLUS_SCHEDFILE"))) snprintf(sched_path,sizeof sched_path,"%s",e);   /* v6.16 */
     if((e=getenv("MERAKIPLUS_SOUNDFILE"))) snprintf(snd_path,sizeof snd_path,"%s",e);       /* v6.18 */
+    if((e=getenv("MERAKIPLUS_MQTTFILE"))) snprintf(mq_path,sizeof mq_path,"%s",e);          /* MQTT */
+    if((e=getenv("MERAKIPLUS_SHOTSFILE"))) snprintf(sh_path,sizeof sh_path,"%s",e);         /* MQTT */
     if(getenv("MERAKIPLUS_SWITCH_DRY")) sw_dry=1;
     if(getenv("MERAKIPLUS_NOBOOTPUSH")) bp_on=0;
     SIM_ENV
@@ -7007,6 +7616,7 @@ int main(int argc,char**argv){
         pw_step(now);                      /* v6.14: hold -> off frames / OFF / TURNING ON… */
         sched_step(now);                   /* v6.16: pre-arm the pre-heat alarm, one-shot use, auto off */
         snd_tick(now);                     /* v6.18: start jingle + per-boiler ready tones (display/audio only, no frames) */
+        feed_tick(now);                    /* MQTT: the read-only feed -> MQTT helper (no frames, never blocks) */
         ota_step(now);                     /* v6.21: healthy marker + one-time notices */
 #ifdef DEVICE_RT
         ota_reload_step(now);              /* v6.21: exec-reload into a newly installed release, when idle */
@@ -7037,6 +7647,7 @@ int main(int argc,char**argv){
     else if(cfg_writes) printf(TR(TX_O_CFGCHANGED),cfg_writes);
     if(wq.n_block) printf(TR(TX_O_BLOCKED),wq.n_block);
     fflush(stdout); fflush(stderr);
+    feed_close();                          /* MQTT: the helper sees EOF, publishes "offline" and ends */
     SIM_EXIT
     if(ufd>=0) close(ufd);
     if(ifd>=0){ INP_UNGRAB close(ifd); }
@@ -7084,6 +7695,7 @@ static void sim_run(ms_t ms){
         pw_step(sim_now);                  /* v6.14 */
         if(pv_sched) sched_step(sim_now);  /* v6.16 (only where a scenario/selftest switches it on) */
         snd_tick(sim_now);                 /* v6.18: the sound engine (the preview build only logs) */
+        feed_tick(sim_now);                /* MQTT: the feed (the preview build has no helper; the selftest captures the lines) */
         sim_last=ui_frame(sim_now);
     }
 }
@@ -8677,8 +9289,10 @@ static void st_v617(void){
       tap(240,row_y0(PG_SYS,kb)-(int)scroll[PG_SYS]+25); st_settle(); int x1=view==V_SYS&&xsel==X_BOOTUI; tap(CX,57); st_settle();
       tap(240,row_y0(PG_SYS,kb+1)-(int)scroll[PG_SYS]+25); st_settle(); int x2=view==V_SYS&&xsel==X_SWITCH; tap(CX,57); st_settle();
       tap(240,row_y0(PG_SYS,SEC_STOCK)-(int)scroll[PG_SYS]+25); st_settle(); int cl=sec_open==-1&&scroll[PG_SYS]==0&&page_rows(PG_SYS)==NSEC+1;
-      tap(240,row_y0(PG_SYS,NSEC)+25); st_settle(); int dg=page==PG_DIAG&&diag_from==PG_SYS; tap(CX,PG_TITLE_Y+6); st_settle(); int bs1=page==PG_SYS; tap(CX,PG_TITLE_Y+6); st_settle();
-      st_check("SYSTEM: BOOT UI and SWITCH TO ORIGINAL NOW open from STOCK UI; a tap on the open header closes the section again; the DIAGNOSTICS row opens DIAGNOSTICS, whose chevron leads back to SYSTEM and from there to HOME",x1&&x2&&cl&&dg&&bs1&&page==PG_HOME&&wq.n==0&&txq_len==0);
+      { const int dr[]={240,330,240,300,240,260,240,230}; st_gest(dr,4); st_settle(); }   /* MQTT: one short drag up — the closed list (6 rows) scrolls by scroll_max */
+      int sc1=(int)scroll[PG_SYS]==(int)scroll_max(PG_SYS)&&scroll_max(PG_SYS)>0;
+      tap(240,row_y0(PG_SYS,NSEC)-(int)scroll[PG_SYS]+25); st_settle(); int dg=page==PG_DIAG&&diag_from==PG_SYS; tap(CX,PG_TITLE_Y+6); st_settle(); int bs1=page==PG_SYS; tap(CX,PG_TITLE_Y+6); st_settle();
+      st_check("SYSTEM: BOOT UI and SWITCH TO ORIGINAL NOW open from STOCK UI; a tap on the open header closes the section again; (MQTT) one drag brings the DIAGNOSTICS row into view, it opens DIAGNOSTICS, whose chevron leads back to SYSTEM and from there to HOME",x1&&x2&&cl&&sc1&&dg&&bs1&&page==PG_HOME&&wq.n==0&&txq_len==0);
       st_home(); tap(CX,GEAR_Y); st_settle(); tap(240,row_y0(PG_SYS,SEC_DISPLAY)+25); st_settle(); int o1=sec_open==SEC_DISPLAY&&row_find(PG_SYS,RK_SET,S_UILANG)==1;
       { int g[]={240,360, 240,330, 240,100}; st_gest(g,3); sim_run(100); }                                      /* DISPLAY is open: SCHEDULE's header is below the fold -> scroll (v6.18: 6 rows in DISPLAY · SOUND) */
       tap(240,row_y0(PG_SYS,row_find(PG_SYS,RK_SEC,SEC_SCHED))-(int)scroll[PG_SYS]+25); st_settle();
@@ -9419,6 +10033,202 @@ static void st_v624(void){
     st_check("v6.24 texts fit the HOME subline (both languages)",ok);
     sim_reset();
 }
+/* ============================ MQTT / Home Assistant — feed, shot record, mqtt.conf, status rows ============================ */
+static char st_cap[262144];
+static void st_feed(int on){   /* capture the feed (selftest sink) — or switch it off; the shot counter file lives in the work dir */
+    feed_flush(); memset(&fe,0,sizeof fe); fe.fd=-1; int sq=br.seq, sl=br.seq_loaded; memset(&br,0,sizeof br); br.seq=sq; br.seq_loaded=sl; memset(&gd,0,sizeof gd);
+    if(on){ fe.cap=st_cap; fe.capsz=(int)sizeof st_cap; fe.capn=0; st_cap[0]=0; }
+}
+/* the n-th (0-based) line of channel ch in the capture -> o (JSON only); n = -1: the last one. Returns the number of such lines. */
+static int st_line(const char*ch,int n,char*o,size_t on){
+    int cnt=0, cl=(int)strlen(ch); const char*p=st_cap, *last=NULL; if(o&&on) o[0]=0;
+    while(*p){ const char*e=strchr(p,'\n'); if(!e) break;
+        if(!strncmp(p,ch,(size_t)cl)&&p[cl]=='\t'){ if(cnt==n&&o){ size_t L=(size_t)(e-p-cl-1); if(L>=on) L=on-1; memcpy(o,p+cl+1,L); o[L]=0; } last=p; cnt++; }
+        p=e+1; }
+    if(n<0&&last&&o){ const char*e=strchr(last,'\n'); size_t L=(size_t)(e-last-cl-1); if(L>=on) L=on-1; memcpy(o,last+cl+1,L); o[L]=0; }
+    return cnt;
+}
+static double st_jnum(const char*rec,const char*key){ char pat[64]; snprintf(pat,sizeof pat,"\"%s\":",key); const char*p=strstr(rec,pat); return p?strtod(p+strlen(pat),NULL):-99999.0; }
+static int st_jstr(const char*rec,const char*key,const char*want){ char pat[96]; snprintf(pat,sizeof pat,"\"%s\":\"%s\"",key,want); return strstr(rec,pat)!=NULL; }
+/* the event types in order, comma-separated */
+static void st_events(char*o,size_t on){
+    o[0]=0; size_t k=0; const char*p=st_cap;
+    while((p=strstr(p,"event\t"))){ const char*q=strstr(p,"\"event_type\":\""); if(!q) break; q+=14; const char*e=strchr(q,'"'); if(!e) break;
+        k+=(size_t)snprintf(o+k,on-k,"%s%.*s",k?",":"",(int)(e-q),q); if(k>=on) break; p=e; }
+}
+/* sum of a curve array (delta coded) and its length */
+static long st_csum(const char*rec,const char*arr,int*n){
+    char pat[48]; snprintf(pat,sizeof pat,"\"%s\":[",arr); const char*p=strstr(rec,pat); long s=0; *n=0; if(!p) return 0; p+=strlen(pat);
+    while(*p&&*p!=']'){ char*e; long v=strtol(p,&e,10); if(e==p) break; s+=v; (*n)++; p=e; if(*p==',') p++; }
+    return s;
+}
+/* a session: grind (0..9.9 s, 18.6 g) -> the portafilter is taken off the grinder (12 s) -> brew (tick_brew from 13 s: pre-infusion
+ * 6.65 s, MCU weight stop at 34.4 g, drips to 36.6 g) */
+static void tick_session(ms_t t){
+    if(t<12000){ tick_grind(t); return; }
+    reg[38]=0;
+    if(t<13000){ reg[33]=0x0101; return; }
+    tick_brew(t-13000);
+    if(t-13000>=1500&&t-13000<1700) reg[33]=0x1307;                    /* the real controller's ~0.2 s bit-9 pulse inside the pre-infusion */
+}
+static int st_mstop_at=0;
+static void tick_manual(ms_t t){   /* extraction only (pre-infusion off), STOP BREW on the screen at 11 s; the MCU clears the bits 100 ms later */
+    if(t<300){ reg[33]=0x0101; reg[39]=0; return; }
+    if(!st_mstop_at||t<st_mstop_at+100){ reg[33]=0x1307; reg[51]=1340; reg[52]=200; reg[39]=(uint16_t)((t-300)/50); return; }
+    reg[33]=0x0101; reg[51]=10; reg[52]=0;
+}
+static int st_fault_on=1;
+static void tick_fault(ms_t t){    /* a brew sensor fault (word 35 bit 0) at 10 s: the MCU stops the brew */
+    if(t<300){ reg[33]=0x0101; reg[39]=0; reg[35]=0; return; }
+    if(t<10000){ reg[33]=0x1307; reg[51]=1340; reg[39]=(uint16_t)((t-300)/40); return; }
+    reg[33]=0x0101; reg[51]=5; if(st_fault_on) reg[35]=0x0001; else reg[35]=0;
+}
+static void tick_lift(ms_t t){     /* a normal brew; the cup is lifted 2 s after the stop */
+    tick_brew(t); if(t>=28900+2000) reg[39]=(uint16_t)(int16_t)-2;
+}
+static void st_mqtt(const char*dir,const char*cfgsrc){
+    printf("== selftest: MQTT / Home Assistant (read-only feed, shot record merakiplus.shot/1, mqtt.conf, SYSTEM › MQTT) ==\n");
+    char kmq[256], ksh[256], p[400], rec[12288], ev[600]; strcpy(kmq,mq_path); strcpy(ksh,sh_path); int kl=ui_lang;
+    snprintf(mq_path,sizeof mq_path,"%s/mqtt.conf",dir); snprintf(sh_path,sizeof sh_path,"%s/shots",dir); unlink(mq_path); unlink(sh_path);
+    br.seq_loaded=0; br.seq=0;
+    /* ---- 1. opt-in: no file = OFF, nothing would start ---- */
+    st_home(); st_feed(0); settings_load(); mq_rows();
+    st_check("no mqtt.conf: PUBLISH DATA = OFF, STATUS = OFF, LAST PUBLISH = --, no helper wanted, no feed (opt-in, default off)",
+             SET[S_MQTT].val==0&&SET[S_MQSTAT].val==MQS_OFF&&!SET[S_MQLAST].loaded&&!mq_want()&&!feed_on()&&mqc.src==SCS_DEFAULT);
+    st_check("the MQTT rows are merakiplus's own (SF_MQ): no config key, no MCU word; STATUS + LAST PUBLISH are read-only; SYSTEM › MQTT is the last section (after STOCK UI)",
+             !SET[S_MQTT].key&&!SET[S_MQSTAT].key&&!SET[S_MQLAST].key&&SET[S_MQTT].mcu==M_NONE&&(SET[S_MQTT].flags&SF_MQ)&&!(SET[S_MQTT].flags&SF_LOCK)&&(SET[S_MQSTAT].flags&SF_LOCK)&&(SET[S_MQLAST].flags&SF_LOCK)
+             &&sec_of_set(S_MQTT)==SEC_MQTT&&sec_of_set(S_MQSTAT)==SEC_MQTT&&sec_of_set(S_MQLAST)==SEC_MQTT&&SEC_MQTT==NSEC-1&&SEC_STOCK==SEC_MQTT-1);
+    /* ---- 2. the switch: SAVE writes only mqtt.conf (0600, atomic); config.json is untouched ---- */
+    { char m0[33]; cfg_read(); strcpy(m0,cfg_md5); int w0=cfg_writes;
+      st_home(); view=V_DETAIL; sel=S_MQTT; edit_val=1; save_begin(sim_now); struct stat stt; int mode_ok=stat(mq_path,&stt)==0&&(stt.st_mode&0777)==0600;
+      char b[512]; int fd=open(mq_path,O_RDONLY), n=fd>=0?(int)read(fd,b,sizeof b-1):-1; if(fd>=0) close(fd); if(n<0) n=0; b[n]=0;
+      char*idl=strstr(b,"\nid = "); int idok=idl&&strlen(idl+6)>=9; for(int k=0;idok&&k<8;k++) idok=isxdigit((unsigned char)idl[6+k])!=0;
+      cfg_read();
+      st_check("PUBLISH DATA ON without a file: mqtt.conf is created (mode 0600) with 'enabled = 1' + a random 8-hex id; STATUS = NOT SET UP; toast 'MQTT ON · NO BROKER SET UP YET'; config.json unchanged",
+               mode_ok&&strstr(b,"\nenabled = 1\n")&&idok&&SET[S_MQTT].val==1&&mq_status()==MQS_NOSETUP&&!mq_want()&&!strcmp(toast.msg,TR(TX_T_MQ_NOSETUP))&&!strcmp(cfg_md5,m0)&&cfg_writes==w0&&view==V_MAIN); }
+    { const char*c0="# broker set up by tools/merakiplus.py mqtt\nenabled   = 1\nhost      = 192.168.1.50\nport      = 1883\nuser      = merakiplus\npass      = PWMARKER-s3cret\nid        = 3fa9c2d1\nbase      = merakiplus\ndiscovery = 1\nlive      = 1";   /* no final newline */
+      const char*c1="# broker set up by tools/merakiplus.py mqtt\nenabled = 0\nhost      = 192.168.1.50\nport      = 1883\nuser      = merakiplus\npass      = PWMARKER-s3cret\nid        = 3fa9c2d1\nbase      = merakiplus\ndiscovery = 1\nlive      = 1\n";
+      int fd=open(mq_path,O_WRONLY|O_CREAT|O_TRUNC,0600); if(fd>=0){ if(write(fd,c0,strlen(c0))<0){} close(fd); }
+      settings_load(); mq_rows(); int on=SET[S_MQTT].val==1&&mqc.has_host&&mqc.has_id&&!strcmp(mqc.id,"3fa9c2d1")&&mqc.port==1883&&mq_want();
+      st_home(); view=V_DETAIL; sel=S_MQTT; edit_val=0; save_begin(sim_now);
+      char b[600]; fd=open(mq_path,O_RDONLY); int n=fd>=0?(int)read(fd,b,sizeof b-1):-1; if(fd>=0) close(fd); if(n<0) n=0; b[n]=0;
+      int off=!strcmp(b,c1)&&SET[S_MQTT].val==0&&mq_status()==MQS_OFF&&!mq_want()&&!strcmp(toast.msg,TR(TX_T_MQ_OFF));
+      st_home(); view=V_DETAIL; sel=S_MQTT; edit_val=1; save_begin(sim_now);
+      fd=open(mq_path,O_RDONLY); n=fd>=0?(int)read(fd,b,sizeof b-1):-1; if(fd>=0) close(fd); if(n<0) n=0; b[n]=0;
+      int back=strstr(b,"\nenabled = 1\nhost      = 192.168.1.50\n")&&strstr(b,"pass      = PWMARKER-s3cret\n")&&SET[S_MQTT].val==1&&!strcmp(toast.msg,TR(TX_T_MQ_ON));
+      snprintf(p,sizeof p,"%s/mqtt.conf.tmp",dir);
+      st_check("a set-up file: OFF rewrites ONLY the 'enabled' line (host, user, password, id, comments byte for byte); ON again; no tmp file left; the UI keeps no password (mqc has no such field)",
+               on&&off&&back&&access(p,F_OK)!=0&&sizeof mqc<200); }
+    { settings_load(); mqf.n=0; mqf.t=-100000; mq_service(sim_now);                     /* the first look = what settings_load read */
+      const char*nc="enabled = 1\nhost = 192.168.1.100\nport = 1884\nuser = u\npass = PWMARKER-2\nid = 3fa9c2d1\n";
+      int fd=open(mq_path,O_WRONLY|O_CREAT|O_TRUNC,0600); if(fd>=0){ if(write(fd,nc,strlen(nc))<0){} close(fd); }
+      mq_service(sim_now+1000); int early=strcmp(mqc.host,"192.168.1.100")!=0;                /* checked every 2 s */
+      mqf.t=-100000; mq_service(sim_now+3000); int rl=mqc.enabled&&!strcmp(mqc.host,"192.168.1.100")&&mqc.port==1884&&SET[S_MQTT].val==1;
+      st_home(); view=V_DETAIL; sel=S_MQTT; edit_val=0; save_begin(sim_now); int n0=mqf.n; mqf.t=-100000; mq_service(sim_now+5000);
+      st_check("mqtt.conf written by the setup tool is picked up within 2 s (no restart; a running helper is restarted with it); the UI's own SAVE is not mistaken for that",
+               early&&rl&&mqc.enabled==0&&mqf.n==n0+1&&mqc.port==1884);
+      st_home(); view=V_DETAIL; sel=S_MQTT; edit_val=1; save_begin(sim_now); }               /* back to ON for the status tests */
+    { char keep[256]; strcpy(keep,mq_path); snprintf(mq_path,sizeof mq_path,"/nonexistent/merakiplus_selftest/mqtt.conf");
+      st_home(); view=V_DETAIL; sel=S_MQTT; edit_val=1; save_begin(sim_now);
+      st_check("mqtt.conf cannot be written: ON for this session only, toast 'ACTIVE · FILE NOT SAVED'",mqc.enabled==1&&mqc.src==SCS_SESSION&&!strcmp(toast.msg,TR(TX_T_OWN_NOFILE)));
+      strcpy(mq_path,keep); settings_load(); }
+    /* ---- 3. STATUS + LAST PUBLISH follow the helper's status file (mock root: /tmp/merakiplus_mqtt.status, the helper in ota.dir) ---- */
+    { char kroot[200], kdir[320]; strcpy(kroot,sysroot); strcpy(kdir,ota.dir);
+      snprintf(sysroot,sizeof sysroot,"%s/mqroot",dir); snprintf(p,sizeof p,"%s/tmp",sysroot); mk_p(sysroot,"/tmp/x"); mkdir(p,0755);
+      snprintf(ota.dir,sizeof ota.dir,"%s/rel",dir); mkdir(ota.dir,0755);
+      char hp[400]; snprintf(hp,sizeof hp,"%s/merakiplus_mqtt",ota.dir); unlink(hp);
+      settings_load(); fe.t_stat=-100000; mq_service(sim_now); mq_rows(); int nh=SET[S_MQSTAT].val==MQS_NOHELPER;
+      int fd=open(hp,O_WRONLY|O_CREAT|O_TRUNC,0755); if(fd>=0){ if(write(fd,"#!/bin/sh\n",10)<0){} close(fd); }
+      snprintf(p,sizeof p,"%s/tmp/merakiplus_mqtt.status",sysroot);
+      static const struct { const char*line; int st; } S[]={{"mqtt1 connecting 0 0 0 -1.0 -\n",MQS_CONNECTING},{"mqtt1 connected 12 0 0 %.1f -\n",MQS_CONNECTED},
+          {"mqtt1 waiting 12 1 0 %.1f send failed\n",MQS_DISC},{"mqtt1 not_local 0 0 0 -1.0 not_local\n",MQS_NOTLOCAL},{"mqtt1 auth 0 0 0 -1.0 auth\n",MQS_AUTH},{"mqtt1 config 0 0 0 -1.0 bad_host\n",MQS_NOSETUP}};
+      int ok=1, ag=0;
+      for(unsigned q=0;q<sizeof S/sizeof S[0];q++){ char l[120]; snprintf(l,sizeof l,S[q].line,mono_raw_s()-7.4);
+          fd=open(p,O_WRONLY|O_CREAT|O_TRUNC,0644); if(fd>=0){ if(write(fd,l,strlen(l))<0){} close(fd); }
+          fe.t_stat=-100000; mq_service(sim_now); mq_rows(); if(SET[S_MQSTAT].val!=S[q].st){ ok=0; printf("     '%s' -> %d\n",l,SET[S_MQSTAT].val); }
+          if(q==1) ag=SET[S_MQLAST].loaded&&SET[S_MQLAST].val>=7&&SET[S_MQLAST].val<=8; }
+      unlink(p); fe.t_stat=-100000; mq_service(sim_now); mq_rows(); int cn=SET[S_MQSTAT].val==MQS_CONNECTING&&!SET[S_MQLAST].loaded;
+      st_check("STATUS follows the helper: no helper binary -> NO HELPER; connecting / connected / waiting -> DISCONNECTED / not_local -> BROKER NOT LOCAL / auth -> LOGIN REFUSED / config -> NOT SET UP; no status yet -> CONNECTING",nh&&ok&&cn);
+      st_check("LAST PUBLISH = seconds since the helper's last message (its CLOCK_MONOTONIC stamp): 7 s",ag);
+      fe.stopped=1; mq_rows(); int fl=SET[S_MQSTAT].val==MQS_FAILED; mq_apply(sim_now); int rs=!fe.stopped&&fe.fails==0;
+      st_check("5 short-lived helper runs -> HELPER FAILED (no more restarts); switching again resets it",fl&&rs);
+      ok=1; for(int lg=0;lg<NLANG;lg++){ lang_set(lg); for(int v=0;v<=MQS_AUTH;v++){ SET[S_MQSTAT].val=v; char sm[40]; sec_summary(SEC_MQTT,sm,sizeof sm);
+          if(strcmp(sm,TR(OPT_MQSTAT[v]))){ ok=0; printf("     [%s] summary '%s'\n",LANG_CODE[lg],sm); }
+          LAY(94+text_wf(TR(TX_SEC_MQTT),F_S)+14+text_wf(sm,F_XS),366,"section header (name + summary)",sm); }
+        LAY(text_wf(TR(TX_T_MQ_NOSETUP),F_XS),KB[KT].maxw,"toast",TR(TX_T_MQ_NOSETUP)); }
+      lang_set(kl);
+      st_check("SYSTEM › MQTT header shows the status as its summary (OFF / CONNECTED / …) and every status fits next to the name (EN + DA)",ok);
+      unlink(hp); strcpy(sysroot,kroot); strcpy(ota.dir,kdir); }
+    /* ---- 4. the feed: a grind + a shot (the reference capture's shape) ---- */
+    ms_t t=st_home(); for(int k=0;k<16;k++){                            /* "MKMK…": a serial-like block in words 96..111 must never be published */ reg[96+k]=(uint16_t)('M'|('K'<<8)); reg_seen[96+k]=1; }
+    settings_load(); st_feed(1); sim_run(600);
+    sim_tick=tick_session; sim_t0=sim_now; sim_run(13000+28900+8000); sim_tick=NULL;
+    st_events(ev,sizeof ev);
+    st_check("events in order: grind_started, grind_finished, brew_started, shot_finished (nothing else: the boilers were already hot, no fault)",
+             !strcmp(ev,"grind_started,grind_finished,brew_started,shot_finished"));
+    int nshot=st_line("shot",0,rec,sizeof rec);
+    double dur=st_jnum(rec,"duration_estimate_s"), pre=st_jnum(rec,"preinfusion_s"), y=st_jnum(rec,"settled_yield_g"), ys=st_jnum(rec,"yield_at_stop_g"), dose=st_jnum(rec,"dose_g"), ratio=st_jnum(rec,"ratio");
+    printf("     shot: %d record(s), %.1f s, pre-infusion %.1f s, yield %.1f g (at stop %.1f g), dose %.1f g, ratio %.2f, first drip %.1f s\n",nshot,dur,pre,y,ys,dose,ratio,st_jnum(rec,"first_drip_s"));
+    st_check("one shot record, schema merakiplus.shot/1, source Meraki+, seq 1, kind espresso, completion_reason target_weight (the MCU's weight stop), yield settled, complete",
+             nshot==1&&st_jstr(rec,"schema","merakiplus.shot/1")&&st_jstr(rec,"source","Meraki+")&&st_jnum(rec,"seq")==1&&st_jstr(rec,"kind","espresso")
+             &&st_jstr(rec,"completion_reason","target_weight")&&strstr(rec,"\"yield_settled\":true")&&strstr(rec,"\"complete\":true"));
+    st_check("brew time 28.6 s (work_sta bits 1+2: 0.3 -> 28.9 s), pre-infusion 6.6..6.7 s (bit 9), yield 36.6 g settled / 34.4 g at the stop",
+             fabs(dur-28.6)<=0.15&&fabs(pre-6.65)<=0.15&&fabs(y-36.6)<0.05&&fabs(ys-34.4)<0.05);
+    st_check("dose = the settled grinder weight 18.6 g (measured: the grind ended < 300 s before), ratio 1.97; targets + set temperatures + pre-infusion settings as the controller reported them",
+             fabs(dose-18.6)<0.05&&st_jstr(rec,"dose_source","measured")&&fabs(ratio-1.97)<0.006&&st_jnum(rec,"dose_target_g")==18.5&&st_jnum(rec,"yield_target_g")==36.0
+             &&st_jnum(rec,"brew_set_c")==87.0&&st_jnum(rec,"group_set_c")==70&&st_jnum(rec,"grind_setting")==16
+             &&strstr(rec,"\"pre_infusion\":{\"enabled\":1,\"pressure_choice\":4,\"duration_setting_s\":6}")&&strstr(rec,"\"grind_workflow\":{"));
+    { int nt=0,nw=0,nf=0,np=0; long st_=st_csum(rec,"t",&nt), sw=st_csum(rec,"weight",&nw); st_csum(rec,"flow_raw",&nf); st_csum(rec,"pump_raw",&np);
+      double sm=st_jnum(rec,"stop_ms"); int pr=(int)st_jnum(rec,"preinfusion_raw"), er=(int)st_jnum(rec,"extraction_raw");
+      printf("     curve: %d samples, t sum %ld ms, weight sum %ld (0.1 g), stop_ms %.0f, pump pre/ext %d/%d raw, est. %.1f bar\n",nt,st_,sw,sm,pr,er,st_jnum(rec,"pressure_est_bar"));
+      st_check("curve: Beanconqueror flow encoding — t = ms since the previous sample, weight = 0.1 g since the previous sample (sum = 36.6 g), 4 samples/s, flow_raw + pump_raw absolute, same length",
+               nt>=125&&nt==nw&&nt==nf&&nt==np&&sw==366&&strstr(rec,"\"encoding\":\"beanconqueror_flow\"")&&strstr(rec,"\"fidelity\":\"full\",\"period_ms\":250")&&fabs(sm-28600)<=150&&st_>=33000);
+      st_check("pump: pre-infusion 350..366 raw, extraction 1300..1400 raw, labelled raw / pump side; pressure only as pressure_est_bar",pr>=350&&pr<=366&&er>=1300&&er<=1400
+               &&strstr(rec,"\"basis\":\"raw pump-side value (word 51), not a measured puck pressure\"")&&!strstr(rec,"\"pressure_bar\"")); }
+    { char sm[4096]; int ns=st_line("shotsum",0,sm,sizeof sm); size_t L=strlen(sm);
+      st_check("shot summary (for Home Assistant attributes) = the same record without the curve",ns==1&&L>200&&!strstr(sm,"curve")&&!strncmp(sm,rec,L-1)&&!strncmp(rec+L-1,",\"curve\":",9)); }
+    { char e[600]; st_line("event",-1,e,sizeof e);
+      st_check("event shot_finished: seq, kind, completion_reason, time, yield, dose, ratio (enough for a notification)",st_jstr(e,"event_type","shot_finished")&&st_jnum(e,"seq")==1
+               &&fabs(st_jnum(e,"settled_yield_g")-36.6)<0.05&&fabs(st_jnum(e,"ratio")-1.97)<0.006&&st_jstr(e,"completion_reason","target_weight")&&st_jstr(e,"schema","merakiplus.event/1")); }
+    { char lv[700]; int nl=st_line("live",0,lv,sizeof lv), ns=st_line("state",0,NULL,0); char s0[1300]; st_line("state",0,s0,sizeof s0); char inf[700]; int ni=st_line("info",0,inf,sizeof inf);
+      printf("     feed: %d info, %d state, %d live, %d event, %d shot line(s); queue drops %ld\n",ni,ns,nl,st_line("event",0,NULL,0),nshot,fe.n_drop);
+      st_check("live: 2 per second while something runs (grind 9.5 s + brew 28.6 s -> 65..90 lines), schema merakiplus.live/1, units in the key names",nl>=65&&nl<=90&&strstr(lv,"\"schema\":\"merakiplus.live/1\"")&&strstr(lv,"\"activity\":\"grind\"")&&strstr(lv,"\"grind_weight_g\":"));
+      st_check("state: at once on a change (<= 1/s) and every 5 s; temperatures, weights, heat stages, ready, water, faults + raw e1/e2/e3, mains",ns>=8&&ns<=25&&st_jstr(s0,"activity","idle")&&strstr(s0,"\"brew_boiler_c\":99.9")&&strstr(s0,"\"group_c\":70.2")
+               &&strstr(s0,"\"steam_boiler_c\":129.7")&&strstr(s0,"\"milk_c\":22.6")&&strstr(s0,"\"brew_ready\":true")&&strstr(s0,"\"faults\":[],\"e1\":0,\"e2\":0,\"e3\":0")&&strstr(s0,"\"mains_v\":236")&&strstr(s0,"\"mains_hz\":50"));
+      st_check("info: ui_version 6.24, controller_fw V5.1.4 (words 80..87), caps; no serial, no address, no host name",ni==1&&st_jstr(inf,"ui_version",&MERAKIPLUS_VERSION[1])&&st_jstr(inf,"controller_fw","V5.1.4")&&strstr(inf,"\"caps\":[\"temps\""));
+      char ssid[100]=""; cfg_read(); if(!cfg_find_str(cfgbuf,cfglen,"ssid",ssid,sizeof ssid)) ssid[0]=0;
+      st_check("no secrets or identifiers in any record: no serial block (words 96..111), no Wi-Fi name, no broker password, no raw register dump",
+               !strstr(st_cap,"MKMK")&&!strstr(st_cap,"KMKM")&&!strstr(st_cap,"PWMARKER")&&(!ssid[0]||!strstr(st_cap,ssid))&&!strstr(st_cap,"\"registers\"")&&!strstr(st_cap,"\"regs\"")); }
+    { int tot=0,bad=0; const char*q=st_cap; while(*q){ const char*e=strchr(q,'\n'); if(!e) break; const char*tb=memchr(q,'\t',(size_t)(e-q)); tot++;
+          int b0=bad; if(!tb||tb[1]!='{'||e[-1]!='}'||!strstr(tb,"\"schema\":\"merakiplus.")) bad++; int d=0; for(const char*c=tb?tb+1:q;c<e;c++){ if(*c=='{'||*c=='[') d++; if(*c=='}'||*c==']') d--; if(d<0) bad++; } if(d) bad++;
+          if(bad!=b0&&bad<4) printf("     bad line: %.*s\n",(int)(e-q<300?e-q:300),q); q=e+1; }
+      st_check("every feed line is '<channel>\\t{…}' with a merakiplus.* schema and balanced brackets (all of this session's lines)",tot>80&&!bad); }
+    /* ---- 5. completion reasons: manual stop, fault (+ error / error_cleared), cup lifted ---- */
+    { st_home(); st_feed(1); sim_run(600); reg[112]=0x0004; st_mstop_at=11000; sim_tick=tick_manual; sim_t0=sim_now; sim_run(11000); stop_request(ACT_BREW,sim_now); sim_run(1000+7000); sim_tick=NULL;
+      st_line("shot",0,rec,sizeof rec);
+      st_check("STOP BREW on the screen: completion_reason manual_stop; a 10.7 s brew is kind 'short'; pre-infusion off = 0 s; seq 2 (the counter file survives)",
+               st_jstr(rec,"completion_reason","manual_stop")&&st_jstr(rec,"kind","short")&&st_jnum(rec,"preinfusion_s")==0&&st_jnum(rec,"seq")==2&&strstr(rec,"\"pre_infusion\":{\"enabled\":0")&&file_is(sh_path,"seq=2\n")); }
+    { st_home(); st_feed(1); sim_run(600); st_fault_on=1; sim_tick=tick_fault; sim_t0=sim_now; sim_run(10000+6000); st_fault_on=0; sim_run(3000); sim_tick=NULL;
+      st_line("shot",0,rec,sizeof rec); st_events(ev,sizeof ev); char e[600]=""; const char*q=strstr(st_cap,"\"event_type\":\"error\""); if(q){ const char*e0=q; while(e0>st_cap&&e0[-1]!='\t') e0--; const char*e1=strchr(q,'\n'); snprintf(e,sizeof e,"%.*s",(int)(e1-e0),e0); }
+      st_check("a fault during the brew: completion_reason fault; events brew_started, error (faults [brew_boiler_sensor], e2 = 1), shot_finished, error_cleared",
+               st_jstr(rec,"completion_reason","fault")&&!strcmp(ev,"brew_started,error,shot_finished,error_cleared")&&strstr(e,"\"faults\":[\"brew_boiler_sensor\"],\"e1\":0,\"e2\":1,\"e3\":0")); }
+    { st_home(); st_feed(1); sim_run(600); sim_tick=tick_lift; sim_t0=sim_now; sim_run(28900+4000); sim_tick=NULL; int n1=st_line("shot",0,rec,sizeof rec);
+      st_check("the cup is lifted 2 s after the stop: the record is finished at once, yield = the peak before the lift, yield_settled false",n1==1&&fabs(st_jnum(rec,"settled_yield_g")-36.6)<0.25&&strstr(rec,"\"yield_settled\":false")); }
+    /* ---- 6. clock: a time set during the brew does not split the record; no valid clock -> clock_ok false ---- */
+    { st_home(); clk_fake=0; st_feed(1); sim_run(600); sim_tick=tick_brew; sim_t0=sim_now; sim_run(15000); clk_fake=PV_CLK; sim_run(13900+6500); sim_tick=NULL;
+      st_line("shot",0,rec,sizeof rec); const char*a=strstr(rec,"\"start_utc\":\""), *b=strstr(rec,"\"end_utc\":\""); int h0,m0,s0,h1,m1,s1;
+      int sok=a&&b&&!strncmp(a+13,"2026-11-18T",11)&&!strncmp(b+11,"2026-11-18T",11)&&sscanf(a+24,"%d:%d:%d",&h0,&m0,&s0)==3&&sscanf(b+22,"%d:%d:%d",&h1,&m1,&s1)==3
+              &&abs((h1*3600+m1*60+s1)-(h0*3600+m0*60+s0)-29)<=1&&strstr(rec,"\"clock_ok\":true");
+      st_home(); clk_fake=0; st_feed(1); sim_run(600); sim_tick=tick_brew; sim_t0=sim_now; sim_run(28900+6500); sim_tick=NULL; st_line("shot",0,rec,sizeof rec);
+      st_check("the clock is set during the brew: start_utc = the wall clock at the end minus the monotonic time since the start (no 1970 / no jump); without a valid clock clock_ok = false",sok&&strstr(rec,"\"clock_ok\":false")); clk_fake=PV_CLK; }
+    /* ---- 7. observe only: the frames are the same with the feed on and off ---- */
+    { uint8_t f[2][80]; int fn[2]; long ok_[2];
+      for(int on=0;on<2;on++){ st_home(); st_feed(on); sim_run(400); act_request(ACT_BREW,sim_now); sim_tick=tick_brew; sim_t0=sim_now; sim_run(36000); sim_tick=NULL;
+          memcpy(f[on],last_tx,sizeof last_tx); fn[on]=last_tx_len; ok_[on]=wq.n_ok+wq.n_fail*1000+wq.n_block*100000; }
+      st_check("frames unchanged: a UI-started brew sends the same cmd6 frames (count + bytes) with the feed on and off — the feed sends none",fn[0]==fn[1]&&fn[0]>0&&!memcmp(f[0],f[1],(size_t)fn[0])&&ok_[0]==ok_[1]&&st_line("shot",0,NULL,0)==1); }
+    st_feed(0); strcpy(mq_path,kmq); strcpy(sh_path,ksh); unlink(sh_path); (void)t; (void)cfgsrc;
+    lang_set(kl); sim_reset();
+}
 static int selftest(const char*cfgsrc){
     int base_lang=ui_lang;
     printf("== selftest (UI language during the test: %s) ==\n",LANG_CODE[ui_lang]);
@@ -9584,10 +10394,10 @@ static int selftest(const char*cfgsrc){
     st_check("hot water TEMPERATURE is a sensor (word 40): no config key, no write, locked",SET[S_HOTT].key==NULL&&SET[S_HOTT].mcu==M_NONE&&(SET[S_HOTT].flags&SF_SENSOR)&&(SET[S_HOTT].flags&SF_LOCK)&&SET[S_HOTT].def==40);
     st_check("breakTime is locked (no editor) but is still packed into word113 lo",(SET[S_BREAK].flags&SF_LOCK)&&SET[S_BREAK].lo==SET[S_BREAK].hi&&SET[S_BREAK].mcu==M_W113);
     st_check("language unlocked 0..10 (11 names); time zone still locked",!(SET[S_LANG].flags&SF_LOCK)&&SET[S_LANG].lo==0&&SET[S_LANG].hi==10&&sizeof OPT_LANG/sizeof OPT_LANG[0]==11&&(SET[S_TZ].flags&SF_LOCK));
-    { int ok=1; for(int i=0;i<NSET;i++){ Setting*s=&SET[i]; if(s->kind==K_ENUM&&(s->flags&SF_LOCK)) ok=0; if((s->flags&SF_EST)&&!s->hint) ok=0;
+    { int ok=1; for(int i=0;i<NSET;i++){ Setting*s=&SET[i]; if(s->kind==K_ENUM&&(s->flags&SF_LOCK)&&i!=S_MQSTAT) ok=0;   /* MQTT STATUS is a read-only status, not a setting */ if((s->flags&SF_EST)&&!s->hint) ok=0;
           if(!(s->flags&(SF_LOCK|SF_SENSOR))&&((s->max-s->min)%s->step||s->min%s->step)) ok=0; }
       st_check("table invariants: estimates have a hint, max lies on the step grid",ok); }
-    { int ok=1; for(int i=0;i<NSET;i++){ Setting*s=&SET[i]; if(set_oor(s)){ printf("     %s=%d outside %d..%d\n",s->key,s->val,s->lo,s->hi); ok=0; } if(!(s->flags&SF_SENSOR)&&!s->loaded){ printf("     %s missing from config\n",s->key); ok=0; } }
+    { int ok=1; for(int i=0;i<NSET;i++){ Setting*s=&SET[i]; if(set_oor(s)){ printf("     %s=%d outside %d..%d\n",s->key,s->val,s->lo,s->hi); ok=0; } if(!(s->flags&SF_SENSOR)&&i!=S_MQLAST&&!s->loaded){ printf("     %s missing from config\n",s->key); ok=0; } }   /* MQTT: LAST PUBLISH has no value before a message */
       st_check("all config values are loaded and within the spec limits",ok); }
     { int ok=1; view=V_DETAIL;
       sel=S_BREWT; edit_val=960; edit_step(1,1); ok&=edit_val==960; edit_val=850; edit_step(-1,1); ok&=edit_val==850; edit_val=856; edit_step(-1,1); ok&=edit_val==850; edit_val=856; edit_step(1,1); ok&=edit_val==860;
@@ -9645,7 +10455,7 @@ static int selftest(const char*cfgsrc){
     st_check("brewTemper 880 -> 870 (revert)",cfg_set_int("brewTemper",870));
     st_check("md5 after revert == baseline",!strcmp(cfg_md5,m0));
     /* the whole table: every editable field is saved as min, max and back */
-    { int ok=1,nf=0; for(int i=0;i<NSET;i++){ Setting*s=&SET[i]; if(s->flags&(SF_LOCK|SF_SENSOR|SF_LOCAL|SF_OWN|SF_SND)) continue; int o; nf++;
+    { int ok=1,nf=0; for(int i=0;i<NSET;i++){ Setting*s=&SET[i]; if(s->flags&(SF_LOCK|SF_SENSOR|SF_LOCAL|SF_OWN|SF_SND|SF_MQ)) continue; int o; nf++;
           if(!cfg_get_int(s->key,&o)||!cfg_set_int(s->key,s->min)||!cfg_set_int(s->key,s->max)||!cfg_set_int(s->key,o)){ ok=0; printf("     %s: %s\n",s->key,cfg_err); } }
       char nm[120]; snprintf(nm,sizeof nm,"all %d editable fields: save min -> max -> original",nf); st_check(nm,ok&&nf==21);
       st_check("md5 after a full table round trip == baseline",!strcmp(cfg_md5,m0)&&cfglen==on&&!memcmp(cfgbuf,orig,on)); }
@@ -9857,12 +10667,13 @@ static int selftest(const char*cfgsrc){
         reg[33]=0x0101; int nr=1; for(int lg=0;lg<NLANG;lg++) for(int i=0;i<NSTR;i++) if(STR[lg][i]&&strstr(STR[lg][i],"REVERT")) nr=0;
         st_check("v6.8 HOME: no touch zone where the REVERT pill used to be (the area 150..329 x 404..479 gives T_NONE — idle and during a brew — except v6.11's gear, which only changes page); no UI string (EN/DA) mentions REVERT",z&&nr); }
       /* v6.17: SYSTEM > STOCK UI. Closed: 5 rows (4 sections + DIAGNOSTICS), no scrolling. A tap on the STOCK UI header opens it and
-       * brings it to the top; BOOT UI and SWITCH TO ORIGINAL NOW are its first two rows. */
+       * brings it to the top; BOOT UI and SWITCH TO ORIGINAL NOW are its first two rows. MQTT: + the MQTT section after STOCK UI — closed =
+       * 6 rows; the first five (DISPLAY · SOUND .. MQTT) are in view, DIAGNOSTICS is one short drag (52 px) away. */
       mock_boot_b(root); page=PG_SYS; sec_open=-1; scroll[PG_SYS]=0;
-      int closed=page_rows(PG_SYS)==NSEC+1&&scroll_max(PG_SYS)==0&&row_find(PG_SYS,RK_X,X_BOOTUI)<0&&row_find(PG_SYS,RK_DIAG,0)==NSEC;
+      int closed=page_rows(PG_SYS)==NSEC+1&&NSEC==5&&scroll_max(PG_SYS)>0&&scroll_max(PG_SYS)<=ROW_P&&row_y0(PG_SYS,SEC_MQTT)+ROW_H<=LIST_VY1&&row_find(PG_SYS,RK_X,X_BOOTUI)<0&&row_find(PG_SYS,RK_DIAG,0)==NSEC;
       activate(T_ROW0+SEC_STOCK,tn); ns=row_find(PG_SYS,RK_X,X_BOOTUI);
       int yb=(int)(row_y0(PG_SYS,ns)-scroll[PG_SYS])+25, ys=(int)(row_y0(PG_SYS,ns+1)-scroll[PG_SYS])+25;
-      st_check("SYSTEM: closed = 4 section headers + DIAGNOSTICS (5 rows, no scrolling); tapping STOCK UI opens it at the top: BOOT UI and SWITCH TO ORIGINAL NOW are its first two rows, both hittable (v6.16: rows 16 and 17 of one list)",
+      st_check("SYSTEM: closed = 5 section headers + DIAGNOSTICS (MQTT: 6 rows, the five headers in view, DIAGNOSTICS one drag away); tapping STOCK UI opens it at the top: BOOT UI and SWITCH TO ORIGINAL NOW are its first two rows, both hittable (v6.16: rows 16 and 17 of one list)",
                closed&&sec_open==SEC_STOCK&&ns==SEC_STOCK+1&&row_find(PG_SYS,RK_X,X_SWITCH)==ns+1&&hit_test(240,yb,tn)==T_ROW0+ns&&hit_test(240,ys,tn)==T_ROW0+ns+1&&ys+25<LIST_VY1&&yb-25>=LIST_VY0);
       activate(T_ROW0+ns,tn); tr.type=0;
       st_check("BOOT UI opens with the current choice (flag set -> MERAKIPLUS)",view==V_SYS&&xsel==X_BOOTUI&&x_edit==1&&x_orig==1);
@@ -10115,16 +10926,30 @@ static int selftest(const char*cfgsrc){
     st_v620();                         /* v6.20 */
     st_v622();                         /* v6.22 */
     st_v624();                         /* v6.24 */
+    st_mqtt(dir,cfgsrc);               /* MQTT */
     /* ============================ v6.15 ============================ */
     st_graph();
     printf("== selftest [%s]: %s (%d checks, %d failed) — work dir %s ==\n",LANG_CODE[base_lang],st_fail?"FAILED":"ALL OK",st_n,st_fail,dir);
     return st_fail?1:0;
 }
+/* MQTT: the feed lines of a canned session — grind, a shot, steam, hot water, a water-tank fault and its clearing — on stdout
+ * ("<channel>\t<JSON>"). tests/test_mqtt.py validates every record and pipes them into the helper against a mock broker; the
+ * examples in docs/integrations.md come from here. Synthetic time (preview clock 2026-11-18 15:35 UTC). */
+static int feed_demo(void){
+    snprintf(sh_path,sizeof sh_path,"/nonexistent/merakiplus_feed_demo_shots"); snprintf(mq_path,sizeof mq_path,"/nonexistent/merakiplus_feed_demo_mqtt.conf");
+    st_home(); settings_load(); mqc.has_id=1; snprintf(mqc.id,sizeof mqc.id,"3fa9c2d1"); br.seq_loaded=1; br.seq=417;
+    st_feed(1); sim_run(600);
+    sim_tick=tick_session; sim_t0=sim_now; sim_run(13000+28900+8000);
+    sim_tick=tick_steam; sim_t0=sim_now; sim_run(32000+12000);
+    sim_tick=tick_water; sim_t0=sim_now; sim_run(9300+3000);
+    sim_tick=NULL; reg[36]=0x8000; sim_run(3000); reg[36]=0; sim_run(6000);
+    fputs(st_cap,stdout); st_feed(0); return 0;
+}
 static void dump_table(void){
     printf("#key\tlabel\tpage\tspec_tier\tmin\tmax\tstep\tdefault\thard\tlock\test\tsensor\tmcu\thint\n");
     static const char*const MW[]={"-","4","23","11","112","113","114","25","14","17","2"};
     for(int i=0;i<NSET;i++){ const Setting*s=&SET[i];
-        if(s->flags&(SF_LOCAL|SF_OWN|SF_SND)) continue;   /* merakiplus's own settings (UI language, v6.16 schedule, v6.18 sound) are not spec parameters */
+        if(s->flags&(SF_LOCAL|SF_OWN|SF_SND|SF_MQ)) continue;   /* merakiplus's own settings (UI language, v6.16 schedule, v6.18 sound, MQTT) are not spec parameters */
         printf("%s\t%s\t%s\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%s\t%s\n",s->key?s->key:"-",TR(s->label),TR(TIER_NAME[s->tier]),s->ptier,s->min,s->max,s->step,s->def,s->hard,
                !!(s->flags&SF_LOCK),!!(s->flags&SF_EST),!!(s->flags&SF_SENSOR),MW[s->mcu],s->hint?TR(s->hint):"-"); }
 }
@@ -10164,8 +10989,11 @@ int main(int argc,char**argv){
     gfx_init(); lang_set(pv_lang);
     snprintf(sched_path,sizeof sched_path,"%s/_preview_schedule",out);   /* v6.16: never the host's /new_customer (the selftest uses its work dir) */
     snprintf(snd_path,sizeof snd_path,"%s/_preview_sound",out);           /* v6.18: likewise */
-    if(!strcmp(out,"--selftest")){ snprintf(sched_path,sizeof sched_path,"/nonexistent/merakiplus_preview_schedule"); snprintf(snd_path,sizeof snd_path,"/nonexistent/merakiplus_preview_sound"); return selftest(cfgsrc); }
+    snprintf(mq_path,sizeof mq_path,"%s/_preview_mqtt.conf",out); snprintf(sh_path,sizeof sh_path,"%s/_preview_shots",out);   /* MQTT: likewise */
+    if(!strcmp(out,"--selftest")){ snprintf(sched_path,sizeof sched_path,"/nonexistent/merakiplus_preview_schedule"); snprintf(snd_path,sizeof snd_path,"/nonexistent/merakiplus_preview_sound");
+        snprintf(mq_path,sizeof mq_path,"/nonexistent/merakiplus_preview_mqtt.conf"); snprintf(sh_path,sizeof sh_path,"/nonexistent/merakiplus_preview_shots"); return selftest(cfgsrc); }
     if(!strcmp(out,"--dump-table")){ dump_table(); return 0; }
+    if(!strcmp(out,"--feed-demo")){ snprintf(cfg_path,sizeof cfg_path,"%s",cfgsrc); return feed_demo(); }   /* MQTT: the feed of a canned session (tests/test_mqtt.py) */
     if(!strcmp(out,"--dump-strings")){ dump_strings(); return 0; }
     if(!strcmp(out,"--textw")){ for(int i=ai+1;i<argc;i++) printf("%4d %4d %4d %4d %4d  %s\n",text_w(argv[i],F_XS),text_w(argv[i],F_S),text_w(argv[i],F_M),text_w(argv[i],F_L),text_w(argv[i],F_XL),argv[i]); return 0; }
     snprintf(cfg_path,sizeof cfg_path,"%s",cfgsrc);
@@ -10365,6 +11193,17 @@ int main(int argc,char**argv){
     sim_reset(); pv_mcu_ver("V5.1.2",NULL); sim_run(400); reg[19]=1; sim_tick=tick_water; sim_t0=sim_now; sim_run(5200); dump(out,"110_home_water_manual_running");
     sim_reset(); page=PG_DIAG; scroll[PG_DIAG]=DG_MCU-LIST_VY0-12; sim_run(600); dump(out,"111_diag_controller");
     sim_reset(); reg[35]=0x1000; page=PG_DIAG; scroll[PG_DIAG]=DG_MCU-LIST_VY0-12; sim_run(600); dump(out,"112_diag_controller_scale_fault");
+    /* MQTT: SYSTEM › MQTT — closed SYSTEM (6 rows), the section OFF / connected, the switch's editor */
+    sim_reset(); page=PG_SYS; sim_run(600); dump(out,"113_system_closed_mqtt");
+    sim_reset(); PV_SEC(SEC_MQTT); sim_run(600); dump(out,"114_system_mqtt_off");
+    { char pp[600]; snprintf(ota.dir,sizeof ota.dir,"%s/_preview_rel",out); mkdir(ota.dir,0755); snprintf(pp,sizeof pp,"%s/merakiplus_mqtt",ota.dir);
+      int fd=open(pp,O_WRONLY|O_CREAT|O_TRUNC,0755); if(fd>=0){ if(write(fd,"#!/bin/sh\n",10)<0){} close(fd); }
+      fd=open(mq_path,O_WRONLY|O_CREAT|O_TRUNC,0600); if(fd>=0){ const char*c="enabled = 1\nhost = 192.168.1.50\nid = 3fa9c2d1\n"; if(write(fd,c,strlen(c))<0){} close(fd); }
+      mk_p(pvr,"/tmp"); snprintf(pp,sizeof pp,"%s/tmp/merakiplus_mqtt.status",pvr); fd=open(pp,O_WRONLY|O_CREAT|O_TRUNC,0644);
+      if(fd>=0){ char l[100]; snprintf(l,sizeof l,"mqtt1 connected 418 0 0 %.1f -\n",mono_raw_s()-3.2); if(write(fd,l,strlen(l))<0){} close(fd); }
+      sim_reset(); fe.t_stat=-100000; PV_SEC(SEC_MQTT); sim_run(600); dump(out,"115_system_mqtt_connected");
+      sim_reset(); fe.t_stat=-100000; PV_SEC(SEC_MQTT); sim_run(300); detail_open(S_MQTT,sim_now); sim_run(900); dump(out,"116_detail_mqtt");
+      unlink(pp); unlink(mq_path); }
     return 0;
 }
 #endif

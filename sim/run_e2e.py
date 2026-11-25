@@ -55,6 +55,11 @@ SIM_BUILD_CANDIDATES = [ROOT / "build" / "merakiplus_sim",
 # The historical v6.4 profile can still be given explicitly with --ui-profile.
 UI_PROFILE_DEFAULT = HERE / "sim_ui_profile-ui.json"
 REF_PROFILE_DEFAULT = HERE / "sim_ui_profile-ref.json"
+# MQTT (additive): MQTT scenarios ("mqtt" block) — the UI SIM build starts the host build of the helper against a mock broker
+MQTT_HELPER_HOST = ROOT / "build" / "merakiplus_mqtt_host"
+MQTT_E2E_ID = "e2e0test"
+MQTT_E2E_PW = "E2E-PWMARK-7c1d"
+MQTT_E2E_BASE = "merakiplus/" + MQTT_E2E_ID
 
 
 def _pmatch(item, pat):
@@ -237,6 +242,10 @@ class ScenarioRun:
                                               dir="/tmp"))
         self.sim_ctrl_path = self.sock_dir / f"{self.name[:24]}_sim.ctrl"
         self.ui_ctrl_path = self.sock_dir / f"{self.name[:24]}_ui.ctrl"
+        # MQTT (additive): MQTT — mock broker, helper + feed log (only for scenarios with an "mqtt" block)
+        self.broker = None
+        self.mqtt_env = {}
+        self.feed_path = self.dir / "feed.jsonl"
 
     # ------------------------------------------------------------ (a) sandbox
     def make_sandbox(self):
@@ -273,12 +282,40 @@ class ScenarioRun:
                 raise RuntimeError(f"sandbox_files: {rel} leaves the sandbox")
             dst.parent.mkdir(parents=True, exist_ok=True)
             dst.write_text(text)
+        self.make_mqtt(sb)
         # fb buffer + touch FIFO are created by client/sim; placeholder:
         self.fb_path.write_bytes(bytes(FB_BYTES))
         self.touch_path = sb / "dev" / "input" / "event0.fifo"
         # fresh state file
         self.state_path.write_text("")
         self.assert_path.write_text("")
+
+    def make_mqtt(self, sb):
+        """MQTT (additive): scenario block "mqtt": {"broker": true, "conf": {...} | null, "helper": true, "feed_log": true}.
+        conf = the mqtt.conf keys over the defaults (enabled 1, host 127.0.0.1, the broker's port, user, a marker password,
+        id e2e0test); null = no file (the default-off case). A value null removes that key."""
+        mq = self.scen.get("mqtt")
+        if not mq:
+            return
+        if mq.get("broker", True):
+            from mqtt_broker import MockBroker
+            log = self.dir / "mqtt_broker.jsonl"
+            log.unlink(missing_ok=True)
+            self.broker = MockBroker(log_path=str(log))
+        if mq.get("conf", {}) is not None:
+            c = {"enabled": 1, "host": "127.0.0.1", "port": self.broker.port if self.broker else 1, "user": "merakiplus",
+                 "pass": MQTT_E2E_PW, "id": MQTT_E2E_ID, "base": "merakiplus", "discovery": 1, "live": 1}
+            c.update(mq.get("conf") or {})
+            p = sb / "new_customer" / "merakiplus" / "mqtt.conf"
+            p.write_text("# e2e\n" + "".join(f"{k} = {v}\n" for k, v in c.items() if v is not None))
+            os.chmod(p, 0o600)
+        if mq.get("helper", True):
+            if not MQTT_HELPER_HOST.exists():
+                raise RuntimeError(f"{MQTT_HELPER_HOST} missing — run ./build.sh host")
+            self.mqtt_env["MERAKIPLUS_SIM_MQTT_HELPER"] = str(MQTT_HELPER_HOST)
+        if mq.get("feed_log", True):
+            self.feed_path.write_text("")
+            self.mqtt_env["MERAKIPLUS_SIM_FEED_LOG"] = str(self.feed_path)
 
     # ------------------------------------------------------------ (b) sim
     def start_sim(self):
@@ -356,6 +393,7 @@ class ScenarioRun:
         # v6.16 (additive): a scenario may set extra UI environment variables, e.g.
         # MERAKIPLUS_SIM_CLOCK (the UI's UTC wall clock). Not used by older scenarios.
         env.update({str(k): str(v) for k, v in (self.scen.get("ui_env") or {}).items()})
+        env.update(self.mqtt_env)                       # MQTT (additive): empty unless the scenario has an "mqtt" block
         if self.ui_bin:
             self.client_kind = "sim-build"
             cmd = [str(self.ui_bin)]
@@ -449,6 +487,14 @@ class ScenarioRun:
                 self.flag_path.unlink(missing_ok=True)
         elif op == "gesture":
             self.run_gesture(ev)
+        elif op == "mqtt" and self.broker:          # MQTT (additive): broker outage / a PUBLISH sent TO the helper
+            act = ev.get("action")
+            if act == "outage_on":
+                self.broker.outage(True)
+            elif act == "outage_off":
+                self.broker.outage(False)
+            elif act == "inject_publish":
+                self.broker.inject_publish(ev.get("topic", "merakiplus/cmd"), str(ev.get("payload", "on")).encode())
         elif op == "touch_stream":
             stream = touch_stream(ev.get("presses", 1), ev.get("x", 240),
                                   ev.get("y", 240), ev.get("hold_ms", 80),
@@ -915,6 +961,8 @@ class ScenarioRun:
             ok = res.get("ran") and res.get("trigger") == ex["expect_trigger"]
             self.add(f"gesture {ex['name']} trigger={ex['expect_trigger']}", ok,
                      res.get("log", "")[-200:] if not ok else "")
+        elif kind in ("mqtt", "mqtt_packets", "feed"):
+            self.eval_mqtt(ex)
         elif kind == "contract":
             need = {"t_ms", "page", "phase", "work_sta", "regs", "lang",
                     "boot_flag", "crc_ok", "crc_bad", "cmd6", "frame_ms"}
@@ -1107,7 +1155,86 @@ class ScenarioRun:
             self.eval_expect({"kind": "cmd6", "field": "fail", "op": "==", "value": 0})
 
     # ------------------------------------------------------------ (g) report
+    def mqtt_stop(self):
+        """MQTT: after the UI's exit the helper sees EOF, publishes 'offline' and disconnects — wait for it, then stop the broker"""
+        if not self.broker:
+            return
+        self.broker.wait(lambda: self.broker.closed >= self.broker.connections, 6)
+        self.broker.close()
+
+    def _mq_match(self, d, want):
+        bad = []
+        for k, v in (want or {}).items():
+            cur = d
+            for part in k.split("."):
+                cur = cur.get(part) if isinstance(cur, dict) else None
+            if isinstance(v, list) and len(v) == 2 and all(isinstance(x, (int, float)) for x in v):
+                if not (isinstance(cur, (int, float)) and v[0] <= cur <= v[1]):
+                    bad.append(f"{k}={cur}")
+            elif cur != (v.replace("{base}", MQTT_E2E_BASE).replace("{id}", MQTT_E2E_ID) if isinstance(v, str) else v):
+                bad.append(f"{k}={json.dumps(cur)[:60]}")
+        return bad
+
+    def eval_mqtt(self, ex):
+        """MQTT (additive) expectation kinds: mqtt (messages on a topic), mqtt_packets (what the helper sent), feed (the UI's feed lines)"""
+        kind = ex["kind"]
+        if kind == "feed":
+            lines = []
+            try:
+                for l in self.feed_path.read_text().splitlines():
+                    ch, js = l.split("\t", 1)
+                    if ch == ex["channel"]:
+                        lines.append(json.loads(js))
+            except (OSError, ValueError):
+                pass
+            sel = [d for d in lines if not self._mq_match(d, ex.get("where"))]
+            n = len(sel)
+            ok = ex.get("min", 1) <= n <= ex.get("max", 10 ** 9)
+            bad = self._mq_match(sel[-1], ex.get("json")) if sel and ex.get("json") else ([] if sel or not ex.get("json") else ["none"])
+            self.add(f"feed {ex['channel']} {json.dumps(ex.get('where') or {})} n={n}", ok and not bad, f"bad={bad}")
+            return
+        b = self.broker
+        if b is None:
+            self.add(f"{kind}: no broker in this scenario", False)
+            return
+        if kind == "mqtt_packets":
+            types = [p["type"] for p in b.packets]
+            con = [p for p in b.packets if p["type"] == "CONNECT"]
+            ok = set(types) <= set(ex.get("allowed", ["CONNECT", "PUBLISH", "PINGREQ", "DISCONNECT"]))
+            ok &= ex.get("connections_min", 0) <= b.connections <= ex.get("connections_max", 10 ** 6)
+            if ex.get("will") and con:
+                ok &= all(c.get("will_topic") == f"{MQTT_E2E_BASE}/availability" and c.get("will_payload") == "offline"
+                          and c.get("will_retain") and c.get("will_qos") == 1 for c in con)
+            if ex.get("no_secret"):
+                blob = "".join(p.get("payload", "") for p in b.packets)
+                ok &= MQTT_E2E_PW not in blob and MQTT_E2E_PW not in self.feed_path.read_text() if self.feed_path.exists() else True
+            self.add(f"mqtt packets {sorted(set(types))} connections={b.connections}", bool(ok), f"types={sorted(set(types))}")
+            return
+        topic = ex["topic"].replace("{base}", MQTT_E2E_BASE).replace("{id}", MQTT_E2E_ID)
+        msgs = b.pubs(topic)
+        if ex.get("where"):
+            msgs = [m for m in msgs if not self._mq_match(json.loads(m["payload"]), ex["where"])]
+        n = len(msgs)
+        ok = ex.get("min", 1) <= n <= ex.get("max", 10 ** 9)
+        if "retain" in ex:
+            ok &= all(m["retain"] == ex["retain"] for m in msgs)
+        if "qos" in ex:
+            ok &= all(m["qos"] == ex["qos"] for m in msgs)
+        detail = ""
+        if msgs and ("payload" in ex):
+            ok &= msgs[-1]["payload"] == ex["payload"]
+            detail = f"last={msgs[-1]['payload'][:40]}"
+        if msgs and (ex.get("json") or ex.get("absent") or ex.get("present")):
+            d = json.loads(msgs[-1]["payload"])
+            bad = self._mq_match(d, ex.get("json"))
+            bad += [f"+{k}" for k in ex.get("absent", []) if k in d]
+            bad += [f"-{k}" for k in ex.get("present", []) if k not in d]
+            ok &= not bad
+            detail = f"bad={bad}"
+        self.add(f"mqtt {topic} n={n}" + (f" {json.dumps(ex.get('where'))}" if ex.get("where") else ""), bool(ok), detail)
+
     def finish(self):
+        self.mqtt_stop()
         for ex in self.scen.get("expect", []):
             try:
                 self.eval_expect(ex)
