@@ -3,19 +3,27 @@
 All notable changes to Meraki+. Details (with evidence, frames and test figures) are in
 [docs/dev/UI_v6.md](docs/dev/UI_v6.md) under *CHANGES-v6.x*. All dates are 2026.
 
-## Unreleased — grinder size ruler
+## Unreleased — grinder size ruler + bean container message
 Display-only and read-only. `VERSION` stays 6.24 until a release PR. No UART frame, frame-policy rule or guard changed,
 and the grinder calibration is never written.
 ### Added
 - **GRIND page: the measured grind size as a ruler** (*GRIND SIZE* / *MALEGRAD*), between GRIND MODE and HOLD TO
-  START: the stock dial unrolled into a *FINE … COARSE* (*FIN … GROV*) scale with a marker and a value tab. The value is
+  START: the stock dial unrolled into a *COARSE … FINE* (*GROV … FIN*) scale with a marker and a value tab, **mirrored
+  like the physical dial on the bean container** (FINE / FIN at the right end, COARSE / GROV at the left, numbers
+  ascending right-to-left; hw-confirmed on Gen 1). The value is
   the controller's grind gear, word 37, which Meraki+ already polls. The scale is 1..30 (labels 1 · 5 · 10 … 30). It is
   0..40 (labels every 10) when the machine's gear-40 point is calibrated: word 75 ≠ 0xFFFF and word 75 − word 65 ≥ 100,
   the same rule as the controller. There the controller can report down to −3. Values outside the scale pin to its ends,
   and the tab still shows the number. With no connection, or before word 37 has been read, it shows *--* with no marker,
   and HOLD TO START is dimmed by its usual guard.
+- **Bean container message (work_sta word 33 bit 8, docs/ui-guide.md §23):** lifting the bean container showed
+  *ASLEEP* / *SOVER* because bit 8 clear was read as sleep. Stock shows `lackBeenTank.png` for that bit. The new BEAN
+  phase shows an amber *MISSING* / *MANGLER* chip and *BEAN CONTAINER MISSING · FIT IT* /
+  *BØNNEBEHOLDER MANGLER · SÆT DEN I* on HOME; sleep stays word 1 = 1 / word 0 = 0, offline stays no link. The start
+  guards block as before with the new text *FIT THE BEAN CONTAINER* / *SÆT BØNNEBEHOLDEREN I*. Display only.
 - SIM state JSON: `grind_size` {value, shown, lo, hi, scale40, marker, pos, pinned, labels, drawn, start}; new
-  scenario `grind_size_ruler`; UI self-test section (7 checks, EN + DA); previews 113–118.
+  scenarios `grind_size_ruler` and `bean_container_missing` (SIM `bean_tank` switch event); UI self-test sections
+  (7 + 4 checks, EN + DA); previews 113–118.
 ### Changed
 - HOME during a grind: the third stat is **SIZE** / **GRAD** (was STEP / TRIN). It shows word 37 as a signed number
   (*-3*, not *65533*).

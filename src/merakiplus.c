@@ -7,6 +7,10 @@
  *  shows them as water-tank icons, Meraki+ had no text for them. HOME now says WATER TANK MISSING / WATER TANK LOW · PLEASE REFILL /
  *  NO WATER FLOW · CHECK THE TANK (codes E3 / E3 / E2). Display only: the phase (ERROR), the start guards and the frame policy are unchanged;
  *  unmapped bits still read UNKNOWN FAULT. Gen 1 evidence (controller 5.1.4); Gen 2 not verified yet.
+ * v6.24 also = + BEAN CONTAINER MESSAGE (work_sta word 33 bit 8): removing the bean container showed ASLEEP / SOVER, because phase_raw()
+ *  read bit 8 clear as sleep. Stock shows lackBeenTank.png for exactly that bit (comment at the water-tank evidence below). HOME now says
+ *  BEAN CONTAINER MISSING · FIT IT / BØNNEBEHOLDER MANGLER · SÆT DEN I with an amber MISSING / MANGLER chip; sleep stays
+ *  word 1 = 1 / word 0 = 0, offline stays no link. Display only: the start guards block as before (new guard text), no frame-policy change.
  * v6.23 = v6.22 + AUTO OFF 30 MIN BY DEFAULT, like stock (docs/time-scheduling.md §5.1, docs/safety.md §3). The schedule file's
  *  autooff key now means: absent / no file / not one of 0|15|20|30|60 -> 30 min (was OFF); any valid value -> exactly that value,
  *  so an explicit autooff=0 stays OFF and 15/20/60 stay as they are. Files written by v6.16..v6.22 always carry the key, so an
@@ -182,7 +186,7 @@
  *    (tmp+rename, pristine+rolling backup, md5 log). The UI is the only range guard.
  *  - ACTIVITIES: GRIND/BREW/WATER/STEAM w. observed recipes (hold-to-start),
  *    STOP for steam (word24=0), auto-stop expectation in UI text.
- *  - PHASES: steam = work_sta bits 5+14 (0x4020); sleep = word1==1 / bit8 cleared.
+ *  - PHASES: steam = work_sta bits 5+14 (0x4020); sleep = word1==1 / word0==0; bean container removed = work_sta bit 8 clear (v6.24).
  *  - GRAPHICS: anti-aliased stroke font (own, no dependencies), AA primitives,
  *    270-degree gauge w. LUT, retained compositor w. dirty rects, page slide,
  *    crossfade, touch ripple, toasts, boot splash. Global circle clip kept.
@@ -1385,6 +1389,7 @@ enum { K0=0, KT, KSUB, KLAB, KCHIP, KBTN, KBTNS, KTITLE, KPSUB, KSPL, KDL, KDV, 
  X(TX_UL_DA, K0, "DANSK", "DANSK") \
  X(TX_PH_OFFLINE, KCHIP, "OFFLINE", "OFFLINE") \
  X(TX_PH_SLEEP, KCHIP, "ASLEEP", "SOVER") \
+ X(TX_PH_BEAN, KCHIP, "MISSING", "MANGLER") \
  X(TX_PH_ERROR, KCHIP, "ERROR", "FEJL") \
  X(TX_PH_HEAT, KCHIP, "HEATING UP", "VARMER OP") \
  X(TX_PH_READY, KCHIP, "READY", "KLAR") \
@@ -1417,6 +1422,8 @@ enum { K0=0, KT, KSUB, KLAB, KCHIP, KBTN, KBTNS, KTITLE, KPSUB, KSPL, KDL, KDV, 
  X(TX_G_NOLINK, KT, "NO CONNECTION", "INGEN FORBINDELSE") \
  X(TX_G_ERROR, KT, "ERROR ACTIVE · START BLOCKED", "FEJL AKTIV · START SPÆRRET") \
  X(TX_G_SLEEP, KT, "WAKING UP · ONE MOMENT", "VÅGNER · ET ØJEBLIK") \
+ X(TX_G_BEAN, KT, "FIT THE BEAN CONTAINER", "SÆT BØNNEBEHOLDEREN I") \
+ X(TX_H_BEAN, KSUB, "BEAN CONTAINER MISSING · FIT IT", "BØNNEBEHOLDER MANGLER · SÆT DEN I") \
  X(TX_G_BUSY, KT, "ACTIVITY IN PROGRESS", "AKTIVITET I GANG") \
  X(TX_G_WAIT, KT, "ONE MOMENT…", "ET ØJEBLIK…") \
  X(TX_G_NOCFG, KT, "CONFIG MISSING · START BLOCKED", "CONFIG MANGLER · START SPÆRRET") \
@@ -2798,7 +2805,7 @@ static int act_push_stop(int kind){
 static struct { int kind, active; ms_t t_req; long seq, n_req, n_ok, n_fail; } stp={ACT_NONE,0,0,0,0,0,0};
 
 /* ================= phases (work_sta word 33; SESSION.md §6) ================= */
-enum { PH_OFFLINE=0, PH_SLEEP, PH_ERROR, PH_HEAT, PH_READY, PH_GRIND, PH_PRE, PH_EXT, PH_WATER, PH_STEAM, PH_DONE, NPHASE };
+enum { PH_OFFLINE=0, PH_SLEEP, PH_BEAN, PH_ERROR, PH_HEAT, PH_READY, PH_GRIND, PH_PRE, PH_EXT, PH_WATER, PH_STEAM, PH_DONE, NPHASE };
 _Static_assert(TX_PH_DONE-TX_PH_OFFLINE==NPHASE-1,"TX_PH_* must follow PH_*");
 static const char* ph_name(int p){ return TR(TX_PH_OFFLINE+((p>=0&&p<NPHASE)?p:PH_OFFLINE)); }
 static int link_up(ms_t now){ return now-last_rx_ms<1500; }
@@ -2810,7 +2817,9 @@ static int phase_raw(ms_t now){
     if((ws&0x0006)==0x0006) return (ws&0x0200)?PH_EXT:PH_PRE;/* bits 1+2 (+9 = extraction) */
     if((ws&0x000A)==0x000A) return PH_WATER;                 /* bits 1+3 */
     if(reg[34]||reg[35]||reg[36]) return PH_ERROR;
-    if((reg_seen[1]&&reg[1]==1) || (reg_seen[33]&&!(ws&0x0100))) return PH_SLEEP;
+    if(reg_seen[1]&&reg[1]==1) return PH_SLEEP;
+    if(reg_seen[0]&&reg[0]==0) return PH_SLEEP;               /* v6.24: power off = the MCU going to sleep (word 0 = 0) */
+    if(reg_seen[33]&&!(ws&0x0100)) return PH_BEAN;            /* v6.24: bean container removed (stock lackBeenTank.png), NOT sleep */
     if(reg_seen[40]&&reg_seen[11]&&(int)reg[40] < (int)reg[11]-20) return PH_HEAT;
     return PH_READY;
 }
@@ -3765,6 +3774,7 @@ static void gfx_init(void){
 static uint32_t ph_hi(int p){
     switch(p){
     case PH_OFFLINE: return rgb(124,130,144); case PH_SLEEP: return rgb(136,144,222);
+    case PH_BEAN:    return rgb(255,190,84);                 /* v6.24: warning amber (the container is missing, the machine is awake) */
     case PH_ERROR:   return rgb(255,96,96);   case PH_HEAT:  return rgb(255,186,84);
     case PH_READY:   return rgb(98,222,168);  case PH_GRIND: return rgb(174,228,112);
     case PH_PRE:     return rgb(92,180,255);  case PH_EXT:   return rgb(255,142,68);
@@ -3775,6 +3785,7 @@ static uint32_t ph_hi(int p){
 static uint32_t ph_lo(int p){
     switch(p){
     case PH_OFFLINE: return rgb(66,70,80);    case PH_SLEEP: return rgb(58,62,120);
+    case PH_BEAN:    return rgb(150,78,26);                  /* v6.24: warning amber, dark end */
     case PH_ERROR:   return rgb(130,36,40);   case PH_HEAT:  return rgb(150,78,26);
     case PH_READY:   return rgb(24,104,92);   case PH_GRIND: return rgb(62,116,46);
     case PH_PRE:     return rgb(30,74,168);   case PH_EXT:   return rgb(166,54,28);
@@ -3988,6 +3999,7 @@ static const char* act_guard(int kind,ms_t now){
     if(p==PH_OFFLINE) return TR(TX_G_NOLINK);
     if(p==PH_ERROR)   return TR(TX_G_ERROR);
     if(p==PH_SLEEP)   return TR(TX_G_SLEEP);
+    if(p==PH_BEAN)    return TR(TX_G_BEAN);                  /* v6.24: bean container removed — start stays blocked, as before */
     if(phase_active(p)&&!(kind==ACT_STEAM&&steam_brew_ok(now))) return TR(TX_G_BUSY);
     if(reg[34]||reg[35]||reg[36]) return TR(TX_G_ERROR);           /* v6.20: phase_raw puts a running brew before the error words */
     if(wq_busy()||act.pending!=ACT_NONE||sav.active) return TR(TX_G_WAIT);
@@ -4865,6 +4877,7 @@ static void home_model(ms_t now){
         switch(ph){
         case PH_OFFLINE: snprintf(m->sub,sizeof m->sub,"%s",TR(TX_H_NORESP)); break;
         case PH_SLEEP:   snprintf(m->sub,sizeof m->sub,"%s",TR(TX_H_WAKING)); break;
+        case PH_BEAN:    snprintf(m->sub,sizeof m->sub,"%s",TR(TX_H_BEAN)); break;   /* v6.24: bean container missing, not sleep */
         case PH_ERROR:   snprintf(m->sub,sizeof m->sub,"%s",err_text()); break;
         case PH_HEAT:    snprintf(m->sub,sizeof m->sub,TR(TX_H_HEATING_TO),a); break;
         default:         snprintf(m->sub,sizeof m->sub,TR(TX_H_SET_TO),a); break;
@@ -5405,7 +5418,9 @@ static void draw_start(ms_t now){
  * Word 37 = the controller's grind gear (MCU 0x181E: word 69's ADC against the factory calibration words 59/60/64/65/74/75), already
  * polled (sub33). Read-only: nothing is sent and the calibration is never written. Scale 1..30; 0..40 when the gear-40 point is
  * calibrated (word 75 != 0xFFFF and word 75 - word 65 >= 100), where 0x181E can report down to -3: values outside the scale pin to its
- * ends (the tab still shows the number). No link / word 37 not polled yet: "--", no marker (HOLD TO START is dimmed by its guard). */
+ * ends (the tab still shows the number). No link / word 37 not polled yet: "--", no marker (HOLD TO START is dimmed by its guard).
+ * Orientation (v6.24, hw-confirmed): MIRRORED like the physical dial on the bean container — FINE / FIN at the RIGHT end, COARSE / GROV
+ * at the LEFT, numbers ascending right-to-left; the marker's screen fraction from the left is 1 - t. */
 typedef struct { int ok, g, lo, hi; float t; } GSize;
 static GSize gsize(ms_t now){
     GSize s; s.ok=link_up(now)&&reg_seen[37]; s.g=s.ok?s16(37):0;
@@ -5419,7 +5434,7 @@ static void gs_text(const GSize*s,char*o,size_t n){ if(s->ok) snprintf(o,n,"%d",
 #define GS_X1 380
 #define GS_BY (GS_Y0+80)     /* the scale's baseline */
 #define GS_TAB_H 30
-static float gs_px(const GSize*s){ return GS_X0+(GS_X1-GS_X0)*s->t; }
+static float gs_px(const GSize*s){ return GS_X1-(GS_X1-GS_X0)*s->t; }   /* mirrored: FINE (lo) at the RIGHT end, like the hopper dial */
 /* the value tab above the marker (also used by the selftest): x, top, width — kept within the scale's ends */
 static void gs_tab(const GSize*s,const char*num,int oy,int*bx,int*bt,int*bw){
     *bw=text_w(num,F_M)+24; *bx=(int)lroundf(gs_px(s))-*bw/2; *bt=GS_BY+oy-56;
@@ -5431,18 +5446,18 @@ static void gs_draw(int oy,ms_t now){
     const int x0=GS_X0, x1=GS_X1, by=GS_BY+oy, n=s.hi-s.lo; float px=gs_px(&s); char num[8]; gs_text(&s,num,sizeof num);
     text_at(x0-4,GS_Y0+oy+8,TR(TX_GS_TITLE),F_XS,C_TXT3,255);
     capsule(x0,by,x1,by,2.0f,rgb(34,38,47),255);                                                  /* the track */
-    for(int k=0;k<=n;k++){ int v=k+s.lo, maj=(v%5==0)||k==0||k==n; float x=x0+(x1-x0)*(float)k/n;   /* one tick per step, every 5th long */
+    for(int k=0;k<=n;k++){ int v=k+s.lo, maj=(v%5==0)||k==0||k==n; float x=x1-(x1-x0)*(float)k/n;   /* one tick per step, every 5th long; mirrored */
         capsule(x,by-(maj?14:8),x,by-5,maj?1.1f:0.7f,maj?rgb(98,106,122):rgb(62,68,82),255);
         if(gs_label(&s,v)){ char l[8]; snprintf(l,sizeof l,"%d",v); text_c((int)lroundf(x),by+9,l,F_XS,C_TXT3,255); } }
     if(s.ok){
-        if(s.t>0){ const int seg=40; for(int q=0;q<seg;q++){ float xa=x0+(px-x0)*q/seg, xb=x0+(px-x0)*(q+1)/seg; capsule(xa,by,xb,by,2.6f,mix(al,ac,(int)(255.f*(q+1)/seg)),255); } }
+        if(s.t>0){ const int seg=40; for(int q=0;q<seg;q++){ float xa=x1+(px-x1)*q/seg, xb=x1+(px-x1)*(q+1)/seg; capsule(xa,by,xb,by,2.6f,mix(al,ac,(int)(255.f*(q+1)/seg)),255); } }
         capsule(px,by-20,px,by+4,1.6f,ac,255); disc(px,by,5.5f,ac,255); disc(px,by,2.6f,rgb(255,255,255),255);
         int bx,bt,bw; gs_tab(&s,num,oy,&bx,&bt,&bw);
         rrect(bx,bt+2,bw,GS_TAB_H,GS_TAB_H/2,rgb(0,0,0),70); rrect(bx,bt,bw,GS_TAB_H,GS_TAB_H/2,ac,255);
         capsule(px-5,bt+29,px,bt+35,1.6f,ac,255); capsule(px+5,bt+29,px,bt+35,1.6f,ac,255);            /* the tab's pointer */
         text_c(bx+bw/2,bt+6,num,F_M,rgb(22,30,16),255);
     } else text_c(CX,by-50,num,F_M,C_DIS,255);
-    text_at(x0-4,by+28,TR(TX_GS_FINE),F_XS,C_TXT3,255); text_r(x1+4,by+28,TR(TX_GS_COARSE),F_XS,C_TXT3,255);
+    text_r(x1+4,by+28,TR(TX_GS_FINE),F_XS,C_TXT3,255); text_at(x0-4,by+28,TR(TX_GS_COARSE),F_XS,C_TXT3,255);   /* FINE right / COARSE left = the hopper dial */
 }
 #define WMAN_Y0 170          /* v6.22: the manual-only WATER page's three lines (title F_S, two F_XS lines) */
 static void draw_list(ms_t now){
@@ -6418,7 +6433,7 @@ static void jb_s(JB*j,const char*s){
 }
 
 /* ---- state that exists only for the state JSON ---- */
-static const char*const PH_KEY[NPHASE]={"OFFLINE","SLEEP","ERROR","HEAT","READY","GRIND","PRE","EXT","WATER","STEAM","DONE"};
+static const char*const PH_KEY[NPHASE]={"OFFLINE","SLEEP","BEAN","ERROR","HEAT","READY","GRIND","PRE","EXT","WATER","STEAM","DONE"};
 static const char*const ACT_KEY[4]={"grind","brew","water","steam"};
 static const char*const STOP_KEY[4]={"grind_stop","brew_stop","water_stop","steam_stop"};   /* v6.13: ctrl action + layout names */
 /* parity_spec id -> SET[] row (sim_e2e.py checks the table against parity_spec.json + --dump-table) */
@@ -8804,7 +8819,7 @@ static void st_v617(void){
       int bad=0; for(int i=0;i<NSTR;i++){ int k=STR_K[i]; if(k==KCON||k==KDL||k==KDV||k==KDF) continue; for(int lg=0;lg<NLANG;lg++){ const char*t=STR[lg][i];
             if(strstr(t,"CONFIG ONLY")||strstr(t,"KUN CONFIG")||strstr(t,"CMD8")||strstr(t,"CONFIG.JSON")||strstr(t,"OR STOP")||strstr(t,"ELLER STOP")||strstr(t,"EST.")){ bad++; printf("     [%s] %s: '%s'\n",LANG_CODE[lg],STR_ID[i],t); } } }
       printf("       string table: %d ids (v6.16: 449)\n",NSTR);
-      st_check("text: no user-facing string says CONFIG ONLY / CONFIG.JSON / CMD8 / '· OR STOP' / 'EST.' any more; the string table is smaller than v6.16's 449 ids although v6.17 adds pages (v6.18's sound block aside)",bad==0&&NSTR-(TX_DV_SO_DROP-TX_SL_SOUND+1)-(TX_DV_WD_FAULT-TX_ER_E2_SCALE+1)-(TX_ER_E2_NOFLOW-TX_ER_E3_TANK+1)<449);   /* v6.18: the sound feature's own strings (one contiguous block) are not counted; v6.22: nor the water gate's; v6.24: nor the water tank's */
+      st_check("text: no user-facing string says CONFIG ONLY / CONFIG.JSON / CMD8 / '· OR STOP' / 'EST.' any more; the string table is smaller than v6.16's 449 ids although v6.17 adds pages (v6.18's sound block aside)",bad==0&&NSTR-(TX_DV_SO_DROP-TX_SL_SOUND+1)-(TX_DV_WD_FAULT-TX_ER_E2_SCALE+1)-(TX_ER_E2_NOFLOW-TX_ER_E3_TANK+1)-(TX_PH_BEAN-TX_PH_BEAN+1)-(TX_H_BEAN-TX_G_BEAN+1)<449);   /* v6.18: the sound feature's own strings (one contiguous block) are not counted; v6.22: nor the water gate's; v6.24: nor the water tank's; v6.24: nor the bean container's (chip + the G/H pair) */
       st_home(); home_model(sim_now); int one=!strcmp(hm.hint1,TR(TX_C_HINT))&&hm.hint2==NULL&&!strcmp(hm.label,TR(TX_H_BOILER))&&!st_has(hm.label,"\xC2\xB7");
       reg[33]=0x0141; sim_run(600); home_model(sim_now); fmt_fix(a,sizeof a,sv(S_GRINDW),1); snprintf(b,sizeof b,TR(TX_H_AUTOSTOP_G),a); int g=!strcmp(hm.label,TR(TX_H_DOSE))&&!st_has(hm.label,a)&&!strcmp(hm.sub,b)&&sub_font(&hm)==F_S;
       st_check("HOME: one hint line; the label is the name of the number only ('BREW BOILER', 'DOSE' — no '· NOW', no repeated target); during an activity the target is said once, in F_S ('STOPS AT 18.5 G')",one&&g); }
@@ -9479,6 +9494,44 @@ static void st_v624(void){
     st_check("v6.24 texts fit the HOME subline (both languages)",ok);
     sim_reset();
 }
+/* ============================ v6.24: bean container message (work_sta bit 8; display only) ============================ */
+static void st_bean(void){
+    printf("== selftest: v6.24 bean container (stock lackBeenTank.png: work_sta word 33 bit 8 clear = container removed; not sleep, not offline) ==\n");
+    int ok=1, kl=ui_lang; ms_t t;
+    for(int lg=0;lg<NLANG;lg++){ lang_set(lg);
+        t=st_home(); st_s33(0x0001,t+=220); ui_frame(t); home_model(sim_now);   /* bit 8 clear, word 0 = 1, word 1 = 0, link up */
+        const char*g=act_guard(ACT_BREW,sim_now);
+        if(act.ph!=PH_BEAN||phase_raw(sim_now)!=PH_BEAN||strcmp(hm.chip,TR(TX_PH_BEAN))||strcmp(hm.sub,TR(TX_H_BEAN))||!g||strcmp(g,TR(TX_G_BEAN))||strcmp(hm.hint1,TR(TX_G_BEAN))){
+            ok=0; printf("     [%s] bean: ph %d chip '%s' sub '%s' hint '%s'\n",LANG_CODE[lg],act.ph,hm.chip,hm.sub,hm.hint1); }
+        reg[1]=1; ui_frame(t+=100); home_model(sim_now);                        /* sleep (word 1) wins over the missing container */
+        if(act.ph!=PH_SLEEP||strcmp(hm.sub,TR(TX_H_WAKING))){ ok=0; printf("     [%s] bean+word1: ph %d sub '%s'\n",LANG_CODE[lg],act.ph,hm.sub); }
+        reg[1]=0; reg[0]=0; ui_frame(t+=100); home_model(sim_now);              /* power off (word 0 = 0) is sleep, not bean */
+        if(act.ph!=PH_SLEEP){ ok=0; printf("     [%s] bean+word0=0: ph %d\n",LANG_CODE[lg],act.ph); }
+        reg[0]=1; st_s33(0x0101,t+=100); ui_frame(t); home_model(sim_now);     /* container back -> READY, start allowed again */
+        if(act.ph!=PH_READY||strcmp(hm.sub,TR(TX_H_BEAN))==0||act_guard(ACT_BREW,sim_now)!=NULL){ ok=0; printf("     [%s] bean back: ph %d sub '%s'\n",LANG_CODE[lg],act.ph,hm.sub); }
+        st_s33(0x0041,t+=100); ui_frame(t); home_model(sim_now);               /* a running grind keeps priority over the container */
+        if(act.ph!=PH_GRIND){ ok=0; printf("     [%s] bean+grind: ph %d\n",LANG_CODE[lg],act.ph); }
+        st_s33(0x0001,t+=100); reg[34]=1; ui_frame(t+=100); home_model(sim_now);   /* real faults keep priority too */
+        if(act.ph!=PH_ERROR){ ok=0; printf("     [%s] bean+E1: ph %d\n",LANG_CODE[lg],act.ph); }
+        reg[34]=0; }
+    lang_set(kl);
+    st_check("bean container removed (work_sta bit 8 clear, EN + DA): phase BEAN, chip 'MISSING' / 'MANGLER', HOME subline 'BEAN CONTAINER MISSING · FIT IT' / 'BØNNEBEHOLDER MANGLER · SÆT DEN I', hint = the guard text; word 1 = 1 and word 0 = 0 stay ASLEEP, a running grind stays GRIND, E1 stays ERROR; container back -> READY with a free start guard",ok);
+    /* display only: the four start guards block exactly as they did when the state was (mis)labelled sleep; nothing is sent */
+    t=st_home(); st_s33(0x0001,t+=220); ui_frame(t);
+    { const char*g=act_guard(ACT_BREW,t); int same=g==TR(TX_G_BEAN); for(int k=0;k<4;k++) same&=act_guard(k,t)==g;
+      int f=st_hold(CX,372,700); same&=wq.n==0&&act.pending==ACT_NONE; (void)f;
+      st_check("display only: with the container missing all four start guards return 'FIT THE BEAN CONTAINER' / 'SÆT BØNNEBEHOLDEREN I' and a hold queues no frame",same); }
+    sim_link=0; sim_run(2500);                                                  /* no link: OFFLINE, not bean */
+    st_check("no link with bit 8 clear: OFFLINE (the bean state needs a live controller)",phase_raw(sim_now)==PH_OFFLINE);
+    sim_link=1; sim_run(400);
+    ok=1; for(int lg=0;lg<NLANG;lg++){ lang_set(lg);
+        LAY(text_wf(TR(TX_PH_BEAN),F_S),KB[KCHIP].maxw,"phase chip",TR(TX_PH_BEAN));
+        LAY(text_wf(TR(TX_H_BEAN),F_XS),KB[KSUB].maxw,"HOME subline",TR(TX_H_BEAN));
+        LAY(text_wf(TR(TX_G_BEAN),F_XS),KB[KT].maxw,"toast",TR(TX_G_BEAN)); }
+    lang_set(kl);
+    st_check("v6.24 bean texts fit the phase chip, the HOME subline and the toast (both languages)",ok);
+    sim_reset();
+}
 /* ============================ grinder size ruler (GRIND page; word 37, read-only) ============================ */
 static int gs_px_is(int x,int y,uint32_t c,int tol){   /* the last frame's pixel (x, y) is colour c within tol per channel */
     if(!sim_last||x<0||y<0||x>=W||y>=H) return 0; uint32_t p=sim_last[y*W+x];
@@ -9507,7 +9560,7 @@ static void st_grind_size(void){
     { char a[64]="",b[64]=""; GSize g={1,12,1,30,0}; for(int v=g.lo;v<=g.hi;v++) if(gs_label(&g,v)) snprintf(a+strlen(a),sizeof a-strlen(a),"%d ",v);
       g.lo=0; g.hi=40; for(int v=g.lo;v<=g.hi;v++) if(gs_label(&g,v)) snprintf(b+strlen(b),sizeof b-strlen(b),"%d ",v);
       st_check("tick labels: 1..30 -> '1 5 10 15 20 25 30', 0..40 -> '0 10 20 30 40' (every 10, no crowding)",!strcmp(a,"1 5 10 15 20 25 30 ")&&!strcmp(b,"0 10 20 30 40 ")); }
-    /* (3) rendered, both languages: the value tab in the grind accent above the marker, the marker stem at x = 100 + 280 t, nothing sent */
+    /* (3) rendered, both languages: the value tab in the grind accent above the marker, the marker stem at x = 380 - 280 t (mirrored), nothing sent */
     { static const struct { int g; uint16_t w75; } R[]={{3,0xFFFF},{12,0xFFFF},{27,0xFFFF},{34,3640},{-3,3640},{1,0xFFFF},{30,0xFFFF}};
       ok=1; for(int lg=0;lg<NLANG;lg++) for(unsigned q=0;q<sizeof R/sizeof R[0];q++){
         gs_page(lg,R[q].g,R[q].w75); memset(&wq,0,sizeof wq); txq_len=0; sim_run(400);
@@ -9516,7 +9569,7 @@ static void st_grind_size(void){
         int quiet=wq.n==0&&txq_len==0&&gs_accent_px()>200;
         if(!(tab&&stem&&in&&quiet&&g.ok)){ ok=0; printf("     [%s] g %d: tab %d stem %d (x %d) in %d quiet %d (accent px %d)\n",LANG_CODE[lg],R[q].g,tab,stem,mx,in,quiet,gs_accent_px()); } }
       lang_set(kl);
-      st_check("rendered (EN + DA) at gear 3 / 12 / 27 / 1 / 30 (1..30) and 34 / -3 (0..40, -3 pinned left): the value tab is the grind accent and stays within the scale's ends, the marker stem sits at x = 100 + 280 t; no frame is queued while the page shows it",ok); }
+      st_check("rendered (EN + DA) at gear 3 / 12 / 27 / 1 / 30 (1..30) and 34 / -3 (0..40, -3 pinned right): the value tab is the grind accent and stays within the scale's ends, the marker stem sits at x = 380 - 280 t (mirrored like the hopper dial); no frame is queued while the page shows it",ok); }
     /* (4) the value follows word 37 live (the list widget repaints): 12 -> 20 moves the tab, the old place is no longer accent */
     { gs_page(kl,12,0xFFFF); GSize g=gsize(sim_now); int bx,bt,bw; gs_tab(&g,"12",0,&bx,&bt,&bw); int x12=bx+bw/2, y12=bt+2, a12=gs_px_is(x12,y12,ac,24);
       reg[37]=20; sim_run(300); g=gsize(sim_now); gs_tab(&g,"20",0,&bx,&bt,&bw);
@@ -10242,6 +10295,7 @@ static int selftest(const char*cfgsrc){
     st_v620();                         /* v6.20 */
     st_v622();                         /* v6.22 */
     st_v624();                         /* v6.24 */
+    st_bean();                         /* v6.24: bean container (work_sta bit 8) */
     st_grind_size();                   /* the grinder size ruler (GRIND page) */
     /* ============================ v6.15 ============================ */
     st_graph();
