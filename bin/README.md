@@ -2,7 +2,7 @@
 
 | File | What | Built from |
 |---|---|---|
-| `merakiplus` | **Meraki+** device binary (static ARMv7, musl; version string `V6.24` plus the unreleased changes in CHANGELOG). Installed as `/new_customer/merakiplus/rel/<version>-<sha8>/demo_v9`. | `src/merakiplus.c` |
+| `merakiplus` | **Meraki+ v6.25** device binary (static ARMv7, musl). Installed as `/new_customer/merakiplus/rel/<version>-<sha8>/demo_v9`. | `src/merakiplus.c` |
 | `merakiplus_boot` | the launcher (static ARMv7, no UI/network/UART). Installed as `/new_customer/demo_v9`; starts the chosen release and rolls back (docs/ota-plan.md phase 1b) | `src/merakiplus_boot.c` |
 | `merakiplus_snd` | sound helper (ARMv7, dynamic against the display's glibc 2.28; `dlopen`s the display's own `libmi_*.so` at run time). Installed into each release directory, next to `audio/` | `src/merakiplus_snd.c` |
 | `switcher` | gesture switcher daemon (center-hold 5 s → stock to Meraki+), only with `--gesture` | `boot/switcher.c` |
@@ -19,12 +19,19 @@
 
 ## Provenance of the ARM binaries
 
-**Unreleased (2026-11-26, grind size ruler on the GRIND page):** `merakiplus` (`da51e110…`), `merakiplus_sim_arm` and
-the two host SIM builds were rebuilt with the official zig 0.17.1 from the source on this branch. The version string is still
-`V6.24`: the release version is assigned later, in a release PR. The change is display-only and read-only. The GRIND page shows the
-grinder's measured grind size (word 37, already polled) on a ruler, and the HOME grind stat is renamed SIZE / GRAD. No UART
-frame, frame-policy rule or guard changed, and the grinder calibration is never written. `merakiplus_boot`, `merakiplus_snd`,
-`switcher`, `tinj_hold`, `keyinj`, `grab_shim.so` and `audio/` are byte-identical to v6.24. **Not yet verified on a machine.**
+**v6.25 (2026-11-26, grind size ruler + bean container message):** `merakiplus` (`ac0fa84c…`), `merakiplus_sim_arm`
+and the two host SIM builds were rebuilt from the v6.25 source with the official zig 0.17.1. Both changes are display-only
+and read-only: the GRIND page shows the grinder's measured grind size (word 37, already polled) on a ruler mirrored like
+the physical dial (FINE right, COARSE left), the HOME grind stat is SIZE / GRAD, and a lifted bean container (work_sta
+word 33 bit 8) shows *BEAN CONTAINER MISSING* / *MANGLER* instead of *ASLEEP*. No UART frame, frame-policy rule or guard
+changed, and the grinder calibration is never written. `merakiplus_boot`, `merakiplus_snd`, `switcher`, `tinj_hold`,
+`keyinj`, `grab_shim.so` and `audio/` are byte-identical to v6.24. **Hardware-verified on a Gen 1 machine** with the
+same source under the previous version string (`V6.24`; the release build differs only in the version string): the
+ruler tab read 1 / 15 / 30 = word 37 with the dial at FINE, middle and COARSE (scale 1..30 on that machine), the
+mirrored orientation was confirmed against the physical dial, HOME showed *GRAD* during a grind, and lifting the bean
+container showed *MANGLER* with the new subline, putting it back *KLAR*; 0 CRC errors, no error words, `config.json`
+byte-identical. Also covered by the UI self-test (EN + DA), `sim/selftest.py` and the full simulator E2E suite (EN + DA)
+incl. `grind_size_ruler` and `bean_container_missing`. The MQTT / Home Assistant work is not part of this release.
 
 **v6.24 (2026-11-25, water tank messages — issue #1):** `merakiplus` (`9182753f…`), `merakiplus_sim_arm` and the two
 host SIM builds were rebuilt from the v6.24 source with the official zig 0.17.1. The change is display-only: three
@@ -143,14 +150,14 @@ self-test and the simulator E2E suite.
 
 | File | md5 (this repo) | Built with |
 |---|---|---|
-| `merakiplus` (unreleased, `V6.24` string) | `51a68b8ec5b65340fe73f1b63d5553f3` | `./build.sh` → `build/merakiplus` |
-| `merakiplus_sim_arm` (unreleased, `V6.24` string) | `5b7904c93acb7d933fb536f65e4b9af2` | `./build.sh` → `build/merakiplus_sim_arm` |
+| `merakiplus` (V6.25) | `ac0fa84c83cd0ebbafc7672948e025a1` | `./build.sh` → `build/merakiplus` |
+| `merakiplus_sim_arm` (V6.25) | `7e0b4f53173496e3497171e4559d22ff` | `./build.sh` → `build/merakiplus_sim_arm` |
 | `merakiplus_snd` (V6.18.1) | `a7659c176b8ef78385b0b612a69e81ca` | `./build.sh` → `build/merakiplus_snd` |
 | `switcher` | `e02a463c16278545c04b8e4022b8369f` | `./build.sh` → `build/switcher` |
 | `tinj_hold` | `e9806fb92e9b8a7e506a34639173c648` | `./build.sh` → `build/tinj_hold` |
 | `keyinj` | `a0cbd4bc2a670abe0e250ec34a193843` | `./build.sh` → `build/keyinj` |
-| `merakiplus_sim-linux-x86_64` (unreleased, `V6.24` string) | `f9af84d37c375ef0619ae264b1881525` | `zig cc -target x86_64-linux-musl -DMERAKIPLUS_SIM -O2 -static -s src/merakiplus.c -lm` |
-| `merakiplus_sim-macos-arm64` (unreleased, `V6.24` string) | `1d85c1752f96f636b4f1626aa6aa6fb2` | `zig cc -DMERAKIPLUS_SIM -O2 -s src/merakiplus.c -lm` (Mach-O builds are not bit-reproducible) |
+| `merakiplus_sim-linux-x86_64` (V6.25) | `1531b1142b13e154591c06b3cdd5e436` | `zig cc -target x86_64-linux-musl -DMERAKIPLUS_SIM -O2 -static -s src/merakiplus.c -lm` |
+| `merakiplus_sim-macos-arm64` (V6.25) | `d49f022589fc10f73cd8d4c23fd5f8a4` | `zig cc -DMERAKIPLUS_SIM -O2 -s src/merakiplus.c -lm` (Mach-O builds are not bit-reproducible) |
 
 The ARM builds above are reproducible: running `./build.sh` on the same sources with the **official**
 zig 0.17.1 release (the ziglang.org tarball CI installs) gives the same md5 on macOS and Linux,
@@ -177,7 +184,7 @@ CI does not rebuild it (no macOS runner needed), it ships exactly what `bin/MD5S
 machine: its source change was comments/self-test text only and compiles to the same `.so` as before.
 Like the earlier verified builds it has only the non-loaded trailer removed (section headers and the
 non-loaded sections after the last loadable segment); every loadable segment is byte-identical to the
-verified build. Since the security hardening (Unreleased) `./build.sh` applies that trim deterministically —
+verified build. Since the security hardening (v6.25) `./build.sh` applies that trim deterministically —
 the file is cut at the end of the last program header's file range and `e_shoff`, `e_shentsize`, `e_shnum`
 and `e_shstrndx` are cleared — so `build/grab_shim.so` equals this file byte for byte (official zig 0.17.1)
 and the drift check and the signing rebuild cover it like every other binary. The bytes did not change.

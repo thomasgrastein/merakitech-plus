@@ -1,7 +1,7 @@
 # Meraki+ — a community UI for the round display of MerakiTech espresso machines
 
 [![CI](https://github.com/thomasgrastein/merakitech-plus/actions/workflows/ci.yml/badge.svg)](https://github.com/thomasgrastein/merakitech-plus/actions/workflows/ci.yml)
-![version](https://img.shields.io/badge/Meraki%2B-v6.24-c9955c)
+![version](https://img.shields.io/badge/Meraki%2B-v6.25-c9955c)
 ![license](https://img.shields.io/badge/license-MIT-blue)
 ![status](https://img.shields.io/badge/status-unofficial%20%C2%B7%20experimental-red)
 
