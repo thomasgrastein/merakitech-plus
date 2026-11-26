@@ -1,0 +1,208 @@
+{
+  "name": "ota_update_consent",
+  "description": "OTA phase 3: SYSTEM > UPDATES with the REAL updater (TEST build) against a local TLS GitHub stand-in (test CA, GitHub's redirect chain, a test-key-signed v6.99). CHECK NOW downloads only the signed manifest (+ notes) and opens the install view; AT NEXT START downloads, verifies and stages it (ota/state pending, the row says READY, no reload); INSTALL NOW then requests the exec-reload and returns to HOME. No controller frame at any point.",
+  "duration_s": 34,
+  "ui_env": {
+    "MERAKIPLUS_UPD_BIN": "{sim}/fixtures/ota/upd_sim.py",
+    "MERAKIPLUS_UPD_SIM_CASE": "ok"
+  },
+  "sandbox_files": {
+    "new_customer/demo_v9": "LAUNCHER STAND-IN (sim)\n",
+    "new_customer/merakiplus/ota/state": "format=1\ncurrent=6.25-aaaaaaaa\nprevious=\npending=\ntries=0\nlast=\nmax_seq=3\n"
+  },
+  "events": [
+    {
+      "t": 2,
+      "target": "ui",
+      "cmd": "page",
+      "name": "updates"
+    },
+    {
+      "t": 3,
+      "target": "runner",
+      "op": "snapshot",
+      "label": "updates-view"
+    },
+    {
+      "t": 4,
+      "target": "ui",
+      "cmd": "touch",
+      "layout": "save",
+      "ms": 90
+    },
+    {
+      "t": 10,
+      "target": "runner",
+      "op": "snapshot",
+      "label": "install-view"
+    },
+    {
+      "t": 11,
+      "target": "ui",
+      "cmd": "touch",
+      "layout": "next_start",
+      "ms": 90
+    },
+    {
+      "t": 19,
+      "target": "runner",
+      "op": "snapshot",
+      "label": "staged"
+    },
+    {
+      "t": 20,
+      "target": "ui",
+      "cmd": "touch",
+      "layout": "install_now",
+      "ms": 90
+    },
+    {
+      "t": 27,
+      "target": "runner",
+      "op": "snapshot",
+      "label": "home-reload"
+    }
+  ],
+  "expect": [
+    {
+      "kind": "page",
+      "t": 3,
+      "window": 0.8,
+      "value": "sys"
+    },
+    {
+      "kind": "state",
+      "path": "shown.x",
+      "t0": 2.5,
+      "t1": 3.5,
+      "equals": "updates"
+    },
+    {
+      "kind": "state",
+      "path": "updates.checked",
+      "t0": 2.5,
+      "t1": 3.5,
+      "equals": false
+    },
+    {
+      "kind": "state",
+      "path": "updates.op",
+      "t0": 4.2,
+      "t1": 10,
+      "equals": "check"
+    },
+    {
+      "kind": "state",
+      "path": "updates.available",
+      "t0": 6,
+      "t1": 10.8,
+      "equals": true
+    },
+    {
+      "kind": "state",
+      "path": "shown.x",
+      "t0": 6,
+      "t1": 10.8,
+      "equals": "install"
+    },
+    {
+      "kind": "state",
+      "path": "updates.version",
+      "t0": 6,
+      "t1": 10.8,
+      "equals": "6.99"
+    },
+    {
+      "kind": "state",
+      "path": "updates.notes",
+      "t0": 6,
+      "t1": 10.8,
+      "contains": "ON-DEVICE UPDATE TEST"
+    },
+    {
+      "kind": "toast",
+      "t": 8,
+      "window": 3,
+      "contains": "V6.99"
+    },
+    {
+      "kind": "state",
+      "path": "updates.op",
+      "t0": 11.2,
+      "t1": 18,
+      "equals": "install"
+    },
+    {
+      "kind": "state",
+      "path": "updates.mode",
+      "t0": 11.2,
+      "t1": 18,
+      "equals": "next"
+    },
+    {
+      "kind": "state",
+      "path": "updates.staged",
+      "t0": 14,
+      "t1": 19.8,
+      "contains": "6.99-"
+    },
+    {
+      "kind": "state",
+      "path": "updates.summary",
+      "t0": 14,
+      "t1": 19.8,
+      "contains": "V6.99"
+    },
+    {
+      "kind": "state",
+      "path": "updates.reload",
+      "t0": 14,
+      "t1": 19.8,
+      "equals": false,
+      "mode": "all"
+    },
+    {
+      "kind": "toast",
+      "t": 16,
+      "window": 3.5,
+      "contains": "V6.99"
+    },
+    {
+      "kind": "state",
+      "path": "updates.reload",
+      "t0": 22,
+      "t1": 30,
+      "equals": true
+    },
+    {
+      "kind": "state",
+      "path": "updates.done",
+      "t0": 22,
+      "t1": 30,
+      "equals": "install"
+    },
+    {
+      "kind": "page",
+      "t": 27,
+      "window": 2,
+      "value": "home"
+    },
+    {
+      "kind": "toast",
+      "t": 23,
+      "window": 3,
+      "contains": "V6.99"
+    },
+    {
+      "kind": "sim_log",
+      "assert": "no_writes_between",
+      "t0": 1,
+      "t1": 32,
+      "except_subs": [
+        0,
+        1,
+        112
+      ]
+    }
+  ]
+}

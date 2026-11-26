@@ -355,7 +355,8 @@ class ScenarioRun:
         })
         # v6.16 (additive): a scenario may set extra UI environment variables, e.g.
         # MERAKIPLUS_SIM_CLOCK (the UI's UTC wall clock). Not used by older scenarios.
-        env.update({str(k): str(v) for k, v in (self.scen.get("ui_env") or {}).items()})
+        # (additive, OTA phase 3) "{sim}" in a value = this directory (e.g. a helper under sim/fixtures/)
+        env.update({str(k): str(v).replace("{sim}", str(HERE)) for k, v in (self.scen.get("ui_env") or {}).items()})
         if self.ui_bin:
             self.client_kind = "sim-build"
             cmd = [str(self.ui_bin)]

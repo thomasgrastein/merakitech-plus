@@ -15,8 +15,8 @@ import merakiplus as mp     # noqa: E402
 import sign_release as sr   # noqa: E402
 
 # the release assets of a published version (.github/workflows/release.yml `files` + the two sum files)
-BIN_ASSETS = ["merakiplus", "merakiplus_snd", "merakiplus_boot", "switcher", "grab_shim.so", "merakiplus_sim_arm",
-              "merakiplus_sim-linux-x86_64", "merakiplus_sim-macos-arm64"]
+BIN_ASSETS = ["merakiplus", "merakiplus_snd", "merakiplus_upd", "merakiplus_boot", "switcher", "grab_shim.so",
+              "merakiplus_sim_arm", "merakiplus_sim-linux-x86_64", "merakiplus_sim-macos-arm64"]
 AUDIO_ASSETS = sorted(mp.AUDIO_MD5)
 
 
@@ -47,7 +47,9 @@ def make_dist(d, tweak=None):
             shutil.copy(ROOT / "build" / n, d / n)
     for n in AUDIO_ASSETS:
         shutil.copy(ROOT / "audio" / n, d / n)
-    files = [n for n in BIN_ASSETS + AUDIO_ASSETS if (d / n).is_file()]
+    (d / "notes.txt").write_text("Signed test release\n")          # OTA phase 3: the display's ultrashort notes
+    shutil.copy(ROOT / sr.NOTICES, d / sr.NOTICES)                  # the third-party notices (release.yml)
+    files = [n for n in BIN_ASSETS + AUDIO_ASSETS + ["notes.txt", sr.NOTICES] if (d / n).is_file()]
     if tweak:
         tweak(d)
     (d / "MD5SUMS").write_text("".join(f"{hashlib.md5((d / n).read_bytes()).hexdigest()}  {n}\n" for n in files))

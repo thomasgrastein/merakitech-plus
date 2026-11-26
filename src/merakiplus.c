@@ -1291,7 +1291,7 @@ static void net_start(ms_t now,int enable){
  *   the same numbers/punctuation for numbers and units; only characters the stroke font has; no
  *   generation name; the identifier "merakiplus" only inside code spans (LC … UC) or on the console. */
 enum { LANG_EN=0, LANG_DA, NLANG };
-enum { K0=0, KT, KSUB, KLAB, KCHIP, KBTN, KBTNS, KTITLE, KPSUB, KSPL, KDL, KDV, KDF, KNOTE, KF1, KF2, KXSUB, KST, KCON, NKLASS };
+enum { K0=0, KT, KSUB, KLAB, KCHIP, KBTN, KBTNS, KTITLE, KPSUB, KSPL, KDL, KDV, KDF, KNOTE, KF1, KF2, KXSUB, KST, KCON, KBTNW, NKLASS };   /* KBTNW (OTA phase 3): a wide button (the UPDATES install view) */
 #define STR_TABLE(X) \
  X(TX_NONE, K0, "", "") \
  X(TX_U_G, K0, "G", "G") \
@@ -1631,6 +1631,61 @@ enum { K0=0, KT, KSUB, KLAB, KCHIP, KBTN, KBTNS, KTITLE, KPSUB, KSPL, KDL, KDV, 
  X(TX_OTA_VENDOR, K0, "VENDOR UPDATE · RUN INSTALL", "PRODUCENT-OPD. · KØR INSTALL") \
  X(TX_T_UPD_VENDOR, KT, "VENDOR UPDATE FOUND · RUN INSTALL", "PRODUCENT-OPD. · KØR INSTALL") \
  X(TX_T_UPD_ROLLED, KT, "%s FAILED · BACK ON %s", "%s FEJLEDE · TILBAGE PÅ %s") \
+ /* OTA phase 3 (docs/ota-plan.md §8.2): SYSTEM › UPDATES — the entry row, the UPDATES view, the install view, toasts */ \
+ X(TX_UPD_ROW, K0, "UPDATES", "OPDATERINGER") \
+ X(TX_UPD_S_CHECKING, K0, "CHECKING", "TJEKKER") \
+ X(TX_UPD_S_AVAIL, K0, "%s NEW", "%s NY") \
+ X(TX_UPD_S_READY, K0, "%s READY", "%s KLAR") \
+ X(TX_UPD_S_LOADING, K0, "%d %%", "%d %%") \
+ X(TX_UPD_TITLE, K0, "UPDATES", "OPDATERINGER") \
+ X(TX_UPD_H_CHECKING, K0, "CHECKING", "TJEKKER") \
+ X(TX_UPD_H_CURRENT, K0, "UP TO DATE", "OPDATERET") \
+ X(TX_UPD_H_NEW, K0, "%s NEW", "%s NY") \
+ X(TX_UPD_NEVER, KST, "NOT CHECKED SINCE START", "IKKE TJEKKET SIDEN START") \
+ X(TX_UPD_LAST, KST, "LAST CHECK %s · %s", "SENESTE TJEK %s · %s") \
+ X(TX_UPD_R_CURRENT, K0, "UP TO DATE", "OPDATERET") \
+ X(TX_UPD_R_NONE, K0, "NO SIGNED RELEASE", "INGEN SIGNERET UDGIVELSE") \
+ X(TX_UPD_R_AVAIL, K0, "%s AVAILABLE", "%s ER NY") \
+ X(TX_UPD_R_FAIL, K0, "FAILED", "FEJLEDE") \
+ X(TX_UPD_CONSENT, KNOTE, "ONLY WHEN YOU TAP · DOWNLOADS NOTHING", "KUN NÅR DU TRYKKER · HENTER INTET") \
+ X(TX_UPD_F1, KF1, "NOTHING ABOUT YOU IS SENT", "INTET OM DIG SENDES") \
+ X(TX_UPD_F2, KF2, "SIGNED RELEASES ONLY", "KUN SIGNEREDE UDGIVELSER") \
+ X(TX_UPD_B_CHECK, KBTN, "CHECK NOW", "TJEK NU") \
+ X(TX_UPD_B_SHOW, KBTN, "SHOW", "VIS") \
+ X(TX_UPD_I_TITLE, K0, "%s AVAILABLE", "%s TILGÆNGELIG") \
+ X(TX_UPD_I_SUB, K0, "INSTALLED %s", "INSTALLERET %s") \
+ X(TX_UPD_I_NONOTES, KNOTE, "NOTES: SEE THE RELEASE ON GITHUB", "NOTER: SE UDGIVELSEN PÅ GITHUB") \
+ X(TX_UPD_I_STATUS, KST, "DOWNLOADS ONLY AFTER YOUR CHOICE", "HENTER FØRST NÅR DU HAR VALGT") \
+ X(TX_UPD_I_STAGED, KST, "DOWNLOADED · STARTS AT NEXT START", "HENTET · STARTER VED NÆSTE START") \
+ X(TX_UPD_I_NOTE, KNOTE, "INSTALLS ONLY WHILE THE MACHINE IS IDLE", "INSTALLERES KUN NÅR MASKINEN ER LEDIG") \
+ X(TX_UPD_I_F1, KF1, "SIGNATURE CHECKED FIRST", "SIGNATUREN TJEKKES FØRST") \
+ X(TX_UPD_I_F2, KF2, "A FAILED UPDATE ROLLS BACK", "FEJL RULLES SELV TILBAGE") \
+ X(TX_UPD_B_NEXT, KBTNW, "AT NEXT START", "VED NÆSTE START") \
+ X(TX_UPD_B_NOW, KBTNW, "INSTALL NOW", "INSTALLER NU") \
+ X(TX_UPD_P_DL, KST, "DOWNLOADING %d %%", "HENTER %d %%") \
+ X(TX_UPD_P_VERIFY, KST, "CHECKING THE SIGNATURE", "TJEKKER SIGNATUREN") \
+ X(TX_UPD_P_STAGE, KST, "SAVING THE NEW VERSION", "GEMMER DEN NYE VERSION") \
+ X(TX_UPD_P_CONNECT, KST, "CONNECTING TO GITHUB", "FORBINDER TIL GITHUB") \
+ X(TX_UPD_L_NOHELPER, KNOTE, "UPDATER MISSING · USE A COMPUTER", "OPDATERER MANGLER · BRUG EN COMPUTER") \
+ X(TX_UPD_L_LAUNCHER, KNOTE, "NEEDS AN INSTALL FROM A COMPUTER", "KRÆVER INSTALLATION FRA COMPUTER") \
+ X(TX_UPD_L_TRIAL, KNOTE, "THIS VERSION IS ON TRIAL · TRY LATER", "DENNE VERSION ER PÅ PRØVE · PRØV SENERE") \
+ X(TX_T_UPD_NONE, KT, "UP TO DATE", "OPDATERET") \
+ X(TX_T_UPD_NOREL, KT, "NO SIGNED RELEASE FOUND", "INGEN SIGNERET UDGIVELSE") \
+ X(TX_T_UPD_AVAIL, KT, "%s AVAILABLE", "%s TILGÆNGELIG") \
+ X(TX_T_UPD_BUSY, KT, "NOT WHILE THE MACHINE IS BUSY", "IKKE MENS MASKINEN ARBEJDER") \
+ X(TX_T_UPD_RUNNING, KT, "UPDATE ALREADY RUNNING", "OPDATERING KØRER ALLEREDE") \
+ X(TX_T_UPD_NET, KT, "NO CONNECTION TO GITHUB", "INGEN FORBINDELSE TIL GITHUB") \
+ X(TX_T_UPD_TLS, KT, "SECURE CONNECTION FAILED", "SIKKER FORBINDELSE FEJLEDE") \
+ X(TX_T_UPD_SIG, KT, "UPDATE REJECTED: SIGNATURE", "OPDATERING AFVIST: SIGNATUR") \
+ X(TX_T_UPD_HASH, KT, "DOWNLOAD DAMAGED · TRY AGAIN", "DOWNLOAD BESKADIGET · PRØV IGEN") \
+ X(TX_T_UPD_SPACE, KT, "NOT ENOUGH SPACE", "IKKE NOK PLADS") \
+ X(TX_T_UPD_OLDER, KT, "OLDER VERSION REFUSED", "ÆLDRE VERSION AFVIST") \
+ X(TX_T_UPD_LAUNCHER, KT, "NEEDS INSTALL FROM A COMPUTER", "KRÆVER INSTALL FRA COMPUTER") \
+ X(TX_T_UPD_TRIAL, KT, "A TRIAL IS RUNNING · TRY LATER", "EN PRØVE KØRER · PRØV SENERE") \
+ X(TX_T_UPD_CHANGED, KT, "NEW RELEASE · CHECK AGAIN", "NY UDGIVELSE · TJEK IGEN") \
+ X(TX_T_UPD_FAIL, KT, "UPDATE FAILED", "OPDATERING FEJLEDE") \
+ X(TX_T_UPD_NOW, KT, "STARTING %s", "STARTER %s") \
+ X(TX_T_UPD_NEXT, KT, "%s STARTS AT NEXT START", "%s STARTER VED NÆSTE START") \
  X(TX_DV_MISSING, KDV, "MISSING", "MANGLER") \
  X(TX_DV_FLAG_YES, KDV, "EXISTS", "FINDES") \
  X(TX_DV_FLAG_NO, KDV, "NOT PRESENT", "FINDES IKKE") \
@@ -2001,7 +2056,7 @@ static void swlog_scan(void){
 #define HEALTHY_RUN_MS  60000                        /* healthy = running >= 60 s ... */
 #define HEALTHY_LINK_MS 30000                        /* ... with the controller answering for the last >= 30 s without a gap */
 static struct {
-    char dir[320], name[64], note[64], cur[64], last[96];
+    char dir[320], name[64], note[64], cur[64], last[96], pend[64];
     int trial, fallback, vendor, st_ok, marked, toasted;
     ms_t t0, link0, t_reload;
 } ota={.link0=-1};
@@ -2017,12 +2072,13 @@ static int ota_file_has(const char*path,const char*needle){
     return memmem(b,(size_t)n,needle,strlen(needle))!=NULL;
 }
 static void ota_read_state(void){
-    char b[2048]; ota.st_ok=0; ota.cur[0]=ota.last[0]=0;
+    char b[2048]; ota.st_ok=0; ota.cur[0]=ota.last[0]=ota.pend[0]=0;
     int fd=open(rp(OTA_STATE),O_RDONLY); if(fd<0) return; int n=(int)read(fd,b,sizeof b-1); close(fd); if(n<=0) return; b[n]=0;
     if(!strstr(b,"format=1\n")) return;
     for(char*l=b;l&&*l;){ char*e=strchr(l,'\n'); if(e)*e=0;
         if(!strncmp(l,"current=",8)) snprintf(ota.cur,sizeof ota.cur,"%s",l+8);
         else if(!strncmp(l,"last=",5)) snprintf(ota.last,sizeof ota.last,"%s",l+5);
+        else if(!strncmp(l,"pending=",8)) snprintf(ota.pend,sizeof ota.pend,"%s",l+8);
         l=e?e+1:NULL; }
     ota.st_ok=1;
 }
@@ -3816,7 +3872,7 @@ enum { V_SPLASH=0, V_MAIN, V_DETAIL, V_SYS, V_BYE, V_OFF };   /* v6.14: V_OFF = 
  * the settings lived in three lists that followed the spec's tiers, not the activity they belong to. */
 enum { PG_HOME=0, PG_GRIND, PG_BREW, PG_WATER, PG_STEAM, PG_SYS, PG_DIAG, NPAGE };
 #define PG_T0 PG_GRIND     /* first list page (page = PG_T0 + SET[].tier) */
-enum { T_NONE=0, T_ACT0, T_ACT1, T_ACT2, T_ACT3, T_STOP, T_MINUS, T_PLUS, T_SAVE, T_CANCEL, T_START, T_DIAG, T_GRAPH, T_PINFO, T_GEAR, T_BACK, T_STOPS, T_STEAMH, T_ROW0=32 };   /* v6.11: T_GEAR (HOME -> SYSTEM), T_BACK (close chevron); v6.17: T_START (a feature page's HOLD TO START), T_DIAG (HOME's error/offline hint -> DIAGNOSTICS); v6.20: T_STEAMH (HOME's HOLD · STEAM during a brew) */
+enum { T_NONE=0, T_ACT0, T_ACT1, T_ACT2, T_ACT3, T_STOP, T_MINUS, T_PLUS, T_SAVE, T_CANCEL, T_START, T_DIAG, T_GRAPH, T_PINFO, T_GEAR, T_BACK, T_STOPS, T_STEAMH, T_ALT, T_ROW0=32 };   /* v6.11: T_GEAR (HOME -> SYSTEM), T_BACK (close chevron); v6.17: T_START (a feature page's HOLD TO START), T_DIAG (HOME's error/offline hint -> DIAGNOSTICS); v6.20: T_STEAMH (HOME's HOLD · STEAM during a brew) */
 static int pinfo_hit(int x,int y);   /* v6.10: tap on the chart / BAR field -> toast w. the basis for ≈BAR (defined at draw_chart) */
 static int diag_hint_shown(void);    /* v6.17: HOME's error/offline hint is on screen (the chart field is empty) -> it is the tap target for DIAGNOSTICS */
 #define SPLASH_MS 1500
@@ -3865,7 +3921,7 @@ static int wsrc_tick(ms_t now){
 }
 static struct { int active,stage,idx,val,rollback; long seq; } sav;
 /* v6.2: system actions. X_BOOTUI + X_SWITCH are rows at the bottom of SYSTEM; X_EXIT is the exit reminder */
-enum { X_BOOTUI=0, X_SWITCH, X_EXIT };
+enum { X_BOOTUI=0, X_SWITCH, X_EXIT, X_UPD, X_UPDI };   /* OTA phase 3: X_UPD = the UPDATES view (CHECK NOW), X_UPDI = the install view (notes, AT NEXT START / INSTALL NOW) */
 static int xsel=-1, x_edit=0, x_orig=0, x_from_switch=0, x_pending=0, bye_mode=0;
 static int sw_sim=0;       /* preview only: SWITCH NOW starts no process */
 /* device hooks for BOOT.md §9.2 step 1: release UART/touch/fb BEFORE stock is started; reacquire them on failure */
@@ -3887,7 +3943,7 @@ static void toast_show(const char*m,uint32_t col,ms_t now){
  * Every setting of SET[] is in exactly one of the two tables — except the WATER SENSOR (read-only word 40), which the WATER page shows
  * as its live line instead of as a row that looks like a setting (the selftest checks both). */
 enum { SEC_DISPLAY=0, SEC_CLOCK, SEC_SCHED, SEC_STOCK, NSEC };
-enum { RK_SET=0, RK_SEC, RK_X, RK_DIAG };
+enum { RK_SET=0, RK_SEC, RK_X, RK_DIAG, RK_UPD };   /* RK_UPD (OTA phase 3): the UPDATES entry, after DIAGNOSTICS */
 typedef struct { signed char kind, a; } Row;      /* a: SET[] index / section / X_BOOTUI|X_SWITCH / 0 */
 #define ROW_MAX 20
 #define RX(x) (-2-(x))                            /* a system action inside SEC_ROWS */
@@ -3917,6 +3973,7 @@ static int rows_get(int pg,Row*r){
             if(sc==sec_open) for(const signed char*p=SEC_ROWS[sc];*p!=-1;p++){ if(*p<-1){ r[n].kind=RK_X; r[n++].a=(signed char)(-2-*p); } else { r[n].kind=RK_SET; r[n++].a=*p; } }
         }
         r[n].kind=RK_DIAG; r[n++].a=0;
+        r[n].kind=RK_UPD; r[n++].a=0;                  /* OTA phase 3: below DIAGNOSTICS, so the five v6.17 rows stay where they were */
     }
     return n;
 }
@@ -4132,7 +4189,8 @@ static void detail_close(ms_t now){
     memcpy(snapB,canvas,(size_t)W*H*4); fade_to(now,200);
 }
 /* ---- v6.2: system actions (BOOT UI, SWITCH TO ORIGINAL NOW, exit reminder) ---- */
-static int sys_locked(void){ return xsel==X_BOOTUI? bs.lock!=BL_OK : (xsel==X_SWITCH? switch_locked() : 0); }
+static int upd_lock_tx(int install);
+static int sys_locked(void){ return xsel==X_BOOTUI? bs.lock!=BL_OK : (xsel==X_SWITCH? switch_locked() : (xsel==X_UPD||xsel==X_UPDI? upd_lock_tx(xsel==X_UPDI)!=0 : 0)); }
 static void boot_poll(ms_t now){ boot_refresh(); bs.t=now; x_pending=restart_pending(); }
 static void sys_open(int x,ms_t now){
     boot_poll(now);
@@ -4149,6 +4207,160 @@ static const char* switch_guard(ms_t now){
     if(phase_active(phase_raw(now))) return TR(TX_T_WAIT_ACT);
     if(wq_busy()||sav.active||act.pending!=ACT_NONE) return TR(TX_G_WAIT);
     return NULL;
+}
+/* ================= OTA phase 3: SYSTEM › UPDATES (docs/ota-plan.md §8, §5.5) =================
+ * The UI never touches the network. A tap on CHECK NOW starts the updater (merakiplus_upd, shipped in the same release
+ * directory) as a child process: `check` downloads and verifies only the signed manifest (+ notes) and writes nothing on
+ * flash. The download happens only after the user picks AT NEXT START or INSTALL NOW on the install view (`install`):
+ * the helper verifies the signature before any asset, stages the release and writes pending=<release>. AT NEXT START:
+ * the launcher starts the trial at the next power-on. INSTALL NOW: the exec-reload (§5.5) runs as soon as the machine is
+ * idle — the same code path as an installer update. The IPC is read-only for the UI: the helper replaces the small
+ * status file /tmp/merakiplus_upd.status atomically; the UI reads it and reaps the child with waitpid (no signals —
+ * a hung helper ends by its own deadlines). Default OFF: without a tap nothing is ever contacted. */
+#define UPD_STATUS "/tmp/merakiplus_upd.status"
+#define UPD_BTN_W 168
+enum { UO_NONE=0, UO_CHECK, UO_INSTALL };
+enum { UM_NONE=0, UM_NEXT, UM_NOW };
+static struct {
+    int pid, op, mode, done_op, ok, reload;
+    ms_t t_poll;
+    int64_t t_check;                               /* wall clock (clk_utc) of the last finished check; 0 = none since start */
+    char result[16], error[16], phase[16], version[16], name[64], blocked[16], msg[160], notes[4][64];
+    int pct;
+} upd;
+static const char* upd_helper(void){
+    static char b[360];
+#ifndef DEVICE_RT
+    const char*e=getenv("MERAKIPLUS_UPD_BIN"); if(e&&*e){ snprintf(b,sizeof b,"%s",e); return b; }   /* SIM / selftest: the TEST build or a fake */
+#endif
+    snprintf(b,sizeof b,"%s/merakiplus_upd",ota.dir[0]?ota.dir:OTA_DIR); return b;
+}
+static int upd_have(void){ return access(upd_helper(),X_OK)==0; }
+static int upd_busy(void){ return upd.pid>0; }
+static int upd_avail(void){ return !strcmp(upd.result,"available")&&upd.version[0]; }
+/* a release the helper staged and the launcher has not started yet (state pending, not the running release) */
+static int upd_staged(void){ return ota.pend[0]&&strcmp(ota.pend,ota.name); }
+/* the install view is not possible (yet): helper missing, no launcher in slot B, this release on trial, the release needs another launcher */
+static int upd_lock_tx(int install){
+    if(!upd_have()) return TX_UPD_L_NOHELPER;
+    if(!install) return 0;
+#ifdef DEVICE_RT
+    if(!ota_file_has(SLOT_B_EXE,OTA_LMARK)) return TX_UPD_L_LAUNCHER;
+#endif
+    if(!strcmp(upd.blocked,"launcher")) return TX_UPD_L_LAUNCHER;
+    if(ota.trial&&!ota.marked) return TX_UPD_L_TRIAL;
+    return 0;
+}
+static void upd_read_status(void){
+    char b[2048]; int fd=open(rp(UPD_STATUS),O_RDONLY); if(fd<0) return;
+    int n=(int)read(fd,b,sizeof b-1); close(fd); if(n<=0) return; b[n]=0;
+    for(char*l=b;l&&*l;){ char*e=strchr(l,'\n'); if(e) *e=0; char*v=strchr(l,'=');
+        if(v){ *v++=0;
+#define UF(k,f) if(!strcmp(l,k)) snprintf(upd.f,sizeof upd.f,"%s",v)
+            UF("result",result); else UF("error",error); else UF("phase",phase); else UF("version",version); else UF("name",name);
+            else UF("blocked",blocked); else UF("msg",msg); else UF("notes1",notes[0]); else UF("notes2",notes[1]); else UF("notes3",notes[2]);
+            else UF("notes4",notes[3]); else if(!strcmp(l,"pct")) upd.pct=clampi(atoi(v),0,100);
+#undef UF
+        }
+        l=e?e+1:NULL; }
+}
+/* start the helper: stdio -> /dev/null, no inherited descriptor (UART, fb, touch grab), own process group; never signalled */
+static int upd_spawn(char*const argv[]){
+    unlink(rp(UPD_STATUS));
+    fflush(stdout); fflush(stderr);
+    pid_t c=fork(); if(c<0) return -1;
+    if(c==0){
+        setpgid(0,0);
+        int nul=open("/dev/null",O_RDWR); if(nul>=0){ dup2(nul,0); dup2(nul,1); dup2(nul,2); }
+        for(int fd=3;fd<1024;fd++) close(fd);
+        signal(SIGINT,SIG_DFL); signal(SIGTERM,SIG_DFL); signal(SIGPIPE,SIG_DFL);
+        execv(argv[0],argv);
+        _exit(127);
+    }
+    return (int)c;
+}
+static int upd_start(int op,int mode,ms_t now){
+    if(upd_busy()){ toast_show(TR(TX_T_UPD_RUNNING),C_TXT,now); return 0; }
+    const char*g=switch_guard(now); if(g){ toast_show(TR(TX_T_UPD_BUSY),C_WARN,now); return 0; }   /* never during an activity */
+    if(op==UO_INSTALL&&!upd_avail()&&!upd_staged()) return 0;
+    char st[400],h[360],ver[24]; snprintf(st,sizeof st,"%s",rp(UPD_STATUS)); snprintf(h,sizeof h,"%s",upd_helper());
+    snprintf(ver,sizeof ver,"%s",upd.version[0]?upd.version:"");
+    if(op==UO_INSTALL&&!ver[0]){ size_t l=strcspn(ota.pend,"-"); snprintf(ver,sizeof ver,"%.*s",(int)(l<20?l:20),ota.pend); }
+    char*av[10]; int k=0; av[k++]=h; av[k++]=(char*)(op==UO_CHECK?"check":"install"); av[k++]=(char*)"--status"; av[k++]=st;
+    if(op==UO_INSTALL){ av[k++]=(char*)"--version"; av[k++]=ver; if(ota.name[0]){ av[k++]=(char*)"--running"; av[k++]=ota.name; } }
+    av[k]=NULL;
+    int pid=upd_spawn(av);
+    if(pid<=0){ toast_show(TR(TX_T_UPD_FAIL),C_ERR,now); return 0; }
+    upd.pid=pid; upd.op=op; upd.mode=mode; upd.t_poll=now; upd.pct=0; upd.phase[0]=upd.error[0]=upd.msg[0]=0;
+    if(op==UO_CHECK){ upd.result[0]=upd.blocked[0]=0; memset(upd.notes,0,sizeof upd.notes); }
+    boot_log("UPDATES: %s started by the user (pid %d)%s%s",op==UO_CHECK?"check":"install",pid,op==UO_INSTALL?(mode==UM_NOW?" — INSTALL NOW v":" — AT NEXT START v"):"",op==UO_INSTALL?ver:"");
+    static_dirty=1; return 1;
+}
+static int upd_err_tx(const char*e){
+    static const struct { const char*k; short tx; } M[]={
+        {"tls",TX_T_UPD_TLS},{"signature",TX_T_UPD_SIG},{"format",TX_T_UPD_SIG},{"older",TX_T_UPD_OLDER},{"asset",TX_T_UPD_HASH},
+        {"truncated",TX_T_UPD_HASH},{"limit",TX_T_UPD_HASH},{"space",TX_T_UPD_SPACE},{"launcher",TX_T_UPD_LAUNCHER},{"trial",TX_T_UPD_TRIAL},
+        {"changed",TX_T_UPD_CHANGED},{"busy",TX_T_UPD_RUNNING},{"io",TX_T_UPD_FAIL},
+        {"net",TX_T_UPD_NET},{"dns",TX_T_UPD_NET},{"timeout",TX_T_UPD_NET},{"http",TX_T_UPD_NET},{"notfound",TX_T_UPD_NET},{"redirect",TX_T_UPD_NET} };
+    for(unsigned i=0;i<sizeof M/sizeof M[0];i++) if(!strcmp(e,M[i].k)) return M[i].tx;
+    return TX_T_UPD_FAIL;
+}
+static void upd_finished(int rc,ms_t now){
+    upd_read_status();
+    int op=upd.op; char v[24],m[96]; snprintf(v,sizeof v,"V%s",upd.version);
+    upd.pid=0; upd.op=UO_NONE; upd.done_op=op; static_dirty=1;
+    upd.ok=rc==0&&(!strcmp(upd.result,"available")||!strcmp(upd.result,"current")||!strcmp(upd.result,"none")||!strcmp(upd.result,"staged"));
+    if(!upd.ok&&!upd.error[0]) snprintf(upd.error,sizeof upd.error,"%s",rc==127?"io":"net");   /* died before writing a result */
+    boot_log("UPDATES: %s finished rc=%d result=%s error=%s %s",op==UO_CHECK?"check":"install",rc,upd.result,upd.error,upd.msg);
+    if(op==UO_CHECK){
+        upd.t_check=clk_utc();
+        if(!upd.ok){ toast_show(TR(upd_err_tx(upd.error)),C_WARN,now); return; }
+        if(upd_avail()){ snprintf(m,sizeof m,TR(TX_T_UPD_AVAIL),v); toast_show(m,C_ACC,now); if(view==V_SYS&&xsel==X_UPD) sys_open(X_UPDI,now); }
+        else toast_show(TR(!strcmp(upd.result,"none")?TX_T_UPD_NOREL:TX_T_UPD_NONE),C_OK,now);
+        return;
+    }
+    ota_read_state();                                 /* pending=<new> (written by the helper) */
+    if(!upd.ok||strcmp(upd.result,"staged")){ toast_show(TR(upd_err_tx(upd.error[0]?upd.error:"io")),C_WARN,now); upd.mode=UM_NONE; return; }
+    if(upd.mode==UM_NOW){                             /* INSTALL NOW: back to HOME; ota_reload_step() execs the launcher once idle */
+        snprintf(m,sizeof m,TR(TX_T_UPD_NOW),v); toast_show(m,C_OK,now);
+        upd.reload=1;
+        if(view==V_SYS){ page=PG_HOME; act.gkind=-1; sys_close(now); }       /* fade straight to HOME (the idle gate's page) */
+        else if(page!=PG_HOME) go_page(PG_HOME,-1,now);
+    } else { snprintf(m,sizeof m,TR(TX_T_UPD_NEXT),v); toast_show(m,C_OK,now); }
+    upd.mode=UM_NONE;
+}
+static void upd_step(ms_t now){
+    if(upd.pid<=0||now-upd.t_poll<250) return;
+    upd.t_poll=now;
+    int st=0; pid_t r=waitpid(upd.pid,&st,WNOHANG);
+    if(r==0){ char ph[16]; int pc=upd.pct; snprintf(ph,sizeof ph,"%s",upd.phase); upd_read_status(); if(pc!=upd.pct||strcmp(ph,upd.phase)) static_dirty=1; return; }
+    upd_finished(r==upd.pid&&WIFEXITED(st)?WEXITSTATUS(st):-1,now);
+}
+/* the entry row's value: what changed most recently, in a few characters */
+static uint32_t upd_summary(char*o,size_t n){
+    char v[24];
+    if(upd_busy()){ if(upd.op==UO_INSTALL&&!strcmp(upd.phase,"download")) snprintf(o,n,TR(TX_UPD_S_LOADING),upd.pct); else snprintf(o,n,"%s",TR(TX_UPD_S_CHECKING)); return C_ACC; }
+    if(upd_staged()){ ota_ver(ota.pend,v,sizeof v); snprintf(o,n,TR(TX_UPD_S_READY),v); return C_ACC; }
+    if(upd_avail()){ snprintf(v,sizeof v,"V%s",upd.version); snprintf(o,n,TR(TX_UPD_S_AVAIL),v); return C_ACC; }
+    snprintf(o,n,"%s",MERAKIPLUS_VERSION); return C_TXT3;          /* "V6.25" */
+}
+/* the result of the last check, for the UPDATES view's status line */
+static void upd_last_text(char*o,size_t n){
+    if(!upd.t_check){ snprintf(o,n,"%s",TR(TX_UPD_NEVER)); return; }
+    struct tm lt; clk_local_at(upd.t_check,&lt); char hm[16],r[64],v[24]; fmt_hm(hm,sizeof hm,lt.tm_hour,lt.tm_min,1);
+    if(!upd.ok) snprintf(r,sizeof r,"%s",TR(TX_UPD_R_FAIL));
+    else if(upd_avail()){ snprintf(v,sizeof v,"V%s",upd.version); snprintf(r,sizeof r,TR(TX_UPD_R_AVAIL),v); }
+    else snprintf(r,sizeof r,"%s",TR(!strcmp(upd.result,"none")?TX_UPD_R_NONE:TX_UPD_R_CURRENT));
+    snprintf(o,n,TR(TX_UPD_LAST),hm,r);
+}
+/* progress of a running helper as a status line (NULL = nothing running) */
+static const char* upd_progress(char*o,size_t n){
+    if(!upd_busy()) return NULL;
+    if(!strcmp(upd.phase,"download")) snprintf(o,n,TR(TX_UPD_P_DL),upd.pct);
+    else if(!strcmp(upd.phase,"verify")||!strcmp(upd.phase,"notes")) snprintf(o,n,"%s",TR(TX_UPD_P_VERIFY));
+    else if(!strcmp(upd.phase,"stage")||!strcmp(upd.phase,"commit")||!strcmp(upd.phase,"space")) snprintf(o,n,"%s",TR(TX_UPD_P_STAGE));
+    else snprintf(o,n,"%s",TR(TX_UPD_P_CONNECT));
+    return o;
 }
 static void bye(int mode){ bye_mode=mode; view=V_BYE; xsel=-1; tr.type=TR_NONE; rip.on=0; toast.dur=0; static_dirty=1; run=0; }   /* the last frame freezes: no ripple/toast */
 /* SWITCH TO ORIGINAL NOW — BOOT.md §9.2, in the order the specification requires:
@@ -4200,6 +4412,10 @@ static void sys_confirm(ms_t now){
         do_switch(now);
     } else if(xsel==X_EXIT){
         if(x_from_switch) do_switch(now); else run=0;
+    } else if(xsel==X_UPD){                          /* CHECK NOW — or, with a result in hand, show it */
+        if(!upd_busy()&&(upd_avail()||upd_staged())) sys_open(X_UPDI,now); else upd_start(UO_CHECK,UM_NONE,now);
+    } else if(xsel==X_UPDI){                         /* INSTALL NOW (the user's consent; the download starts only here or at T_ALT) */
+        upd_start(UO_INSTALL,UM_NOW,now);
     }
 }
 /* v6.8: the REVERT button on HOME has been removed. The same way out exists on SYSTEM: "SWITCH TO ORIGINAL NOW" is, in run.sh
@@ -4266,6 +4482,7 @@ static int hit_test(int x,int y,ms_t now){
     if(view==V_SYS){
         if(sys_locked()){ if(in_r(x,y,170,284,140,64)) return T_CANCEL; return T_NONE; }
         if(xsel==X_BOOTUI){ if(in_c(x,y,84,184,42)) return T_MINUS; if(in_c(x,y,396,184,42)) return T_PLUS; }
+        if(xsel==X_UPDI){ if(in_r(x,y,CX-4-UPD_BTN_W,284,UPD_BTN_W,64)) return T_ALT; if(in_r(x,y,CX+4,284,UPD_BTN_W,64)) return T_SAVE; return T_NONE; }   /* AT NEXT START | INSTALL NOW; back = chevron / swipe */
         if(in_r(x,y,100,284,136,64)) return T_CANCEL;
         if(in_r(x,y,244,284,136,64)) return T_SAVE;
         return T_NONE;
@@ -4332,11 +4549,13 @@ static void activate(int t,ms_t now){
     if(t==T_PINFO){ char b[96]; snprintf(b,sizeof b,TR(TX_T_PINFO),p_anchor_bar(),P_ANCHOR_RAW); toast_show(b,C_TXT,now); return; }   /* v6.10: the basis for ≈BAR */
     if(t==T_CANCEL){ if(view==V_SYS){ sys_close(now); return; } if(!sav.active) detail_close(now); return; }
     if(t==T_SAVE){ if(view==V_SYS){ sys_confirm(now); return; } save_begin(now); return; }
+    if(t==T_ALT){ if(view==V_SYS&&xsel==X_UPDI) upd_start(UO_INSTALL,UM_NEXT,now); return; }   /* OTA phase 3: AT NEXT START */
     if(t>=T_ROW0){
         Row r[ROW_MAX]; int n=rows_get(page,r), k=t-T_ROW0; if(k>=n) return;
         if(r[k].kind==RK_SET) detail_open(r[k].a,now);
         else if(r[k].kind==RK_SEC) sec_toggle(r[k].a);
         else if(r[k].kind==RK_X) sys_open(r[k].a,now);                 /* system action (SYSTEM > STOCK UI) */
+        else if(r[k].kind==RK_UPD) sys_open(X_UPD,now);                /* OTA phase 3: SYSTEM > UPDATES */
         else nav_open(PG_DIAG,now);
         return;
     }
@@ -5476,13 +5695,14 @@ static void draw_list(ms_t now){
     h=hi(h,sv(S_TUNIT));
     if(page==PG_GRIND) h=gs_sig(h,now);                                  /* the grind size ruler */
     int wman=page==PG_WATER&&n==0; if(wman) h=hi(h,100+wd_why());      /* v6.22: the manual-only WATER page */
-    if(page==PG_SYS){ char sm[40]; h=hi(hi(hi(h,bs.flag*8+bs.lock),switch_locked()),switch_mode()); for(int q=0;q<NSEC;q++){ sec_summary(q,sm,sizeof sm); h=hs(h,sm); } h=hi(hs(h,dgs),(int)dgc); }
+    char ups[32]; uint32_t upc=upd_summary(ups,sizeof ups);
+    if(page==PG_SYS){ char sm[40]; h=hi(hi(hi(h,bs.flag*8+bs.lock),switch_locked()),switch_mode()); for(int q=0;q<NSEC;q++){ sec_summary(q,sm,sizeof sm); h=hs(h,sm); } h=hi(hs(h,dgs),(int)dgc); h=hi(hs(h,ups),(int)upc); }
     Rect vr=R(60,LIST_VY0,360,vy1-LIST_VY0);
     if(W_begin(W_LIST,vr,h)){
         char b[40]; int c0=-1,c1=-1;
         for(int k=0;k<n;k++){
             int y=row_y0(page,k)-sc;
-            if(page==PG_SYS&&rw[k].kind!=RK_SEC&&rw[k].kind!=RK_DIAG){ if(c0<0) c0=y; c1=y+ROW_H; }   /* the open section's rows */
+            if(page==PG_SYS&&rw[k].kind!=RK_SEC&&rw[k].kind!=RK_DIAG&&rw[k].kind!=RK_UPD){ if(c0<0) c0=y; c1=y+ROW_H; }   /* the open section's rows */
             if(y+ROW_H<LIST_VY0||y>vy1) continue;
             int pr=(k==prow);
             if(rw[k].kind==RK_SET){
@@ -5513,6 +5733,13 @@ static void draw_list(ms_t now){
                 text_at(94,y+31,sub,F_XS,lock?C_WARN:C_TXT3,255);
                 if(val) text_r(lock?388:372,y+8,val,F_M,lock?C_TXT3:C_ACC,255);
                 if(!lock) text_at(380,y+(val?12:19),">",F_XS,C_TXT3,255);
+            } else if(rw[k].kind==RK_UPD){   /* OTA phase 3: the UPDATES entry w. the version / what is new */
+                rrect_g(72,y,336,ROW_H,16,pr?C_SURF3:C_SURF2,pr?C_SURF2:C_SURF,255);
+                text_at(94,y+18,TR(TX_UPD_ROW),F_S,C_TXT,255);
+                char u[32]; snprintf(u,sizeof u,"%s",ups); int room=366-(94+text_w(TR(TX_UPD_ROW),F_S)+14), uf=text_w(u,F_S)<=room?F_S:F_XS;
+                if(uf==F_XS) fit_text(u,F_XS,room);
+                text_r(366,y+(uf==F_S?18:20),u,uf,upc,255);
+                text_at(380,y+19,">",F_XS,C_TXT3,255);
             } else {                          /* v6.17: the DIAGNOSTICS entry (advanced) w. the machine's status */
                 rrect_g(72,y,336,ROW_H,16,pr?C_SURF3:C_SURF2,pr?C_SURF2:C_SURF,255);
                 text_at(94,y+18,TR(TX_PG_DIAG),F_S,C_TXT,255);
@@ -5656,6 +5883,31 @@ static void sys_text(SysT*t){
             if(bs.sw_pid){ t->l1=TR(TX_Y_BACK_GESTURE1); t->l2=TR(TX_Y_BACK_GESTURE2); }
             else { t->l1=TR(TX_Y_NOSWITCHER); t->c_l1=C_WARN; t->l2=TR(bs.flag?TX_Y_BACK_RESTART:TX_Y_BACK_TELNET); }
         }
+    } else if(xsel==X_UPD){                         /* OTA phase 3: the UPDATES view */
+        static char hv[32],pg[96]; int lk=upd_lock_tx(0);
+        uint32_t c=ota_line(sb,sizeof sb,ro_mode); (void)c;
+        t->title=TR(TX_UPD_TITLE); t->sub=sb; t->ok=TR(TX_UPD_B_CHECK); t->cancel=TR(TX_B_BACK);
+        if(upd_busy()&&upd.op==UO_CHECK) t->hero=TR(TX_UPD_H_CHECKING);
+        else if(upd_staged()){ char v[24]; ota_ver(ota.pend,v,sizeof v); snprintf(hv,sizeof hv,TR(TX_UPD_S_READY),v); t->hero=hv; }
+        else if(upd_avail()){ snprintf(hv,sizeof hv,"V%s",upd.version); snprintf(st,sizeof st,TR(TX_UPD_H_NEW),hv); t->hero=st; snprintf(hv,sizeof hv,"V%s",upd.version); }
+        else if(upd.t_check&&upd.ok) t->hero=TR(TX_UPD_H_CURRENT);
+        else { snprintf(hv,sizeof hv,"%s",MERAKIPLUS_VERSION); t->hero=hv; }
+        if(!upd_busy()&&(upd_avail()||upd_staged())){ char v[24]; if(upd_staged()) ota_ver(ota.pend,v,sizeof v); else snprintf(v,sizeof v,"V%s",upd.version);
+            (void)v; t->ok=TR(TX_UPD_B_SHOW); }
+        if(upd_progress(pg,sizeof pg)){ t->status=pg; t->c_status=C_ACC; }
+        else { static char ls[96]; upd_last_text(ls,sizeof ls); t->status=ls; t->c_status=upd.t_check&&!upd.ok?C_WARN:C_TXT2; }
+        t->note=TR(lk?lk:TX_UPD_CONSENT); t->c_note=lk?C_WARN:C_TXT2;
+        t->l1=TR(TX_UPD_F1); t->l2=TR(TX_UPD_F2);
+    } else if(xsel==X_UPDI){                        /* OTA phase 3: the install view — notes + the user's choice */
+        static char tt[64],pg[96]; char v[24],c[24]; int lk=upd_lock_tx(1);
+        if(upd_avail()) snprintf(v,sizeof v,"V%s",upd.version); else ota_ver(ota.pend,v,sizeof v);
+        snprintf(tt,sizeof tt,TR(TX_UPD_I_TITLE),v); t->title=tt;
+        snprintf(c,sizeof c,"%s",MERAKIPLUS_VERSION); snprintf(sb,sizeof sb,TR(TX_UPD_I_SUB),c); t->sub=sb;
+        t->hero=v; t->ok=TR(TX_UPD_B_NOW);
+        if(upd_progress(pg,sizeof pg)){ t->status=pg; t->c_status=C_ACC; }
+        else { t->status=TR(upd_staged()?TX_UPD_I_STAGED:TX_UPD_I_STATUS); t->c_status=upd_staged()?C_OK:C_TXT2; }
+        t->note=TR(lk?lk:TX_UPD_I_NOTE); t->c_note=lk?C_WARN:C_TXT2;
+        t->l1=TR(TX_UPD_I_F1); t->l2=TR(TX_UPD_I_F2);
     } else {   /* X_EXIT */
         t->title=TR(TX_Y_EXIT_TITLE); t->sub=TR(TX_Y_EXIT_SUB); t->ok=TR(TX_B_EXIT); t->cancel=TR(TX_B_BACK);
         t->note=TR(TX_Y_EXIT_NOTE); t->c_note=C_TXT3;
@@ -5683,6 +5935,15 @@ static void draw_sys(ms_t now){
             text_c(CX,188+9,TR(TX_Y_EXIT_CMD),F_M,C_ACC,255);
             W_end();
         }
+    } else if(xsel==X_UPDI){                        /* OTA phase 3: up to four lines of the signed release notes instead of a hero */
+        uint32_t h=hi(H0,xsel); for(int k=0;k<4;k++) h=hs(h,upd.notes[k]);
+        if(W_begin(W_DHERO,R(60,128,360,92),h)){
+            int nl=0; for(int k=0;k<4;k++) if(upd.notes[k][0]) nl++;
+            if(!nl) text_c(CX,166,TR(TX_UPD_I_NONOTES),F_XS,C_TXT3,255);
+            for(int k=0,y=173-nl*11;k<4;k++){ if(!upd.notes[k][0]) continue; char l[72]; snprintf(l,sizeof l,"%s",upd.notes[k]); fit_text(l,F_XS,340);
+                text_c(CX,y,l,F_XS,k?C_TXT2:C_TXT,255); y+=22; }
+            W_end();
+        }
     } else {
         int f=sys_hero_font(t.hero);
         /* BOOT UI: the hero field must not overlap −/+ (x 46..122 / 358..434) — otherwise a hero redraw erases the button edges */
@@ -5706,13 +5967,31 @@ static void draw_sys(ms_t now){
     }
     if(W_begin(W_DCHG,R(60,224,360,22),hi(hs(H0,t.status?t.status:""),(int)t.c_status))){ if(t.status) text_c(CX,228,t.status,F_XS,t.c_status,255); W_end(); }
     if(W_begin(W_XNOTE,R(40,xsel==X_EXIT?238:250,400,22),hi(hs(H0,t.note),(int)t.c_note))){ text_c(CX,xsel==X_EXIT?242:254,t.note,F_XS,t.c_note,255); W_end(); }
+    if(xsel==X_UPDI&&!lock){                        /* AT NEXT START | INSTALL NOW (wide pills; back = the chevron / a swipe) */
+        int en=!upd_busy(), pa=pressed(T_ALT), ps=pressed(T_SAVE);
+        if(W_begin(W_CANCEL,R(CX-4-UPD_BTN_W,286,UPD_BTN_W,60),hi(hi(hi(H0,pa),en),ui_lang))){
+            if(en) draw_pill_btn(R(CX-4-UPD_BTN_W+4,292,UPD_BTN_W-8,48),TR(TX_UPD_B_NEXT),F_XS,C_SURF3,C_SURF2,C_TXT,pa);
+            else draw_pill_btn(R(CX-4-UPD_BTN_W+4,292,UPD_BTN_W-8,48),TR(TX_UPD_B_NEXT),F_XS,C_SURF2,C_SURF,C_DIS,0);
+            W_end();
+        }
+        if(W_begin(W_SAVE,R(CX+4,286,UPD_BTN_W,60),hi(hi(hi(H0,ps),en),ui_lang))){
+            if(en) draw_pill_btn(R(CX+8,292,UPD_BTN_W-8,48),t.ok,F_XS,rgb(250,204,140),rgb(232,174,100),C_ACCD,ps);
+            else draw_pill_btn(R(CX+8,292,UPD_BTN_W-8,48),t.ok,F_XS,C_SURF2,C_SURF,C_DIS,0);
+            W_end();
+        }
+        if(W_begin(W_XFOOT,R(70,392,340,40),hi(hs(hs(H0,t.l1),t.l2),(int)t.c_l1))){
+            text_c(CX,398,t.l1,F_XS,t.c_l1,255); text_c(CX,416,t.l2,F_XS,C_TXT3,255); W_end();
+        }
+        return;
+    }
     if(W_begin(W_CANCEL,lock?R(170,286,140,60):R(100,286,136,60),hi(hi(H0,pressed(T_CANCEL)),lock))){
         draw_pill_btn(lock?R(178,292,124,48):R(108,292,124,48),t.cancel,F_XS,C_SURF2,C_SURF,C_TXT,pressed(T_CANCEL)); W_end();
     }
     int act_ok=(xsel!=X_BOOTUI)||(x_edit!=x_orig);
+    if(xsel==X_UPD&&upd_busy()) act_ok=0;          /* a check / download is running */
     if(!lock&&W_begin(W_SAVE,R(244,286,136,60),hi(hi(hs(H0,t.ok),pressed(T_SAVE)),act_ok))){
-        if(act_ok) draw_pill_btn(R(248,292,124,48),t.ok,xsel==X_SWITCH?F_XS:F_S,rgb(250,204,140),rgb(232,174,100),C_ACCD,pressed(T_SAVE));
-        else draw_pill_btn(R(248,292,124,48),t.ok,F_S,C_SURF2,C_SURF,C_DIS,0);
+        if(act_ok) draw_pill_btn(R(248,292,124,48),t.ok,xsel==X_SWITCH||xsel==X_UPD?F_XS:F_S,rgb(250,204,140),rgb(232,174,100),C_ACCD,pressed(T_SAVE));
+        else draw_pill_btn(R(248,292,124,48),t.ok,xsel==X_UPD?F_XS:F_S,C_SURF2,C_SURF,C_DIS,0);
         W_end();
     }
     if(W_begin(W_XFOOT,R(70,392,340,40),hi(hs(hs(H0,t.l1),t.l2),(int)t.c_l1))){
@@ -6192,13 +6471,14 @@ static int ota_idle(ms_t now){
  * Every descriptor is close-on-exec, so the UART, the frame buffer and the touch grab are released by the exec itself. */
 static void ota_reload_step(ms_t now){
     if(now-ota.t_reload<2000) return; ota.t_reload=now;
-    if(access(OTA_RELOAD,F_OK)!=0) return;
+    if(access(OTA_RELOAD,F_OK)!=0&&!upd.reload) return;            /* the installer's request, or INSTALL NOW in SYSTEM › UPDATES */
     boot_refresh();
     if(bs.self_slot!=SLOT_B||bs.n_stock>0||!ota_file_has(SLOT_B_EXE,OTA_LMARK)){
-        unlink(OTA_RELOAD); boot_log("RELOAD ignored: %s",bs.n_stock>0?"a stock UI is paused (run.sh mode)":(bs.self_slot!=SLOT_B?"not started from slot B":"no launcher in slot B")); return; }
+        unlink(OTA_RELOAD); upd.reload=0; boot_log("RELOAD ignored: %s",bs.n_stock>0?"a stock UI is paused (run.sh mode)":(bs.self_slot!=SLOT_B?"not started from slot B":"no launcher in slot B")); return; }
     if(!ota_idle(now)) return;                      /* busy: ask again in 2 s (never during an activity) */
     unlink(OTA_RELOAD);
-    boot_log("RELOAD: exec %s (installer request, machine idle) — same PID %d",SLOT_B_EXE,(int)getpid());
+    boot_log("RELOAD: exec %s (%s, machine idle) — same PID %d",SLOT_B_EXE,upd.reload?"INSTALL NOW":"installer request",(int)getpid());
+    upd.reload=0;
     ota_mark_write(1);
     if(bl_is_off) bl_power(1);
     fflush(stdout); fflush(stderr);
@@ -6537,6 +6817,15 @@ static void sim_state_emit(ms_t now,int force){   /* force=0: only if the line's
          g.lo,g.hi,g.hi==40?"true":"false",g.ok?"true":"false",(double)g.t,(g.ok&&(g.g<g.lo||g.g>g.hi))?"true":"false");
       for(int v=g.lo,c=0;v<=g.hi;v++) if(gs_label(&g,v)) jb(&j,"%s%d",c++?",":"",v);
       jb(&j,"],\"drawn\":%s,\"start\":\"%s\"}",(view==V_MAIN&&page==PG_GRIND)?"true":"false",act_guard(ACT_GRIND,now)?"dim":"on"); }
+    /* OTA phase 3: SYSTEM › UPDATES — what the user started and what the helper reported (status file); reload = INSTALL NOW is
+     * waiting for an idle machine (the device then execs the launcher; the SIM has no launcher and only reports it) */
+    { char us[32]; upd_summary(us,sizeof us);
+      jb(&j,",\"updates\":{\"running\":%s,\"op\":\"%s\",\"mode\":\"%s\",\"phase\":",upd_busy()?"true":"false",upd.op==UO_CHECK?"check":(upd.op==UO_INSTALL?"install":""),
+         upd.mode==UM_NOW?"now":(upd.mode==UM_NEXT?"next":"")); jb_s(&j,upd.phase);
+      jb(&j,",\"result\":"); jb_s(&j,upd.result); jb(&j,",\"error\":"); jb_s(&j,upd.error); jb(&j,",\"version\":"); jb_s(&j,upd.version);
+      jb(&j,",\"blocked\":"); jb_s(&j,upd.blocked); jb(&j,",\"pct\":%d,\"checked\":%s,\"ok\":%s,\"available\":%s,\"staged\":",upd.pct,upd.t_check?"true":"false",upd.ok?"true":"false",upd_avail()?"true":"false");
+      jb_s(&j,upd_staged()?ota.pend:""); jb(&j,",\"reload\":%s,\"done\":\"%s\",\"summary\":",upd.reload?"true":"false",upd.done_op==UO_CHECK?"check":(upd.done_op==UO_INSTALL?"install":""));
+      jb_s(&j,us); jb(&j,",\"notes\":["); for(int k=0;k<4;k++){ if(k) jb(&j,","); jb_s(&j,upd.notes[k]); } jb(&j,"],\"helper\":%s}",upd_have()?"true":"false"); }
     jb(&j,",\"regs\":{"); for(unsigned k=0;k<sizeof SHOWN/sizeof SHOWN[0];k++) jb(&j,"%s\"%d\":%u",k?",":"",SHOWN[k],reg[SHOWN[k]]);
     jb(&j,"},\"regs_s\":{\"38\":%d,\"39\":%d}",s16(38),s16(39));
     /* v6.18 (addendum): the sound engine — events by name with their outcome; log = newest first "event:outcome" */
@@ -6574,7 +6863,10 @@ static void sim_state_emit(ms_t now,int force){   /* force=0: only if the line's
         jb(&j,",\"unit\":"); jb_s(&j,set_unit(sel)); jb(&j,",\"saved\":"); jb_s(&j,b);
         jb(&j,",\"raw\":%d,\"min\":%d,\"max\":%d,\"step\":%d,\"locked\":%s,\"saving\":%s",edit_val,SET[sel].lo,SET[sel].hi,SET[sel].step,(SET[sel].flags&SF_LOCK)?"true":"false",sav.active?"true":"false");
     } else if(view==V_SYS){
-        jb(&j,"\"x\":\"%s\",\"edit\":%d,\"locked\":%s",xsel==X_BOOTUI?"bootui":(xsel==X_SWITCH?"switch":"exit"),x_edit,sys_locked()?"true":"false");
+        static const char*const XK[]={"bootui","switch","exit","updates","install"};
+        jb(&j,"\"x\":\"%s\",\"edit\":%d,\"locked\":%s",XK[clampi(xsel,0,4)],x_edit,sys_locked()?"true":"false");
+        if(xsel==X_UPD||xsel==X_UPDI){ SysT st_; sys_text(&st_); jb(&j,",\"title\":"); jb_s(&j,st_.title); jb(&j,",\"hero\":"); jb_s(&j,st_.hero?st_.hero:"");
+            jb(&j,",\"status\":"); jb_s(&j,st_.status?st_.status:""); jb(&j,",\"note\":"); jb_s(&j,st_.note?st_.note:""); jb(&j,",\"ok\":"); jb_s(&j,st_.ok?st_.ok:""); }
     } else if(view==V_MAIN&&pg_list(page)){
         static const char*const SECK[]={"display","clock","schedule","stock"}; char lv[96]; page_live_text(page,lv,sizeof lv,now);
         jb(&j,"\"title\":"); jb_s(&j,page_title(page)); jb(&j,",\"rows\":%d,\"scroll\":%d,\"live\":",page_rows(page),(int)scroll[page]); jb_s(&j,lv);
@@ -6810,6 +7102,7 @@ static void sim_dispatch(const char*line,char*out,size_t on,ms_t now){
         else if(!strcmp(name,"diag")){ if(page!=PG_DIAG){ diag_from=PG_SYS; go_page(PG_DIAG,1,now); } }
         else if(!strcmp(name,"detail")){ int idx=param[0]?sim_param_idx(param):S_GRINDW; if(idx<0) ok=0; else { sim_set_row(idx); detail_open(idx,now); } }
         else if(!strcmp(name,"sys")){ sim_set_stock(); sys_open(js_int(kv,n,"x",X_BOOTUI)==X_SWITCH?X_SWITCH:X_BOOTUI,now); }
+        else if(!strcmp(name,"updates")){ sim_set_page(PG_SYS); sec_open=-1; scroll[PG_SYS]=scroll_max(PG_SYS); sys_open(X_UPD,now); }   /* OTA phase 3 */
         else ok=0;
         jb(&j,"{\"ok\":%s,\"page\":\"%s\"",ok?"true":"false",sim_page_key());
     }
@@ -6872,7 +7165,9 @@ static void sim_dispatch(const char*line,char*out,size_t on,ms_t now){
         if(view==V_DETAIL||view==V_SYS){
             int locked=(view==V_SYS)?sys_locked():((SET[sel].flags&SF_LOCK)!=0);
             if(locked) LT_R("back",170,284,140,64);
+            else if(view==V_SYS&&xsel==X_UPDI){ LT_R("next_start",CX-4-UPD_BTN_W,284,UPD_BTN_W,64); LT_R("install_now",CX+4,284,UPD_BTN_W,64); }   /* OTA phase 3 */
             else { if(view==V_DETAIL||xsel==X_BOOTUI){ LT_C("minus",84,184,42); LT_C("plus",396,184,42); } LT_R("cancel",100,284,136,64); LT_R("save",244,284,136,64); }
+            if(view==V_SYS) LT_R("close",BACK_X0,BACK_Y0,BACK_W,BACK_H);
         } else if(view==V_MAIN&&page==PG_HOME){
             int sk[2], sn=stop_btns(now,sk);                                   /* v6.13: STOP for grind/brew/water + latched steam */
             if(sn==1&&steam_hold_shown(now)){ Rect r=stop_hit(2,0); LT_R(STOP_KEY[sk[0]],r.x0,r.y0,r.x1-r.x0,r.y1-r.y0); r=stop_hit(2,1); LT_R("steam_hold",r.x0,r.y0,r.x1-r.x0,r.y1-r.y0); }   /* v6.20 */
@@ -6886,7 +7181,7 @@ static void sim_dispatch(const char*line,char*out,size_t on,ms_t now){
                 static const char*const SECK[]={"sec_display","sec_clock","sec_schedule","sec_stock"};
                 Row rw[ROW_MAX]; int nr=rows_get(page,rw), vy1=list_vy1(page);
                 for(int k=0;k<nr;k++){ int y=(int)(row_y0(page,k)-scroll[page]); if(y<LIST_VY0-4||y+ROW_H>vy1+4) continue;
-                    LT_R(rw[k].kind==RK_SET?sim_param_id(rw[k].a):(rw[k].kind==RK_SEC?SECK[rw[k].a]:(rw[k].kind==RK_DIAG?"diag":(rw[k].a==X_BOOTUI?"boot_ui":"switch_now"))),64,y,352,ROW_H); }
+                    LT_R(rw[k].kind==RK_SET?sim_param_id(rw[k].a):(rw[k].kind==RK_SEC?SECK[rw[k].a]:(rw[k].kind==RK_DIAG?"diag":(rw[k].kind==RK_UPD?"updates":(rw[k].a==X_BOOTUI?"boot_ui":"switch_now")))),64,y,352,ROW_H); }
                 if(pg_feat(page)) LT_R("start",CX-START_HIT_W/2,START_HIT_Y,START_HIT_W,START_HIT_H);
             } else if(page==PG_DIAG){ int py=(int)(DG_GRAPH+12-scroll[PG_DIAG]); if(py-8>=LIST_VY0&&py+36<=LIST_VY1) LT_R("graph",CX-150,py-8,300,44); }
         }
@@ -7084,6 +7379,7 @@ int main(int argc,char**argv){
         sched_step(now);                   /* v6.16: pre-arm the pre-heat alarm, one-shot use, auto off */
         snd_tick(now);                     /* v6.18: start jingle + per-boiler ready tones (display/audio only, no frames) */
         ota_step(now);                     /* v6.21: healthy marker + one-time notices */
+        upd_step(now);                     /* OTA phase 3: poll the updater the user started (status file + waitpid) */
 #ifdef DEVICE_RT
         ota_reload_step(now);              /* v6.21: exec-reload into a newly installed release, when idle */
 #endif
@@ -7163,6 +7459,7 @@ static void sim_run(ms_t ms){
         pw_step(sim_now);                  /* v6.14 */
         if(pv_sched) sched_step(sim_now);  /* v6.16 (only where a scenario/selftest switches it on) */
         snd_tick(sim_now);                 /* v6.18: the sound engine (the preview build only logs) */
+        upd_step(sim_now);                 /* OTA phase 3 (the selftest's fake updater) */
         sim_last=ui_frame(sim_now);
     }
 }
@@ -7402,8 +7699,9 @@ static const struct { int font,maxw; const char*what; } KB[NKLASS]={
  [KBTN]={F_XS,104,"button"},[KBTNS]={F_S,104,"button"},[KTITLE]={F_M,224,"page title"},[KPSUB]={F_XS,298,"page subtitle"},[KSPL]={F_XS,SPLASH_W-8,"tagline"},
  [KDL]={F_XS,170,"diagnose label"},[KDV]={F_S,168,"diagnose value"},[KDF]={F_XS,DG_FULL_W,"full-width line"},[KNOTE]={F_XS,392,"note (field 400)"},
  [KF1]={F_XS,264,"footer 1 (clear of the gauge ends)"},[KF2]={F_XS,269,"footer 2"},[KXSUB]={F_XS,300,"row subline"},[KST]={F_XS,348,"status (field 360)"},
+ [KBTNW]={F_XS,UPD_BTN_W-20,"wide button"},
 };
-static const char*const KNAME[NKLASS]={"-","toast","home-sub","home-label","phase-chip","button","button","page-title","page-sub","tagline","diag-label","diag-value","full-line","note","foot-1","foot-2","row-sub","status","console"};
+static const char*const KNAME[NKLASS]={"-","toast","home-sub","home-label","phase-chip","button","button","page-title","page-sub","tagline","diag-label","diag-value","full-line","note","foot-1","foot-2","row-sub","status","console","wide-button"};
 /* the printf conversions in a string, in order ("%s|%.34s|%ld|") */
 static void fmt_sig(const char*s,char*o,size_t n){
     size_t k=0; o[0]=0;
@@ -8755,7 +9053,7 @@ static void st_v617(void){
       st_home(); tap(CX,GEAR_Y); st_settle(); tap(240,row_y0(PG_SYS,SEC_STOCK)+25); st_settle(); int kb=row_find(PG_SYS,RK_X,X_BOOTUI);
       tap(240,row_y0(PG_SYS,kb)-(int)scroll[PG_SYS]+25); st_settle(); int x1=view==V_SYS&&xsel==X_BOOTUI; tap(CX,57); st_settle();
       tap(240,row_y0(PG_SYS,kb+1)-(int)scroll[PG_SYS]+25); st_settle(); int x2=view==V_SYS&&xsel==X_SWITCH; tap(CX,57); st_settle();
-      tap(240,row_y0(PG_SYS,SEC_STOCK)-(int)scroll[PG_SYS]+25); st_settle(); int cl=sec_open==-1&&scroll[PG_SYS]==0&&page_rows(PG_SYS)==NSEC+1;
+      tap(240,row_y0(PG_SYS,SEC_STOCK)-(int)scroll[PG_SYS]+25); st_settle(); int cl=sec_open==-1&&scroll[PG_SYS]==0&&page_rows(PG_SYS)==NSEC+2;
       tap(240,row_y0(PG_SYS,NSEC)+25); st_settle(); int dg=page==PG_DIAG&&diag_from==PG_SYS; tap(CX,PG_TITLE_Y+6); st_settle(); int bs1=page==PG_SYS; tap(CX,PG_TITLE_Y+6); st_settle();
       st_check("SYSTEM: BOOT UI and SWITCH TO ORIGINAL NOW open from STOCK UI; a tap on the open header closes the section again; the DIAGNOSTICS row opens DIAGNOSTICS, whose chevron leads back to SYSTEM and from there to HOME",x1&&x2&&cl&&dg&&bs1&&page==PG_HOME&&wq.n==0&&txq_len==0);
       st_home(); tap(CX,GEAR_Y); st_settle(); tap(240,row_y0(PG_SYS,SEC_DISPLAY)+25); st_settle(); int o1=sec_open==SEC_DISPLAY&&row_find(PG_SYS,RK_SET,S_UILANG)==1;
@@ -8823,7 +9121,7 @@ static void st_v617(void){
       int bad=0; for(int i=0;i<NSTR;i++){ int k=STR_K[i]; if(k==KCON||k==KDL||k==KDV||k==KDF) continue; for(int lg=0;lg<NLANG;lg++){ const char*t=STR[lg][i];
             if(strstr(t,"CONFIG ONLY")||strstr(t,"KUN CONFIG")||strstr(t,"CMD8")||strstr(t,"CONFIG.JSON")||strstr(t,"OR STOP")||strstr(t,"ELLER STOP")||strstr(t,"EST.")){ bad++; printf("     [%s] %s: '%s'\n",LANG_CODE[lg],STR_ID[i],t); } } }
       printf("       string table: %d ids (v6.16: 449)\n",NSTR);
-      st_check("text: no user-facing string says CONFIG ONLY / CONFIG.JSON / CMD8 / '· OR STOP' / 'EST.' any more; the string table is smaller than v6.16's 449 ids although v6.17 adds pages (v6.18's sound block aside)",bad==0&&NSTR-(TX_DV_SO_DROP-TX_SL_SOUND+1)-(TX_DV_WD_FAULT-TX_ER_E2_SCALE+1)-(TX_ER_E2_NOFLOW-TX_ER_E3_TANK+1)-(TX_PH_BEAN-TX_PH_BEAN+1)-(TX_H_BEAN-TX_G_BEAN+1)<449);   /* v6.18: the sound feature's own strings (one contiguous block) are not counted; v6.22: nor the water gate's; v6.24: nor the water tank's; v6.25: nor the bean container's (chip + the G/H pair) */
+      st_check("text: no user-facing string says CONFIG ONLY / CONFIG.JSON / CMD8 / '· OR STOP' / 'EST.' any more; the string table is smaller than v6.16's 449 ids although v6.17 adds pages (v6.18's sound block aside)",bad==0&&NSTR-(TX_DV_SO_DROP-TX_SL_SOUND+1)-(TX_DV_WD_FAULT-TX_ER_E2_SCALE+1)-(TX_ER_E2_NOFLOW-TX_ER_E3_TANK+1)-(TX_PH_BEAN-TX_PH_BEAN+1)-(TX_H_BEAN-TX_G_BEAN+1)-(TX_T_UPD_NEXT-TX_UPD_ROW+1)<449);   /* v6.18: the sound feature's own strings (one contiguous block) are not counted; v6.22: nor the water gate's; v6.24: nor the water tank's; v6.25: nor the bean container's (chip + the G/H pair); OTA phase 3: nor SYSTEM › UPDATES' block */
       st_home(); home_model(sim_now); int one=!strcmp(hm.hint1,TR(TX_C_HINT))&&hm.hint2==NULL&&!strcmp(hm.label,TR(TX_H_BOILER))&&!st_has(hm.label,"\xC2\xB7");
       reg[33]=0x0141; sim_run(600); home_model(sim_now); fmt_fix(a,sizeof a,sv(S_GRINDW),1); snprintf(b,sizeof b,TR(TX_H_AUTOSTOP_G),a); int g=!strcmp(hm.label,TR(TX_H_DOSE))&&!st_has(hm.label,a)&&!strcmp(hm.sub,b)&&sub_font(&hm)==F_S;
       st_check("HOME: one hint line; the label is the name of the number only ('BREW BOILER', 'DOSE' — no '· NOW', no repeated target); during an activity the target is said once, in F_S ('STOPS AT 18.5 G')",one&&g); }
@@ -9387,6 +9685,137 @@ static void st_v621(const char*dir){
       st_check("reload only when idle: HOME + nothing running; not on another page, not during a brew, not with a write pending",i0&&i1&&i2&&i3&&i4); }
     memset(&ota,0,sizeof ota); ota.link0=-1; snprintf(ota.dir,sizeof ota.dir,"%s",OTA_DIR); toast.dur=0;
     strcpy(sysroot,ksr); bs.m_valid=0; last_rx_ms=klr;
+}
+/* ============================ OTA phase 3: SYSTEM › UPDATES (consent, the helper as a child process, status, idle gate) ============================ */
+static void st_upd_wait(void){ for(int i=0;i<300&&upd_busy();i++){ usleep(10000); sim_run(40); } sim_run(300); }
+static int st_upd_log_is(const char*lp,const char*want){ char b[512]; int fd=open(lp,O_RDONLY); if(fd<0) return want[0]==0; int n=(int)read(fd,b,sizeof b-1); close(fd); if(n<0)n=0; b[n]=0; return !strcmp(b,want); }
+static void st_ota3(const char*dir){
+    printf("== selftest: OTA phase 3 — SYSTEM › UPDATES (default off, CHECK NOW, consent, AT NEXT START / INSTALL NOW, status, errors, locks) ==\n");
+    char root[360],ksr[sizeof sysroot],fake[440],lp[440],sp[440],sh[4096]; strcpy(ksr,sysroot);
+    snprintf(root,sizeof root,"%s/upd_root",dir); snprintf(sysroot,sizeof sysroot,"%s",root);
+    mock_reset(root); mk_p(root,"/new_customer/merakiplus/ota"); mk_p(root,"/tmp");
+    snprintf(sp,sizeof sp,"%s/new_customer/merakiplus/ota/state",root);
+    put_bytes(sp,"format=1\ncurrent=6.25-aaaaaaaa\nprevious=\npending=\ntries=0\nlast=\nmax_seq=3\n",68);
+    snprintf(fake,sizeof fake,"%s/fake_upd.sh",dir); snprintf(lp,sizeof lp,"%s/fake_upd.log",dir); unlink(lp);
+    /* a stand-in for merakiplus_upd with the same CLI and status file; FAKE_MODE picks the outcome */
+    int n=snprintf(sh,sizeof sh,
+      "#!/bin/sh\nop=$1; shift; st=; ver=\n"
+      "while [ $# -gt 0 ]; do case \"$1\" in --status) st=$2; shift 2;; --version) ver=$2; shift 2;; *) shift 2;; esac; done\n"
+      "[ -e /dev/fd/9 ] && fd=open || fd=closed\n"
+      "printf '%%s %%s fd9=%%s\\n' \"$op\" \"$ver\" \"$fd\" >> '%s'\n"
+      "w(){ printf \"op=$op\\n$1\" > \"$st.tmp\"; mv \"$st.tmp\" \"$st\"; }\n"
+      "case \"$FAKE_MODE.$op\" in\n"
+      "avail.check) w 'state=ok\\nphase=notes\\nresult=available\\nerror=\\nversion=6.99\\nseq=9\\nblocked=\\nnotes1=FIRST LINE OF THE NOTES\\nnotes2=SECOND LINE\\n'; exit 0;;\n"
+      "current.check) w 'state=ok\\nresult=current\\nversion=6.25\\nseq=3\\n'; exit 0;;\n"
+      "none.check) w 'state=ok\\nresult=none\\n'; exit 0;;\n"
+      "launcher.check) w 'state=ok\\nresult=available\\nversion=6.99\\nseq=9\\nblocked=launcher\\n'; exit 0;;\n"
+      "net.check) w 'state=fail\\nerror=net\\nmsg=cannot connect\\n'; exit 8;;\n"
+      "sig.check) w 'state=fail\\nerror=signature\\nmsg=BAD SIGNATURE\\n'; exit 3;;\n"
+      "older.check) w 'state=fail\\nerror=older\\n'; exit 5;;\n"
+      "slow.install) w 'state=running\\nphase=download\\npct=42\\nversion=6.99\\n'; sleep 1; w 'state=fail\\nerror=asset\\n'; exit 6;;\n"
+      "*.install) printf 'format=1\\ncurrent=6.25-aaaaaaaa\\nprevious=\\npending=6.99-abcdef12\\ntries=0\\nlast=\\nmax_seq=9\\n' > '%s'\n"
+      "  w 'state=ok\\nresult=staged\\nversion=6.99\\nseq=9\\nname=6.99-abcdef12\\npct=100\\n'; exit 0;;\n"
+      "esac\nexit 2\n",lp,sp);
+    put_bytes(fake,sh,n); chmod(fake,0755);
+    setenv("MERAKIPLUS_UPD_BIN",fake,1);
+    int kv=view,kp=page; ms_t klr=last_rx_ms; uint16_t k33=reg[33];
+    memset(&upd,0,sizeof upd); ota_init(sim_now); snprintf(ota.name,sizeof ota.name,"6.25-aaaaaaaa");
+    int fd9=open(lp,O_RDONLY|O_CREAT,0644); if(fd9>=0&&fd9!=9){ dup2(fd9,9); close(fd9); } fd9=9;   /* must NOT reach the helper */
+    sim_ready(sim_now); memset(&wq,0,sizeof wq); act.pending=ACT_NONE; sav.active=0; reg[33]=0x0101; toast.dur=0;
+    view=V_MAIN; page=PG_HOME; sel=-1; tr.type=0;
+    /* the entry row */
+    nav_open(PG_SYS,sim_now); st_settle();
+    int kr=row_find(PG_SYS,RK_UPD,0); char us[32]; uint32_t uc=upd_summary(us,sizeof us); char vv[24]; snprintf(vv,sizeof vv,"%s",MERAKIPLUS_VERSION);
+    st_check("SYSTEM: the UPDATES entry is the row below DIAGNOSTICS; its value is the installed version (grey) while nothing is known",kr==NSEC+1&&!strcmp(us,vv)&&uc==C_TXT3);
+    scroll[PG_SYS]=scroll_max(PG_SYS); static_dirty=1; sim_run(200);
+    int yu=(int)(row_y0(PG_SYS,kr)-scroll[PG_SYS]); int hit=hit_test(240,yu+25,sim_now)==T_ROW0+kr&&yu+ROW_H<=LIST_VY1;
+    tap(240,yu+25); st_settle();
+    st_check("scrolled into view it is tappable and opens the UPDATES view; opening SYSTEM and the view starts nothing (default off: no helper, no network)",
+             hit&&view==V_SYS&&xsel==X_UPD&&!upd_busy()&&access(lp,F_OK)==0&&st_upd_log_is(lp,""));
+    { SysT t; sys_text(&t); st_check("UPDATES view: the installed version as the hero, 'not checked since start', the consent note, CHECK NOW, BACK",
+        !strcmp(t.hero,vv)&&!strcmp(t.status,TR(TX_UPD_NEVER))&&!strcmp(t.note,TR(TX_UPD_CONSENT))&&!strcmp(t.ok,TR(TX_UPD_B_CHECK))&&!strcmp(t.cancel,TR(TX_B_BACK))&&!sys_locked()); }
+    /* CHECK NOW during an activity -> refused */
+    reg[33]=0x1307; toast.dur=0; activate(T_SAVE,sim_now);
+    st_check("CHECK NOW during an activity: 'NOT WHILE THE MACHINE IS BUSY', nothing started",!upd_busy()&&toast.dur&&!strcmp(toast.msg,TR(TX_T_UPD_BUSY))&&st_upd_log_is(lp,""));
+    reg[33]=0x0101; toast.dur=0;
+    /* CHECK NOW -> available -> the install view; nothing downloaded */
+    setenv("FAKE_MODE","avail",1); activate(T_SAVE,sim_now);
+    { SysT t; sys_text(&t); int b1=upd_busy()&&upd.op==UO_CHECK&&!strcmp(t.hero,TR(TX_UPD_H_CHECKING)); upd_summary(us,sizeof us); int b2=!strcmp(us,TR(TX_UPD_S_CHECKING));
+      st_upd_wait(); char m[96]; snprintf(m,sizeof m,TR(TX_T_UPD_AVAIL),"V6.99");
+      st_check("CHECK NOW starts the helper with 'check' only (hero CHECKING, row CHECKING); the result opens the install view with the notes; toast 'V6.99 AVAILABLE'",
+               b1&&b2&&!upd_busy()&&view==V_SYS&&xsel==X_UPDI&&upd_avail()&&!strcmp(upd.notes[0],"FIRST LINE OF THE NOTES")&&!strcmp(toast.msg,m)&&st_upd_log_is(lp,"check  fd9=closed\n")); }
+    st_check("the helper inherits no descriptor of the UI (UART, frame buffer, touch grab): a test descriptor 9 is closed in the child",st_upd_log_is(lp,"check  fd9=closed\n"));
+    { SysT t; sys_text(&t); char ti[64]; snprintf(ti,sizeof ti,TR(TX_UPD_I_TITLE),"V6.99");
+      st_check("install view: 'V6.99 AVAILABLE', 'INSTALLED V6.25', 'downloads only after your choice', idle note; AT NEXT START + INSTALL NOW are hittable, BACK = the chevron",
+               !strcmp(t.title,ti)&&!strcmp(t.status,TR(TX_UPD_I_STATUS))&&!strcmp(t.note,TR(TX_UPD_I_NOTE))&&hit_test(CX-90,316,sim_now)==T_ALT&&hit_test(CX+90,316,sim_now)==T_SAVE&&hit_test(CX,57,sim_now)==T_BACK); }
+    /* consent declined: back out -> nothing downloaded */
+    activate(T_BACK,sim_now); st_settle(); upd_summary(us,sizeof us); { char w[32]; snprintf(w,sizeof w,TR(TX_UPD_S_AVAIL),"V6.99");
+    st_check("consent declined (BACK): no install was started, nothing downloaded; the row now says 'V6.99 NEW'",view==V_MAIN&&!upd_busy()&&st_upd_log_is(lp,"check  fd9=closed\n")&&!strcmp(us,w)); }
+    /* the UPDATES view now offers SHOW V6.99 */
+    sys_open(X_UPD,sim_now); { SysT t; sys_text(&t); char w[32]; snprintf(w,sizeof w,TR(TX_UPD_H_NEW),"V6.99"); char ls[96]; upd_last_text(ls,sizeof ls);
+      st_check("UPDATES view after the check: hero 'V6.99 NEW', status 'LAST CHECK <time> · V6.99 AVAILABLE', button SHOW (opens the install view, no network)",
+               !strcmp(t.hero,w)&&!strcmp(t.ok,TR(TX_UPD_B_SHOW))&&!strcmp(t.status,ls)&&strstr(ls,"V6.99")!=NULL); activate(T_SAVE,sim_now); st_settle();
+      st_check("  SHOW opens the install view without starting the helper",view==V_SYS&&xsel==X_UPDI&&!upd_busy()&&st_upd_log_is(lp,"check  fd9=closed\n")); }
+    /* INSTALL NOW during an activity -> refused */
+    reg[33]=0x1307; toast.dur=0; activate(T_SAVE,sim_now);
+    st_check("INSTALL NOW during a brew: refused ('NOT WHILE THE MACHINE IS BUSY'), nothing downloaded",!upd_busy()&&!strcmp(toast.msg,TR(TX_T_UPD_BUSY))&&st_upd_log_is(lp,"check  fd9=closed\n"));
+    reg[33]=0x0101;
+    /* AT NEXT START */
+    setenv("FAKE_MODE","ok",1); toast.dur=0; activate(T_ALT,sim_now);
+    int r1=upd_busy()&&upd.op==UO_INSTALL&&upd.mode==UM_NEXT; st_upd_wait();
+    { char m[96]; snprintf(m,sizeof m,TR(TX_T_UPD_NEXT),"V6.99"); upd_summary(us,sizeof us); char w[32]; snprintf(w,sizeof w,TR(TX_UPD_S_READY),"V6.99"); SysT t; sys_text(&t);
+      st_check("AT NEXT START: 'install --version 6.99' (consent given), the helper stages it (pending), toast 'V6.99 STARTS AT NEXT START', no reload; the row says 'V6.99 READY'",
+               r1&&!upd_busy()&&!strcmp(ota.pend,"6.99-abcdef12")&&upd_staged()&&!upd.reload&&!strcmp(toast.msg,m)&&!strcmp(us,w)&&st_upd_log_is(lp,"check  fd9=closed\ninstall 6.99 fd9=closed\n")&&
+               view==V_SYS&&!strcmp(t.status,TR(TX_UPD_I_STAGED))); }
+    /* INSTALL NOW (here: the staged one) -> back to HOME + reload requested */
+    toast.dur=0; activate(T_SAVE,sim_now); int r2=upd_busy()&&upd.mode==UM_NOW; st_upd_wait();
+    { char m[96]; snprintf(m,sizeof m,TR(TX_T_UPD_NOW),"V6.99");
+      st_check("INSTALL NOW: the helper runs again (idempotent), then HOME + 'STARTING V6.99'; the exec-reload is requested and waits for an idle HOME (the installer's path)",
+               r2&&upd.reload&&view==V_MAIN&&page==PG_HOME&&!strcmp(toast.msg,m)&&st_upd_log_is(lp,"check  fd9=closed\ninstall 6.99 fd9=closed\ninstall 6.99 fd9=closed\n")); }
+    upd.reload=0;
+    /* errors */
+    put_bytes(sp,"format=1\ncurrent=6.25-aaaaaaaa\nprevious=\npending=\ntries=0\nlast=\nmax_seq=3\n",68); ota_read_state(); memset(&upd,0,sizeof upd);
+    { static const struct { const char*mode; short tx; } E[]={{"net",TX_T_UPD_NET},{"sig",TX_T_UPD_SIG},{"older",TX_T_UPD_OLDER},{"current",TX_T_UPD_NONE},{"none",TX_T_UPD_NOREL}};
+      int ok=1; for(unsigned q=0;q<sizeof E/sizeof E[0];q++){ setenv("FAKE_MODE",E[q].mode,1); sys_open(X_UPD,sim_now); toast.dur=0; activate(T_SAVE,sim_now); st_upd_wait();
+          if(strcmp(toast.msg,TR(E[q].tx))||view!=V_SYS||xsel!=X_UPD||upd_avail()){ ok=0; printf("     %s: toast '%s' view %d x %d\n",E[q].mode,toast.msg,view,xsel); } }
+      SysT t; setenv("FAKE_MODE","net",1); activate(T_SAVE,sim_now); st_upd_wait(); sys_text(&t);
+      st_check("check failures are graceful: NO CONNECTION TO GITHUB / UPDATE REJECTED: SIGNATURE / OLDER VERSION REFUSED; UP TO DATE / NO SIGNED RELEASE; nothing is offered; the status line says FAILED (amber)",
+               ok&&strstr(t.status,TR(TX_UPD_R_FAIL))!=NULL&&t.c_status==C_WARN); }
+    { setenv("FAKE_MODE","avail",1); sys_open(X_UPD,sim_now); activate(T_SAVE,sim_now); st_upd_wait(); setenv("FAKE_MODE","slow",1); toast.dur=0; activate(T_SAVE,sim_now);
+      for(int i=0;i<60&&strcmp(upd.phase,"download");i++){ usleep(10000); sim_run(260); }
+      char pg[96]; SysT t; sys_text(&t); upd_summary(us,sizeof us); snprintf(pg,sizeof pg,TR(TX_UPD_P_DL),42); int busy_btn=upd_busy();
+      st_upd_wait();
+      st_check("download progress from the status file: 'DOWNLOADING 42 %' on the install view, '42 %' on the row, the buttons disabled; a damaged download -> 'DOWNLOAD DAMAGED · TRY AGAIN', nothing staged",
+               busy_btn&&!strcmp(t.status,pg)&&!strcmp(us,"42 %")&&!strcmp(toast.msg,TR(TX_T_UPD_HASH))&&!upd_staged()&&!upd.reload); }
+    /* locks */
+    { setenv("FAKE_MODE","launcher",1); memset(&upd,0,sizeof upd); sys_open(X_UPD,sim_now); activate(T_SAVE,sim_now); st_upd_wait(); SysT t; sys_text(&t);
+      int l1=view==V_SYS&&xsel==X_UPDI&&sys_locked()&&!strcmp(t.note,TR(TX_UPD_L_LAUNCHER))&&hit_test(CX+90,316,sim_now)!=T_SAVE&&hit_test(CX-90,316,sim_now)!=T_ALT;
+      memset(&upd,0,sizeof upd); snprintf(upd.result,sizeof upd.result,"available"); snprintf(upd.version,sizeof upd.version,"6.99"); ota.trial=1; ota.marked=0; sys_open(X_UPDI,sim_now); sys_text(&t);
+      int l2=sys_locked()&&!strcmp(t.note,TR(TX_UPD_L_TRIAL)); ota.trial=0;
+      setenv("MERAKIPLUS_UPD_BIN","/nonexistent/merakiplus_upd",1); sys_open(X_UPD,sim_now); sys_text(&t); int l3=sys_locked()&&!strcmp(t.note,TR(TX_UPD_L_NOHELPER)); activate(T_SAVE,sim_now); int l4=!upd_busy();
+      setenv("MERAKIPLUS_UPD_BIN",fake,1);
+      st_check("locks: a release for another launcher / this version still on trial / no updater -> only BACK and the reason (install from a computer / try later)",l1&&l2&&l3&&l4); }
+    /* every text of both views in both languages, in its field */
+    { int ok=1, kl=ui_lang; static const char*const MODES[]={"never","checking","avail","staged","dl"};
+      for(int lg=0;lg<NLANG;lg++){ lang_set(lg);
+        for(unsigned m=0;m<5;m++) for(int x=X_UPD;x<=X_UPDI;x++){
+            memset(&upd,0,sizeof upd); ota.pend[0]=0;
+            if(m==1){ upd.pid=999999; upd.op=UO_CHECK; } if(m==2){ snprintf(upd.result,sizeof upd.result,"available"); snprintf(upd.version,sizeof upd.version,"88.88"); upd.ok=1; upd.t_check=clk_utc(); }
+            if(m==3) snprintf(ota.pend,sizeof ota.pend,"88.88-abcdef12"); if(m==4){ upd.pid=999999; upd.op=UO_INSTALL; snprintf(upd.phase,sizeof upd.phase,"download"); upd.pct=100; snprintf(upd.version,sizeof upd.version,"88.88"); }
+            xsel=x; SysT t; sys_text(&t);
+            if(text_wf(t.title,F_S)>300||text_wf(t.sub,F_XS)>360||(t.status&&text_wf(t.status,F_XS)>KB[KST].maxw)||text_wf(t.note,F_XS)>KB[KNOTE].maxw||
+               text_wf(t.l1,F_XS)>KB[KF1].maxw||text_wf(t.l2,F_XS)>KB[KF2].maxw||(x==X_UPD&&text_wf(t.ok,F_XS)>104)||(x==X_UPD&&t.hero&&text_wf(t.hero,F_M)>296)){
+                ok=0; printf("     [%s] %s/%s: title '%s' sub '%s' status '%s' note '%s' ok '%s' hero '%s'\n",LANG_CODE[lg],x==X_UPD?"updates":"install",MODES[m],t.title,t.sub,t.status?t.status:"",t.note,t.ok,t.hero?t.hero:""); }
+            char s[32]; upd_summary(s,sizeof s); if(text_w(TR(TX_UPD_ROW),F_S)+14+text_w(s,F_XS)>366-94){ ok=0; printf("     [%s] row '%s' + '%s' too wide\n",LANG_CODE[lg],TR(TX_UPD_ROW),s); }
+        }
+        if(text_wf(TR(TX_UPD_B_NEXT),F_XS)>UPD_BTN_W-20||text_wf(TR(TX_UPD_B_NOW),F_XS)>UPD_BTN_W-20) ok=0;
+      }
+      lang_set(kl); memset(&upd,0,sizeof upd); ota.pend[0]=0;
+      st_check("EN + DA: both views in every state (never / checking / available / staged / downloading) and the row fit their fields (title, sub, status, note, footers, buttons, hero)",ok); }
+    close(fd9); unsetenv("MERAKIPLUS_UPD_BIN"); unsetenv("FAKE_MODE");
+    view=kv; page=kp; xsel=-1; reg[33]=k33; last_rx_ms=klr; toast.dur=0; tr.type=0;
+    memset(&ota,0,sizeof ota); ota.link0=-1; snprintf(ota.dir,sizeof ota.dir,"%s",OTA_DIR);
+    strcpy(sysroot,ksr); bs.m_valid=0;
 }
 /* ============================ v6.22: water dosing gate + MANUAL hot water (docs/water-dosing-compat.md) ============================ */
 static int st_rows_water(void){ Row r[ROW_MAX]; return rows_get(PG_WATER,r); }
@@ -10043,10 +10472,10 @@ static int selftest(const char*cfgsrc){
       /* v6.17: SYSTEM > STOCK UI. Closed: 5 rows (4 sections + DIAGNOSTICS), no scrolling. A tap on the STOCK UI header opens it and
        * brings it to the top; BOOT UI and SWITCH TO ORIGINAL NOW are its first two rows. */
       mock_boot_b(root); page=PG_SYS; sec_open=-1; scroll[PG_SYS]=0;
-      int closed=page_rows(PG_SYS)==NSEC+1&&scroll_max(PG_SYS)==0&&row_find(PG_SYS,RK_X,X_BOOTUI)<0&&row_find(PG_SYS,RK_DIAG,0)==NSEC;
+      int closed=page_rows(PG_SYS)==NSEC+2&&scroll_max(PG_SYS)>0&&scroll_max(PG_SYS)<=ROW_P&&row_find(PG_SYS,RK_X,X_BOOTUI)<0&&row_find(PG_SYS,RK_DIAG,0)==NSEC&&row_find(PG_SYS,RK_UPD,0)==NSEC+1&&row_y0(PG_SYS,NSEC)+ROW_H<=LIST_VY1;   /* OTA phase 3: + UPDATES below DIAGNOSTICS (one row of scrolling) */
       activate(T_ROW0+SEC_STOCK,tn); ns=row_find(PG_SYS,RK_X,X_BOOTUI);
       int yb=(int)(row_y0(PG_SYS,ns)-scroll[PG_SYS])+25, ys=(int)(row_y0(PG_SYS,ns+1)-scroll[PG_SYS])+25;
-      st_check("SYSTEM: closed = 4 section headers + DIAGNOSTICS (5 rows, no scrolling); tapping STOCK UI opens it at the top: BOOT UI and SWITCH TO ORIGINAL NOW are its first two rows, both hittable (v6.16: rows 16 and 17 of one list)",
+      st_check("SYSTEM: closed = 4 section headers + DIAGNOSTICS (fully in view) + UPDATES (OTA phase 3; less than one row of scrolling); tapping STOCK UI opens it at the top: BOOT UI and SWITCH TO ORIGINAL NOW are its first two rows, both hittable (v6.16: rows 16 and 17 of one list)",
                closed&&sec_open==SEC_STOCK&&ns==SEC_STOCK+1&&row_find(PG_SYS,RK_X,X_SWITCH)==ns+1&&hit_test(240,yb,tn)==T_ROW0+ns&&hit_test(240,ys,tn)==T_ROW0+ns+1&&ys+25<LIST_VY1&&yb-25>=LIST_VY0);
       activate(T_ROW0+ns,tn); tr.type=0;
       st_check("BOOT UI opens with the current choice (flag set -> MERAKIPLUS)",view==V_SYS&&xsel==X_BOOTUI&&x_edit==1&&x_orig==1);
@@ -10068,6 +10497,7 @@ static int selftest(const char*cfgsrc){
       view=V_MAIN; xsel=-1; tr.type=0; page=PG_HOME; run=1; toast.dur=0; sw_sim=0; }
 
     st_v621(dir);
+    st_ota3(dir);                      /* OTA phase 3: SYSTEM › UPDATES */
     printf("== selftest: layout (all states, both languages: text within ring/circle/field) ==\n");
     for(int lg=0;lg<NLANG;lg++){ int ok=1; SysT t; view=V_SYS; lang_set(lg);
       for(int x=X_BOOTUI;x<=X_EXIT;x++) for(int lock=0;lock<4;lock++) for(int f=0;f<2;f++) for(int e=0;e<2;e++) for(int m=0;m<4;m++){
@@ -10558,6 +10988,22 @@ int main(int argc,char**argv){
     sim_reset(); PV_GRIND_CAL(12); sim_link=0; last_rx_ms=sim_now-9000; page=PG_GRIND; sim_run(1500); dump(out,"116_page_grind_size_offline");
     sim_reset(); PV_GRIND_CAL(34); reg[75]=3640; page=PG_GRIND; sim_run(600); dump(out,"117_page_grind_size_scale40");
     sim_reset(); PV_GRIND_CAL(-3); reg[75]=3640; page=PG_GRIND; sim_run(600); dump(out,"118_page_grind_size_scale40_negative");
+    /* OTA phase 3: SYSTEM › UPDATES (the helper's state set directly; t_poll in the future = no child is polled; any executable as "the helper") */
+    setenv("MERAKIPLUS_UPD_BIN","/bin/sh",1);
+#define PV_UPD(res_,ver_) do{ memset(&upd,0,sizeof upd); ota.pend[0]=0; snprintf(upd.result,sizeof upd.result,"%s",res_); snprintf(upd.version,sizeof upd.version,"%s",ver_); \
+        upd.ok=1; upd.t_check=clk_utc()-120; upd.t_poll=sim_now+100000000; snprintf(upd.notes[0],64,"ON-DEVICE UPDATES FROM GITHUB"); snprintf(upd.notes[1],64,"SYSTEM > UPDATES: CHECK NOW, INSTALL"); \
+        snprintf(upd.notes[2],64,"SIGNED RELEASES ONLY"); }while(0)
+    sim_reset(); PV_UPD("available","6.26"); page=PG_SYS; scroll[PG_SYS]=scroll_max(PG_SYS); static_dirty=1; sim_run(600); dump(out,"119_system_updates_row");
+    sim_reset(); memset(&upd,0,sizeof upd); page=PG_SYS; sim_run(300); sys_open(X_UPD,sim_now); sim_run(600); dump(out,"120_updates_never_checked");
+    sim_reset(); PV_UPD("","6.26"); upd.ok=0; upd.t_check=0; upd.pid=999999; upd.op=UO_CHECK; page=PG_SYS; sim_run(300); sys_open(X_UPD,sim_now); sim_run(600); dump(out,"121_updates_checking");
+    sim_reset(); PV_UPD("current","6.25"); page=PG_SYS; sim_run(300); sys_open(X_UPD,sim_now); sim_run(600); dump(out,"122_updates_up_to_date");
+    sim_reset(); PV_UPD("available","6.26"); page=PG_SYS; sim_run(300); sys_open(X_UPDI,sim_now); sim_run(600); dump(out,"123_updates_install_consent");
+    sim_reset(); PV_UPD("available","6.26"); upd.pid=999999; upd.op=UO_INSTALL; snprintf(upd.phase,sizeof upd.phase,"download"); upd.pct=42; page=PG_SYS; sim_run(300); sys_open(X_UPDI,sim_now); sim_run(600); dump(out,"124_updates_downloading");
+    sim_reset(); PV_UPD("staged","6.26"); snprintf(ota.pend,sizeof ota.pend,"6.26-0a1b2c3d"); page=PG_SYS; sim_run(300); sys_open(X_UPDI,sim_now); sim_run(600); dump(out,"125_updates_at_next_start");
+    sim_reset(); PV_UPD("available","6.26"); snprintf(upd.blocked,sizeof upd.blocked,"launcher"); page=PG_SYS; sim_run(300); sys_open(X_UPDI,sim_now); sim_run(600); dump(out,"126_updates_needs_computer");
+    sim_reset(); PV_UPD("","6.26"); upd.ok=0; snprintf(upd.error,sizeof upd.error,"net"); page=PG_SYS; sim_run(300); sys_open(X_UPD,sim_now); toast_show(TR(TX_T_UPD_NET),C_WARN,sim_now); sim_run(600); dump(out,"127_updates_no_connection");
+    memset(&upd,0,sizeof upd); ota.pend[0]=0; unsetenv("MERAKIPLUS_UPD_BIN");
+#undef PV_UPD
     return 0;
 }
 #endif

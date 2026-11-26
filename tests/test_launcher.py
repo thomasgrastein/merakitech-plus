@@ -206,6 +206,13 @@ def main():
            expect_state="current=6.22-n\nprevious=6.21-c\npending=\n")
     replay(binary, tmp, "trial rollback after 3 failed starts", st % ("6.22-n", 3),
            expect_state="pending=\ntries=0\nlast=rolled_back:6.22-n:crashloop\nmax_seq=27\n")
+    # the on-device updater's trial_seq line (src/merakiplus_upd.c) must survive both outcomes unchanged: the updater counts
+    # it for anti-downgrade only once current=<that release> (healthy commit), never after a rollback
+    stt = st + "trial_seq=6.22-n 28\n"
+    replay(binary, tmp, "trial commit keeps trial_seq", stt % ("6.22-n", 2), healthy="boot=x\npid=1\nrel=6.22-n\n",
+           expect_state="current=6.22-n\nprevious=6.21-c\npending=\ntries=0\nlast=ok:6.22-n\nmax_seq=27\ntrial_seq=6.22-n 28\n")
+    replay(binary, tmp, "trial rollback keeps trial_seq", stt % ("6.22-n", 3),
+           expect_state="pending=\ntries=0\nlast=rolled_back:6.22-n:crashloop\nmax_seq=27\ntrial_seq=6.22-n 28\n")
     def damage(root):
         (root / REL.lstrip("/") / "6.21-c/demo_v9").write_bytes(b"#!/bin/sh\nexit 1\n# damaged\n")
     root = replay(binary, tmp, "damaged current (log append only)", st % ("", 0), prep=damage)

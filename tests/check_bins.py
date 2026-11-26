@@ -34,6 +34,7 @@ REPRODUCIBLE = (
     "keyinj",
     "merakiplus_snd",
     "merakiplus_boot",
+    "merakiplus_upd",
     "merakiplus_sim-linux-x86_64",
     "grab_shim.so",
 )

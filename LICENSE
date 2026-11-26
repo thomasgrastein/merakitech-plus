@@ -23,7 +23,10 @@ SOFTWARE.
 -------------------------------------------------------------------------------
 Scope: this license covers only the original work in this repository (source
 code, build scripts, simulator, tests, documentation and the binaries built from
-this source). It does NOT cover, and this repository does NOT include, any
+this source). Third-party source code kept in third_party/ (BearSSL, MIT) stays
+under its own license (third_party/README.md), and the binaries built from this
+repository also contain code from the Zig toolchain and musl libc (MIT); their
+notices are in THIRD-PARTY-NOTICES. It does NOT cover, and this repository does NOT include, any
 firmware, software, libraries or scripts from the espresso machine's
 manufacturer or the display module's manufacturer. "MerakiTech" and other names
 are trademarks of their respective owners; this project is not affiliated with

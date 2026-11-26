@@ -152,8 +152,10 @@ merging, as everyone else does. The owner uses pull requests for their own chang
 builds on their machines, so a release is a decision, not a side effect.
 
 **Version discipline.** Feature, fix and tooling PRs keep `VERSION` and `MERAKIPLUS_VERSION` at the last released
-version and add their `CHANGELOG.md` entry under `## [Unreleased]`; a shipped binary they change is rebuilt with the
-unchanged version string. Only a release PR assigns a version.
+version and add their `CHANGELOG.md` entry under `## [Unreleased]`, including a `### On the machine` subsection: 1–4
+bullets, plain ASCII, at most 36 characters each — the ultrashort release notes the display shows in SYSTEM › UPDATES
+(`tests/hygiene.py` checks it). A shipped binary they change is rebuilt with the unchanged version string. Only a release
+PR assigns a version.
 
 1. A release PR bumps the version (`VERSION` in `tools/merakiplus.py` **and** `MERAKIPLUS_VERSION`
    in `src/merakiplus.c`), moves the `Unreleased` changelog entries into the new version and, for device changes,

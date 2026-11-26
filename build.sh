@@ -23,6 +23,11 @@ ARM="-target arm-linux-musleabihf -mcpu=cortex_a7 -static -O2 -s"
 # (exidx personality) which glibc's ld.so cannot resolve -> LD_PRELOAD failure in stock.
 ARMSO="-target arm-linux-musleabihf -mcpu=cortex_a7 -shared -fPIC -nostdlib -fno-unwind-tables -fno-asynchronous-unwind-tables -fno-exceptions -O2 -s"
 WERR="-Wall -Wextra -Werror"
+# the updater's TLS library (third_party/bearssl, MIT, unmodified; third_party/README.md). A fixed, locale-independent
+# file order keeps the link — and so the binary — reproducible.
+BEARSSL="-Ithird_party/bearssl/inc -Ithird_party/bearssl/src"
+BEARSSL_SRC=$(find third_party/bearssl/src -name '*.c' | LC_ALL=C sort)
+UPD_SRC="src/merakiplus_upd.c src/merakiplus_upd_net.c"
 say(){ printf '== %s\n' "$*"; }
 
 say "host: merakiplus_sim (SIM build, used by sim/run_e2e.py)"
@@ -35,9 +40,15 @@ say "host: merakiplus_boot_host (the launcher, for tests/test_launcher.py and th
 zig cc -O2 $WERR -o build/merakiplus_boot_host src/merakiplus_boot.c
 say "host: merakiplus_snd_selftest (sound helper against a mock MI_AO) + audio/ check"
 zig cc -DSND_SELFTEST -O2 $WERR -o build/merakiplus_snd_selftest src/merakiplus_snd.c
-say "host: merakiplus_upd_host (signed release manifest verifier, docs/signing.md; crypto = Zig std via merakiplus_crypto.zig)"
+say "host: merakiplus_upd_host (the updater: signed manifests + HTTPS fetch, docs/signing.md; Ed25519/SHA-256 = Zig std, TLS = BearSSL)"
 zig build-obj src/merakiplus_crypto.zig -O ReleaseSmall -fsingle-threaded -femit-bin=build/merakiplus_crypto_host.o
-zig cc -O2 $WERR -o build/merakiplus_upd_host src/merakiplus_upd.c build/merakiplus_crypto_host.o
+zig cc -O2 $WERR $BEARSSL -c src/merakiplus_upd.c -o build/merakiplus_upd_host.o
+zig cc -O2 $WERR $BEARSSL -c src/merakiplus_upd_net.c -o build/merakiplus_upd_net_host.o
+zig cc -O2 $BEARSSL -o build/merakiplus_upd_host build/merakiplus_upd_host.o build/merakiplus_upd_net_host.o build/merakiplus_crypto_host.o $BEARSSL_SRC
+say "host: merakiplus_upd_test (TEST build for tests/test_ota_fetch.py + sim/: also trusts a test CA/key from the environment; never shipped)"
+zig cc -O2 $WERR $BEARSSL -DMERAKIPLUS_UPD_TEST -c src/merakiplus_upd.c -o build/merakiplus_upd_test.o
+zig cc -O2 $WERR $BEARSSL -DMERAKIPLUS_UPD_TEST -c src/merakiplus_upd_net.c -o build/merakiplus_upd_net_test.o
+zig cc -O2 $BEARSSL -o build/merakiplus_upd_test build/merakiplus_upd_test.o build/merakiplus_upd_net_test.o build/merakiplus_crypto_host.o $BEARSSL_SRC
 
 if [ "$MODE" != host ]; then
   say "device (ARMv7 static): merakiplus, merakiplus_sim_arm"
@@ -45,10 +56,12 @@ if [ "$MODE" != host ]; then
   zig cc $ARM -DMERAKIPLUS_SIM -o build/merakiplus_sim_arm src/merakiplus.c
   say "device (ARMv7 static): merakiplus_boot (the launcher, installed as /new_customer/demo_v9)"
   zig cc $ARM $WERR -o build/merakiplus_boot src/merakiplus_boot.c
-  say "device (ARMv7 static): merakiplus_upd (manifest verifier; built + tested, not shipped yet — docs/signing.md)"
+  say "device (ARMv7 static): merakiplus_upd (the updater, shipped in every release directory — docs/ota-plan.md phase 3)"
   zig build-obj src/merakiplus_crypto.zig -target arm-linux-musleabihf -mcpu cortex_a7 -O ReleaseSmall -fstrip -fsingle-threaded \
     -femit-bin=build/merakiplus_crypto_arm.o
-  zig cc $ARM $WERR -o build/merakiplus_upd src/merakiplus_upd.c build/merakiplus_crypto_arm.o
+  zig cc $ARM $WERR $BEARSSL -c src/merakiplus_upd.c -o build/merakiplus_upd_arm.o
+  zig cc $ARM $WERR $BEARSSL -c src/merakiplus_upd_net.c -o build/merakiplus_upd_net_arm.o
+  zig cc $ARM $BEARSSL -o build/merakiplus_upd build/merakiplus_upd_arm.o build/merakiplus_upd_net_arm.o build/merakiplus_crypto_arm.o $BEARSSL_SRC
   say "device (ARMv7 static): switcher, tinj_hold, keyinj, tinj, fbpage, evprobe"
   zig cc $ARM $WERR -o build/switcher boot/switcher.c
   say "device (ARMv7, glibc 2.28 like the display, dynamic): merakiplus_snd (dlopens the display's libmi_sys.so + libmi_ao.so)"
@@ -101,8 +114,10 @@ say "self-tests (switcher gesture/mode logic, grab shim, sound helper, launcher,
 rm -rf build/boot_selftest
 ./build/merakiplus_boot_host --selftest build/boot_selftest > build/merakiplus_boot_selftest.log 2>&1 || { cat build/merakiplus_boot_selftest.log; echo "build.sh: launcher selftest FAILED" >&2; exit 1; }
 printf '   merakiplus_boot_host: %s\n' "$(tail -n 1 build/merakiplus_boot_selftest.log)"
-./build/merakiplus_upd_host --selftest > build/merakiplus_upd_selftest.log 2>&1 || { cat build/merakiplus_upd_selftest.log; echo "build.sh: manifest verifier selftest FAILED" >&2; exit 1; }
+./build/merakiplus_upd_host --selftest > build/merakiplus_upd_selftest.log 2>&1 || { cat build/merakiplus_upd_selftest.log; echo "build.sh: updater selftest FAILED" >&2; exit 1; }
 printf '   merakiplus_upd_host: %s\n' "$(tail -n 1 build/merakiplus_upd_selftest.log)"
+python3 tools/gen_anchors.py --check > build/anchors_check.log 2>&1 || { cat build/anchors_check.log; echo "build.sh: src/merakiplus_upd_anchors.h differs from keys/tls/" >&2; exit 1; }
+printf '   anchors: %s\n' "$(tail -n 1 build/anchors_check.log)"
 for t in switcher_selftest grab_shim_selftest merakiplus_snd_selftest; do
   a=; [ "$t" = merakiplus_snd_selftest ] && a=audio
   ./build/$t $a > build/$t.log 2>&1 || { cat build/$t.log; echo "build.sh: $t FAILED" >&2; exit 1; }

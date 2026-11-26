@@ -20,6 +20,11 @@ Every change to `main` is a pull request. The required check is **`merge-gate`**
 (English + Danish) when `src/`, `sim/`, `boot/`, `build.sh` or `ci.yml` change. `main` must be merged into the
 branch (or the branch rebased) whenever `main` has moved on — branch protection requires it to be up to date.
 
+A separate weekly workflow, [`live-canary.yml`](../.github/workflows/live-canary.yml), runs the on-device updater
+against the real GitHub with only the pinned roots (`tests/live_canary.py`). It is not part of `merge-gate` (it needs
+github.com); a failure means a CA, TLS or URL-format change that must be answered with a release while the machines can
+still fetch it ([keys/tls/README.md](../keys/tls/README.md)).
+
 Community PRs also need one approving review from a maintainer, and from the code owner when they touch a trust anchor
 (`.github/CODEOWNERS`); a new push dismisses an earlier approval. The owner (an administrator) merges their own and
 their agents' PRs with `gh pr merge --admin` once `merge-gate` is green; see
@@ -29,7 +34,8 @@ their agents' PRs with `gh pr merge --admin` once `merge-gate` is green; see
 
 A feature, fix or tooling PR **never claims a release version**. `VERSION` in `tools/merakiplus.py` and
 `MERAKIPLUS_VERSION` in `src/merakiplus.c` stay at the last released version, and its `CHANGELOG.md` entry goes under
-`## [Unreleased]`. If such a PR changes a shipped binary, `bin/` is rebuilt with the unchanged version string (so the
+`## [Unreleased]` — with a `### On the machine` subsection of 1–4 ultrashort bullets (≤ 36 ASCII characters; what
+an owner sees on the display before installing; see §3). If such a PR changes a shipped binary, `bin/` is rebuilt with the unchanged version string (so the
 drift check stays green); the release PR assigns the version later. Between releases the commits on `main` are
 therefore not installable without `--allow-unsigned` — they are development builds.
 
@@ -40,7 +46,11 @@ A release is an ordinary PR that additionally:
 - bumps `VERSION` in `tools/merakiplus.py` **and** `MERAKIPLUS_VERSION` in `src/merakiplus.c` (they must agree;
   `release.yml` refuses a mismatch),
 - moves the `Unreleased` entries in `CHANGELOG.md` into a `## [X.Y] — date` section (the release notes are taken
-  from it by `tools/release_notes.py`),
+  from it by `tools/release_notes.py`) and merges their **`### On the machine`** bullets into the section's own one:
+  **1–4 bullets, plain ASCII, at most 36 characters each** — the ultrashort notes the display shows in
+  SYSTEM › UPDATES before INSTALL. They are published as the release asset `notes.txt` (covered by the signed
+  manifest). `tests/hygiene.py` (CI), `release.yml` (`release_notes.py --device`) and `sign_release.py` refuse a
+  release without valid ones,
 - for device changes, commits the rebuilt `bin/` with updated checksums (official zig 0.17.1, see CONTRIBUTING.md).
 
 **Merging it is the maintainer's approval to build the release; publishing it is the maintainer's signature.** A PR

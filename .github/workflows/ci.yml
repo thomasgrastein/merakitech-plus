@@ -129,6 +129,8 @@ jobs:
         run: python3 tests/test_launcher.py
       - name: Signed release manifests (both verifiers, signing tool, workflow manifest step)
         run: python3 tests/test_upd.py
+      - name: On-device HTTPS check + install (the updater against a local TLS server; OTA phase 3)
+        run: python3 tests/test_ota_fetch.py
       - name: Installer / revert against the mock display
         run: python3 tests/test_installer.py
       - name: Upload reports

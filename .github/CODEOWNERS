@@ -16,3 +16,8 @@
 /tests/hygiene.py               @thomasgrastein
 /tests/check_bins.py            @thomasgrastein
 /bin/                           @thomasgrastein
+/src/merakiplus_upd_anchors.h   @thomasgrastein
+/src/merakiplus_upd_net.c       @thomasgrastein
+/tools/gen_anchors.py           @thomasgrastein
+/third_party/                   @thomasgrastein
+/.gitattributes                 @thomasgrastein
