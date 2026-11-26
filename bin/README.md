@@ -2,7 +2,7 @@
 
 | File | What | Built from |
 |---|---|---|
-| `merakiplus` | **Meraki+ v6.24** device binary (static ARMv7, musl). Installed as `/new_customer/merakiplus/rel/<version>-<sha8>/demo_v9`. | `src/merakiplus.c` |
+| `merakiplus` | **Meraki+** device binary (static ARMv7, musl; version string `V6.24` plus the unreleased changes in CHANGELOG). Installed as `/new_customer/merakiplus/rel/<version>-<sha8>/demo_v9`. | `src/merakiplus.c` |
 | `merakiplus_boot` | the launcher (static ARMv7, no UI/network/UART). Installed as `/new_customer/demo_v9`; starts the chosen release and rolls back (docs/ota-plan.md phase 1b) | `src/merakiplus_boot.c` |
 | `merakiplus_snd` | sound helper (ARMv7, dynamic against the display's glibc 2.28; `dlopen`s the display's own `libmi_*.so` at run time). Installed into each release directory, next to `audio/` | `src/merakiplus_snd.c` |
 | `switcher` | gesture switcher daemon (center-hold 5 s → stock to Meraki+), only with `--gesture` | `boot/switcher.c` |
@@ -18,6 +18,13 @@
 **No vendor firmware, libraries or scripts are included here or anywhere in this repository.**
 
 ## Provenance of the ARM binaries
+
+**Unreleased (2026-11-26, grind size ruler on the GRIND page):** `merakiplus` (`da51e110…`), `merakiplus_sim_arm` and
+the two host SIM builds were rebuilt with the official zig 0.17.1 from the source on this branch. The version string is still
+`V6.24`: the release version is assigned later, in a release PR. The change is display-only and read-only. The GRIND page shows the
+grinder's measured grind size (word 37, already polled) on a ruler, and the HOME grind stat is renamed SIZE / GRAD. No UART
+frame, frame-policy rule or guard changed, and the grinder calibration is never written. `merakiplus_boot`, `merakiplus_snd`,
+`switcher`, `tinj_hold`, `keyinj`, `grab_shim.so` and `audio/` are byte-identical to v6.24. **Not yet verified on a machine.**
 
 **v6.24 (2026-11-25, water tank messages — issue #1):** `merakiplus` (`9182753f…`), `merakiplus_sim_arm` and the two
 host SIM builds were rebuilt from the v6.24 source with the official zig 0.17.1. The change is display-only: three
@@ -136,14 +143,14 @@ self-test and the simulator E2E suite.
 
 | File | md5 (this repo) | Built with |
 |---|---|---|
-| `merakiplus` (V6.24) | `9182753f4d277821f9f06b810a066096` | `./build.sh` → `build/merakiplus` |
-| `merakiplus_sim_arm` (V6.24) | `1c2b4ac4b1de1474b654ac4679d68537` | `./build.sh` → `build/merakiplus_sim_arm` |
+| `merakiplus` (unreleased, `V6.24` string) | `da51e11076e30bedfb50391b55dd8fb5` | `./build.sh` → `build/merakiplus` |
+| `merakiplus_sim_arm` (unreleased, `V6.24` string) | `c20781762b374a1277386b05cda7df0d` | `./build.sh` → `build/merakiplus_sim_arm` |
 | `merakiplus_snd` (V6.18.1) | `a7659c176b8ef78385b0b612a69e81ca` | `./build.sh` → `build/merakiplus_snd` |
 | `switcher` | `e02a463c16278545c04b8e4022b8369f` | `./build.sh` → `build/switcher` |
 | `tinj_hold` | `e9806fb92e9b8a7e506a34639173c648` | `./build.sh` → `build/tinj_hold` |
 | `keyinj` | `a0cbd4bc2a670abe0e250ec34a193843` | `./build.sh` → `build/keyinj` |
-| `merakiplus_sim-linux-x86_64` (V6.24) | `8994c3a10ae40c2eceaca597c3d9c977` | `zig cc -target x86_64-linux-musl -DMERAKIPLUS_SIM -O2 -static -s src/merakiplus.c -lm` |
-| `merakiplus_sim-macos-arm64` (V6.24) | `f4b59e4452839d8549a9cb8c65ec6fdb` | `zig cc -DMERAKIPLUS_SIM -O2 -s src/merakiplus.c -lm` (Mach-O builds are not bit-reproducible) |
+| `merakiplus_sim-linux-x86_64` (unreleased, `V6.24` string) | `ab7dd3b742a7037fd0113a445d2712ed` | `zig cc -target x86_64-linux-musl -DMERAKIPLUS_SIM -O2 -static -s src/merakiplus.c -lm` |
+| `merakiplus_sim-macos-arm64` (unreleased, `V6.24` string) | `82fc7473f24fd6e420b9d3f40b71b830` | `zig cc -DMERAKIPLUS_SIM -O2 -s src/merakiplus.c -lm` (Mach-O builds are not bit-reproducible) |
 
 The ARM builds above are reproducible: running `./build.sh` on the same sources with the **official**
 zig 0.17.1 release (the ziglang.org tarball CI installs) gives the same md5 on macOS and Linux,

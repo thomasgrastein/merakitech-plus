@@ -28,7 +28,7 @@ whole header is the target), or swipe right. There are no page dots, no edge zon
 | Page | Opened by | Contents |
 |---|---|---|
 | **HOME** | — (root) | clock (or the wordmark while the clock is not set) · phase chip · gauge · hero number · sub-line · chart (40 s) / one hint line · 3 stats · the 4 activity icons **with their targets underneath** (grind dose, brew weight, water amount, milk temperature) — or the STOP button(s) while something runs · the gear |
-| **GRIND** | tap the bean icon | live line *ON THE SCALE 0.0 G* · GRIND DOSE, GRIND MODE · HOLD TO START |
+| **GRIND** | tap the bean icon | live line *ON THE SCALE 0.0 G* · GRIND DOSE, GRIND MODE · **GRIND SIZE** ruler (unreleased): the grinder's measured grind size (word 37, read-only) on a *FINE … COARSE* scale 1..30, or 0..40 when the machine's gear-40 point is calibrated (word 75 ≠ 0xFFFF and word 75 − word 65 ≥ 100); values outside the scale pin to its ends, the tab still shows the number; *--* and no marker without a connection · HOLD TO START |
 | **BREW** | tap the cup icon | live line *BOILER 92.4° · GROUP 70°* · BREW WEIGHT, BREW TEMP, PRE-INFUSION, PRE-INF. TIME, PRE-INF. PRESSURE, GROUP HEAD (4 in view, the list scrolls) · HOLD TO START |
 | **WATER** | tap the drop icon | live line *WATER 99.9°* (word 40 — the "water sensor") · HOT WATER, WATER MODE · HOLD TO START. **v6.22:** on a controller that cannot dose (≤ 5.1.2, version unknown, scale fault) no rows — *MANUAL HOT WATER · RUNS UNTIL YOU TAP STOP* + the reason (§21) |
 | **STEAM** | tap the steam icon | live line *BOILER 130° · MILK 22.6°* · MILK TEMP, STEAM LEVEL · HOLD TO START |

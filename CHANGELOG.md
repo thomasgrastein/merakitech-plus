@@ -3,6 +3,23 @@
 All notable changes to Meraki+. Details (with evidence, frames and test figures) are in
 [docs/dev/UI_v6.md](docs/dev/UI_v6.md) under *CHANGES-v6.x*. All dates are 2026.
 
+## Unreleased — grinder size ruler
+Display-only and read-only. `VERSION` stays 6.24 until a release PR. No UART frame, frame-policy rule or guard changed,
+and the grinder calibration is never written.
+### Added
+- **GRIND page: the measured grind size as a ruler** (*GRIND SIZE* / *MALEGRAD*), between GRIND MODE and HOLD TO
+  START: the stock dial unrolled into a *FINE … COARSE* (*FIN … GROV*) scale with a marker and a value tab. The value is
+  the controller's grind gear, word 37, which Meraki+ already polls. The scale is 1..30 (labels 1 · 5 · 10 … 30). It is
+  0..40 (labels every 10) when the machine's gear-40 point is calibrated: word 75 ≠ 0xFFFF and word 75 − word 65 ≥ 100,
+  the same rule as the controller. There the controller can report down to −3. Values outside the scale pin to its ends,
+  and the tab still shows the number. With no connection, or before word 37 has been read, it shows *--* with no marker,
+  and HOLD TO START is dimmed by its usual guard.
+- SIM state JSON: `grind_size` {value, shown, lo, hi, scale40, marker, pos, pinned, labels, drawn, start}; new
+  scenario `grind_size_ruler`; UI self-test section (7 checks, EN + DA); previews 113–118.
+### Changed
+- HOME during a grind: the third stat is **SIZE** / **GRAD** (was STEP / TRIN). It shows word 37 as a signed number
+  (*-3*, not *65533*).
+
 ## Unreleased — security hardening (installer, release process, CI)
 No device binary changed (`bin/` is byte-identical; `VERSION` stays 6.24 until a release PR). Details:
 [docs/release-process.md](docs/release-process.md), [docs/signing.md](docs/signing.md).
