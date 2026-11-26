@@ -2,15 +2,19 @@
  * 480x480 screen, v6.16: feature parity (settings + activity control), its own visual
  * design system, boot-slot integration, product name + two languages — and from v6.4 a SIM build.
  *
+ * v6.25 = v6.24 + (1) GRIND SIZE RULER (docs/ui-guide.md, GRIND page): the grinder's measured grind size (word 37, already polled,
+ *  read-only) as a ruler between GRIND MODE and HOLD TO START, mirrored like the physical dial on the bean container (FINE right, COARSE
+ *  left); scale 1..30, or 0..40 when the gear-40 point is calibrated (word 75 != 0xFFFF and word 75 - word 65 >= 100, the controller's
+ *  rule); HOME's grind stat is SIZE / GRAD (was STEP / TRIN). (2) BEAN CONTAINER MESSAGE (work_sta word 33 bit 8, docs/ui-guide.md §23):
+ *  removing the bean container showed ASLEEP / SOVER, because phase_raw() read bit 8 clear as sleep. Stock shows lackBeenTank.png for
+ *  exactly that bit (comment at the water-tank evidence below). HOME now says BEAN CONTAINER MISSING · FIT IT / BØNNEBEHOLDER MANGLER ·
+ *  SÆT DEN I with an amber MISSING / MANGLER chip; sleep stays word 1 = 1 / word 0 = 0, offline stays no link. Both display only: no
+ *  UART frame, frame-policy rule or guard changed (the start guards block as before, with a new guard text). Hardware-verified on Gen 1.
  * v6.24 = v6.23 + WATER TANK MESSAGES (issue #1, docs/ui-guide.md §22): removing the water tank showed ERROR · UNKNOWN FAULT. The
  *  controller reports the tank in word 36 (0x8000 = tank missing, 0x0001 = tank low) and a pump running dry in word 35 (0x8000); stock
  *  shows them as water-tank icons, Meraki+ had no text for them. HOME now says WATER TANK MISSING / WATER TANK LOW · PLEASE REFILL /
  *  NO WATER FLOW · CHECK THE TANK (codes E3 / E3 / E2). Display only: the phase (ERROR), the start guards and the frame policy are unchanged;
  *  unmapped bits still read UNKNOWN FAULT. Gen 1 evidence (controller 5.1.4); Gen 2 not verified yet.
- * v6.24 also = + BEAN CONTAINER MESSAGE (work_sta word 33 bit 8): removing the bean container showed ASLEEP / SOVER, because phase_raw()
- *  read bit 8 clear as sleep. Stock shows lackBeenTank.png for exactly that bit (comment at the water-tank evidence below). HOME now says
- *  BEAN CONTAINER MISSING · FIT IT / BØNNEBEHOLDER MANGLER · SÆT DEN I with an amber MISSING / MANGLER chip; sleep stays
- *  word 1 = 1 / word 0 = 0, offline stays no link. Display only: the start guards block as before (new guard text), no frame-policy change.
  * v6.23 = v6.22 + AUTO OFF 30 MIN BY DEFAULT, like stock (docs/time-scheduling.md §5.1, docs/safety.md §3). The schedule file's
  *  autooff key now means: absent / no file / not one of 0|15|20|30|60 -> 30 min (was OFF); any valid value -> exactly that value,
  *  so an explicit autooff=0 stays OFF and 15/20/60 stay as they are. Files written by v6.16..v6.22 always carry the key, so an
@@ -186,7 +190,7 @@
  *    (tmp+rename, pristine+rolling backup, md5 log). The UI is the only range guard.
  *  - ACTIVITIES: GRIND/BREW/WATER/STEAM w. observed recipes (hold-to-start),
  *    STOP for steam (word24=0), auto-stop expectation in UI text.
- *  - PHASES: steam = work_sta bits 5+14 (0x4020); sleep = word1==1 / word0==0; bean container removed = work_sta bit 8 clear (v6.24).
+ *  - PHASES: steam = work_sta bits 5+14 (0x4020); sleep = word1==1 / word0==0; bean container removed = work_sta bit 8 clear (v6.25).
  *  - GRAPHICS: anti-aliased stroke font (own, no dependencies), AA primitives,
  *    270-degree gauge w. LUT, retained compositor w. dirty rects, page slide,
  *    crossfade, touch ripple, toasts, boot splash. Global circle clip kept.
@@ -332,7 +336,7 @@ static int  sim_net_on=1;
 #define KBD_NAME "k62091"
 #define BL_SYSFS "/sys/class/pwm/pwmchip0/pwm2/duty_cycle"
 #define BL_EN_SYSFS "/sys/class/pwm/pwmchip0/pwm2/enable"   /* v6.14: stock uikit_os_back_light_off/on 0xC2278 = blpwm_set_enable(2,0/1) */
-#define MERAKIPLUS_VERSION "V6.24"
+#define MERAKIPLUS_VERSION "V6.25"
 
 /* ---- v6.10: pressure estimate (UI_v6.md §16) ----
  * Word 51 (SPI2 ADC channel 0xA, REGISTERMAP: pressure OR pump-drive candidate) -> bar with ONE linear anchor:
@@ -2818,8 +2822,8 @@ static int phase_raw(ms_t now){
     if((ws&0x000A)==0x000A) return PH_WATER;                 /* bits 1+3 */
     if(reg[34]||reg[35]||reg[36]) return PH_ERROR;
     if(reg_seen[1]&&reg[1]==1) return PH_SLEEP;
-    if(reg_seen[0]&&reg[0]==0) return PH_SLEEP;               /* v6.24: power off = the MCU going to sleep (word 0 = 0) */
-    if(reg_seen[33]&&!(ws&0x0100)) return PH_BEAN;            /* v6.24: bean container removed (stock lackBeenTank.png), NOT sleep */
+    if(reg_seen[0]&&reg[0]==0) return PH_SLEEP;               /* v6.25: power off = the MCU going to sleep (word 0 = 0) */
+    if(reg_seen[33]&&!(ws&0x0100)) return PH_BEAN;            /* v6.25: bean container removed (stock lackBeenTank.png), NOT sleep */
     if(reg_seen[40]&&reg_seen[11]&&(int)reg[40] < (int)reg[11]-20) return PH_HEAT;
     return PH_READY;
 }
@@ -3774,7 +3778,7 @@ static void gfx_init(void){
 static uint32_t ph_hi(int p){
     switch(p){
     case PH_OFFLINE: return rgb(124,130,144); case PH_SLEEP: return rgb(136,144,222);
-    case PH_BEAN:    return rgb(255,190,84);                 /* v6.24: warning amber (the container is missing, the machine is awake) */
+    case PH_BEAN:    return rgb(255,190,84);                 /* v6.25: warning amber (the container is missing, the machine is awake) */
     case PH_ERROR:   return rgb(255,96,96);   case PH_HEAT:  return rgb(255,186,84);
     case PH_READY:   return rgb(98,222,168);  case PH_GRIND: return rgb(174,228,112);
     case PH_PRE:     return rgb(92,180,255);  case PH_EXT:   return rgb(255,142,68);
@@ -3785,7 +3789,7 @@ static uint32_t ph_hi(int p){
 static uint32_t ph_lo(int p){
     switch(p){
     case PH_OFFLINE: return rgb(66,70,80);    case PH_SLEEP: return rgb(58,62,120);
-    case PH_BEAN:    return rgb(150,78,26);                  /* v6.24: warning amber, dark end */
+    case PH_BEAN:    return rgb(150,78,26);                  /* v6.25: warning amber, dark end */
     case PH_ERROR:   return rgb(130,36,40);   case PH_HEAT:  return rgb(150,78,26);
     case PH_READY:   return rgb(24,104,92);   case PH_GRIND: return rgb(62,116,46);
     case PH_PRE:     return rgb(30,74,168);   case PH_EXT:   return rgb(166,54,28);
@@ -3999,7 +4003,7 @@ static const char* act_guard(int kind,ms_t now){
     if(p==PH_OFFLINE) return TR(TX_G_NOLINK);
     if(p==PH_ERROR)   return TR(TX_G_ERROR);
     if(p==PH_SLEEP)   return TR(TX_G_SLEEP);
-    if(p==PH_BEAN)    return TR(TX_G_BEAN);                  /* v6.24: bean container removed — start stays blocked, as before */
+    if(p==PH_BEAN)    return TR(TX_G_BEAN);                  /* v6.25: bean container removed — start stays blocked, as before */
     if(phase_active(p)&&!(kind==ACT_STEAM&&steam_brew_ok(now))) return TR(TX_G_BUSY);
     if(reg[34]||reg[35]||reg[36]) return TR(TX_G_ERROR);           /* v6.20: phase_raw puts a running brew before the error words */
     if(wq_busy()||act.pending!=ACT_NONE||sav.active) return TR(TX_G_WAIT);
@@ -4877,7 +4881,7 @@ static void home_model(ms_t now){
         switch(ph){
         case PH_OFFLINE: snprintf(m->sub,sizeof m->sub,"%s",TR(TX_H_NORESP)); break;
         case PH_SLEEP:   snprintf(m->sub,sizeof m->sub,"%s",TR(TX_H_WAKING)); break;
-        case PH_BEAN:    snprintf(m->sub,sizeof m->sub,"%s",TR(TX_H_BEAN)); break;   /* v6.24: bean container missing, not sleep */
+        case PH_BEAN:    snprintf(m->sub,sizeof m->sub,"%s",TR(TX_H_BEAN)); break;   /* v6.25: bean container missing, not sleep */
         case PH_ERROR:   snprintf(m->sub,sizeof m->sub,"%s",err_text()); break;
         case PH_HEAT:    snprintf(m->sub,sizeof m->sub,TR(TX_H_HEATING_TO),a); break;
         default:         snprintf(m->sub,sizeof m->sub,TR(TX_H_SET_TO),a); break;
@@ -5419,7 +5423,7 @@ static void draw_start(ms_t now){
  * polled (sub33). Read-only: nothing is sent and the calibration is never written. Scale 1..30; 0..40 when the gear-40 point is
  * calibrated (word 75 != 0xFFFF and word 75 - word 65 >= 100), where 0x181E can report down to -3: values outside the scale pin to its
  * ends (the tab still shows the number). No link / word 37 not polled yet: "--", no marker (HOLD TO START is dimmed by its guard).
- * Orientation (v6.24, hw-confirmed): MIRRORED like the physical dial on the bean container — FINE / FIN at the RIGHT end, COARSE / GROV
+ * Orientation (v6.25, hw-confirmed): MIRRORED like the physical dial on the bean container — FINE / FIN at the RIGHT end, COARSE / GROV
  * at the LEFT, numbers ascending right-to-left; the marker's screen fraction from the left is 1 - t. */
 typedef struct { int ok, g, lo, hi; float t; } GSize;
 static GSize gsize(ms_t now){
@@ -8819,7 +8823,7 @@ static void st_v617(void){
       int bad=0; for(int i=0;i<NSTR;i++){ int k=STR_K[i]; if(k==KCON||k==KDL||k==KDV||k==KDF) continue; for(int lg=0;lg<NLANG;lg++){ const char*t=STR[lg][i];
             if(strstr(t,"CONFIG ONLY")||strstr(t,"KUN CONFIG")||strstr(t,"CMD8")||strstr(t,"CONFIG.JSON")||strstr(t,"OR STOP")||strstr(t,"ELLER STOP")||strstr(t,"EST.")){ bad++; printf("     [%s] %s: '%s'\n",LANG_CODE[lg],STR_ID[i],t); } } }
       printf("       string table: %d ids (v6.16: 449)\n",NSTR);
-      st_check("text: no user-facing string says CONFIG ONLY / CONFIG.JSON / CMD8 / '· OR STOP' / 'EST.' any more; the string table is smaller than v6.16's 449 ids although v6.17 adds pages (v6.18's sound block aside)",bad==0&&NSTR-(TX_DV_SO_DROP-TX_SL_SOUND+1)-(TX_DV_WD_FAULT-TX_ER_E2_SCALE+1)-(TX_ER_E2_NOFLOW-TX_ER_E3_TANK+1)-(TX_PH_BEAN-TX_PH_BEAN+1)-(TX_H_BEAN-TX_G_BEAN+1)<449);   /* v6.18: the sound feature's own strings (one contiguous block) are not counted; v6.22: nor the water gate's; v6.24: nor the water tank's; v6.24: nor the bean container's (chip + the G/H pair) */
+      st_check("text: no user-facing string says CONFIG ONLY / CONFIG.JSON / CMD8 / '· OR STOP' / 'EST.' any more; the string table is smaller than v6.16's 449 ids although v6.17 adds pages (v6.18's sound block aside)",bad==0&&NSTR-(TX_DV_SO_DROP-TX_SL_SOUND+1)-(TX_DV_WD_FAULT-TX_ER_E2_SCALE+1)-(TX_ER_E2_NOFLOW-TX_ER_E3_TANK+1)-(TX_PH_BEAN-TX_PH_BEAN+1)-(TX_H_BEAN-TX_G_BEAN+1)<449);   /* v6.18: the sound feature's own strings (one contiguous block) are not counted; v6.22: nor the water gate's; v6.24: nor the water tank's; v6.25: nor the bean container's (chip + the G/H pair) */
       st_home(); home_model(sim_now); int one=!strcmp(hm.hint1,TR(TX_C_HINT))&&hm.hint2==NULL&&!strcmp(hm.label,TR(TX_H_BOILER))&&!st_has(hm.label,"\xC2\xB7");
       reg[33]=0x0141; sim_run(600); home_model(sim_now); fmt_fix(a,sizeof a,sv(S_GRINDW),1); snprintf(b,sizeof b,TR(TX_H_AUTOSTOP_G),a); int g=!strcmp(hm.label,TR(TX_H_DOSE))&&!st_has(hm.label,a)&&!strcmp(hm.sub,b)&&sub_font(&hm)==F_S;
       st_check("HOME: one hint line; the label is the name of the number only ('BREW BOILER', 'DOSE' — no '· NOW', no repeated target); during an activity the target is said once, in F_S ('STOPS AT 18.5 G')",one&&g); }
@@ -9494,9 +9498,9 @@ static void st_v624(void){
     st_check("v6.24 texts fit the HOME subline (both languages)",ok);
     sim_reset();
 }
-/* ============================ v6.24: bean container message (work_sta bit 8; display only) ============================ */
+/* ============================ v6.25: bean container message (work_sta bit 8; display only) ============================ */
 static void st_bean(void){
-    printf("== selftest: v6.24 bean container (stock lackBeenTank.png: work_sta word 33 bit 8 clear = container removed; not sleep, not offline) ==\n");
+    printf("== selftest: v6.25 bean container (stock lackBeenTank.png: work_sta word 33 bit 8 clear = container removed; not sleep, not offline) ==\n");
     int ok=1, kl=ui_lang; ms_t t;
     for(int lg=0;lg<NLANG;lg++){ lang_set(lg);
         t=st_home(); st_s33(0x0001,t+=220); ui_frame(t); home_model(sim_now);   /* bit 8 clear, word 0 = 1, word 1 = 0, link up */
@@ -9529,7 +9533,7 @@ static void st_bean(void){
         LAY(text_wf(TR(TX_H_BEAN),F_XS),KB[KSUB].maxw,"HOME subline",TR(TX_H_BEAN));
         LAY(text_wf(TR(TX_G_BEAN),F_XS),KB[KT].maxw,"toast",TR(TX_G_BEAN)); }
     lang_set(kl);
-    st_check("v6.24 bean texts fit the phase chip, the HOME subline and the toast (both languages)",ok);
+    st_check("v6.25 bean texts fit the phase chip, the HOME subline and the toast (both languages)",ok);
     sim_reset();
 }
 /* ============================ grinder size ruler (GRIND page; word 37, read-only) ============================ */
@@ -10295,7 +10299,7 @@ static int selftest(const char*cfgsrc){
     st_v620();                         /* v6.20 */
     st_v622();                         /* v6.22 */
     st_v624();                         /* v6.24 */
-    st_bean();                         /* v6.24: bean container (work_sta bit 8) */
+    st_bean();                         /* v6.25: bean container (work_sta bit 8) */
     st_grind_size();                   /* the grinder size ruler (GRIND page) */
     /* ============================ v6.15 ============================ */
     st_graph();

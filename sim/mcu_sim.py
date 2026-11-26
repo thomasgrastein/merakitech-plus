@@ -2037,7 +2037,7 @@ class McuSim:
             self.alog.log(self.t, "set_reg", word=w, value=r[w])
             return True
         if typ == "bean_tank":
-            # v6.24: the bean container switch (work_sta bit 8). Removed = bit 8 clear while awake
+            # v6.25: the bean container switch (work_sta bit 8). Removed = bit 8 clear while awake
             # (stock lackBeenTank.png); the idle work_sta is recomputed from ws_idle() every tick.
             self.bean_tank = bool(ev.get("present", True))
             self.alog.log(self.t, "bean_tank", present=self.bean_tank)

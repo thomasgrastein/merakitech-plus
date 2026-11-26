@@ -1,7 +1,7 @@
 {
   "name": "bean_container_missing",
   "ui_only": true,
-  "description": "v6.24 bean container (work_sta word 33 bit 8, stock lackBeenTank.png): bit 8 clear with a live link and word 0 = 1 / word 1 = 0 is the BEAN phase (amber MISSING / MANGLER chip, HOME subline 'BEAN CONTAINER MISSING · FIT IT' / 'BØNNEBEHOLDER MANGLER · SÆT DEN I'), NOT sleep; word 0 = 0 (power off, the MCU sleep task) still wins as SLEEP — word 1 = 1 priority is covered by the UI selftest, the UI's keep-awake writes word 1 = 0 here; putting the container back (bit 8 set) returns READY. Nothing is written (no frame outside the polls and the keep-awake) the whole time.",
+  "description": "v6.25 bean container (work_sta word 33 bit 8, stock lackBeenTank.png): bit 8 clear with a live link and word 0 = 1 / word 1 = 0 is the BEAN phase (amber MISSING / MANGLER chip, HOME subline 'BEAN CONTAINER MISSING · FIT IT' / 'BØNNEBEHOLDER MANGLER · SÆT DEN I'), NOT sleep; word 0 = 0 (power off, the MCU sleep task) still wins as SLEEP — word 1 = 1 priority is covered by the UI selftest, the UI's keep-awake writes word 1 = 0 here; putting the container back (bit 8 set) returns READY. Nothing is written (no frame outside the polls and the keep-awake) the whole time.",
   "duration_s": 12,
   "events": [
     { "t": 1, "target": "sim", "event": { "type": "bean_tank", "present": false } },

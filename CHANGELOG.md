@@ -3,9 +3,12 @@
 All notable changes to Meraki+. Details (with evidence, frames and test figures) are in
 [docs/dev/UI_v6.md](docs/dev/UI_v6.md) under *CHANGES-v6.x*. All dates are 2026.
 
-## Unreleased — grinder size ruler + bean container message
-Display-only and read-only. `VERSION` stays 6.24 until a release PR. No UART frame, frame-policy rule or guard changed,
-and the grinder calibration is never written.
+## [6.25] — 2026-11-26
+**Grinder: the measured grind size as a ruler, and a bean container message instead of *ASLEEP*.** Both are display-only
+and read-only: no UART frame, frame-policy rule or guard changed, and the grinder calibration is never written.
+**Hardware-verified on a Gen 1 machine** (ruler tab 1 / 15 / 30 = word 37 at the dial's FINE end, middle and COARSE
+end; mirrored orientation confirmed against the physical dial; bean container lifted → *MANGLER*, back → *KLAR*).
+Details: [docs/ui-guide.md](docs/ui-guide.md) (GRIND page, §23).
 ### Added
 - **GRIND page: the measured grind size as a ruler** (*GRIND SIZE* / *MALEGRAD*), between GRIND MODE and HOLD TO
   START: the stock dial unrolled into a *COARSE … FINE* (*GROV … FIN*) scale with a marker and a value tab, **mirrored
@@ -27,11 +30,18 @@ and the grinder calibration is never written.
 ### Changed
 - HOME during a grind: the third stat is **SIZE** / **GRAD** (was STEP / TRIN). It shows word 37 as a signed number
   (*-3*, not *65533*).
+### Verification
+- UI self-test **603 / 0** EN and DA (sections *grinder size ruler* and *v6.25 bean container*). SIM scenarios
+  `grind_size_ruler` 46/46 and `bean_container_missing` 19/19 EN + DA; full E2E EN + DA in CI (`merge-gate`), quick
+  E2E 5/5, `sim/selftest.py` 204/0, hygiene + bin/ drift OK (official zig 0.17.1).
+- On a Gen 1 machine (the same source with the previous version string): ruler follows the dial live (scale 1..30
+  on that machine), HOME stat *GRAD* during a grind, bean container message both ways; 0 CRC errors, no error words,
+  `config.json` byte-identical.
 
-## Unreleased — security hardening (installer, release process, CI)
-No device binary changed (`bin/` is byte-identical; `VERSION` stays 6.24 until a release PR). Details:
+### Installer and releases (security hardening)
+No device binary changed by these. Details:
 [docs/release-process.md](docs/release-process.md), [docs/signing.md](docs/signing.md).
-### Changed (behaviour)
+#### Changed (behaviour)
 - **Installer: signed by default.** `./install.sh` stops when the files are not covered by a valid signed manifest
   of their release (no manifest, unreachable, or files that differ from it). `--allow-unsigned` installs development
   builds on purpose, with an `UNSIGNED install` warning; on a display that already accepted a signed release it also
@@ -44,7 +54,7 @@ No device binary changed (`bin/` is byte-identical; `VERSION` stays 6.24 until a
 - **Releases: draft → sign → publish.** `release.yml` builds a *draft* release (not public, no tag) and never changes
   an existing release; `tools/sign_release.py sign --upload` signs the draft and publishes it. No unsigned release is
   public any more. It runs on `main` only (no tag trigger; a dispatch on another branch is refused).
-### Added
+#### Added
 - **Signing review:** before signing, `sign_release.py` shows the commits, diffstat and changed **trust anchors** since
   the last signed release, checks the three pinned key copies at the release commit against a key pin kept **outside
   the repository** (`~/.merakiplus/trusted-key-pin`, `pin-keys`; a difference is refused unless
@@ -55,44 +65,26 @@ No device binary changed (`bin/` is byte-identical; `VERSION` stays 6.24 until a
   cover it.
 - **`.github/CODEOWNERS`** for the trust anchors, **Dependabot** for the pinned actions, and a CI warning on PRs that
   touch a trust anchor.
-### Security (CI)
+#### Security (CI)
 - Every action pinned to a full commit SHA; `persist-credentials: false` on every checkout; read-only workflow token,
   `contents: write` only on the draft-release job (no repository code runs there); cold zig cache (`use-cache: false`)
   for the `bin/` drift check and the release build. `tests/hygiene.py` fails if any of this regresses, or if a trust
   anchor is not code-owned.
 - Tests: installer (signed by default, `--allow-unsigned`, `max_seq`, `--ref`, the `install.sh` bootstrap with a fake
   `curl`), signing (key pin, review, draft commit, CI refusal, `release.yml` shape).
-## Unreleased — CoffeeSense NFC documentation
 
-### Added
-
-- [Original CoffeeSense NFC reference](docs/stock-coffeesense-nfc.md) covering the tag format, background
-  codes, compatible exports and writing a MIFARE Classic 1K tag.
-
-## Unreleased — pull-request workflow (repository process only)
+### Repository process: pull requests
 No code or binary changed. Details: [CONTRIBUTING.md](CONTRIBUTING.md#how-changes-reach-main), [docs/release-process.md](docs/release-process.md).
-### Changed
+#### Changed
 - **`main` is protected; every change arrives as a pull request.** One required CI check, `merge-gate`, plus one
   maintainer approval for community PRs; force-push and branch deletion are blocked.
 - **CI:** `merge-gate` aggregates the quick gate and the full E2E suite (EN + DA). The full suite now runs
   automatically for every change to `src/`, `sim/`, `boot/`, `build.sh` or the CI workflow; docs-only changes
   need only the quick gate.
 
-## Unreleased — signed releases (OTA phase 2, tooling only)
-No device binary changed. Details: [docs/signing.md](docs/signing.md), [docs/ota-plan.md](docs/ota-plan.md#phase-2--implemented-2026-11-23).
-### Added
-- **Signed release manifests.** `manifest.json` (every asset with size + SHA-256, a monotonic `seq`, tag and commit)
-  + `manifest.sig` (Ed25519, signify format), signed **offline** by the maintainer with `tools/sign_release.py` after
-  a byte-for-byte rebuild of the tag with the official zig. CI cannot sign; it publishes `manifest.unsigned.json` for
-  comparison and refuses to replace assets under an existing signed manifest. **v6.23 is signed** (seq 1; the two
-  files were added to the published release).
-- **Installer:** verifies the release's signed manifest on the computer before any change on the display, records the
-  newest accepted `seq` on the display and refuses older signed releases (`--allow-downgrade`); `--require-signed`;
-  `merakiplus.py verify-release DIR` for downloads; `--bin-dir` also takes the WAVs and a signed manifest.
-- **Device verifier** `merakiplus_upd` (C + Zig standard library crypto), built and tested on the host and as a static
-  ARMv7 binary in an arm32v7 container — not shipped yet (phase 3).
-- Tests: `tests/test_upd.py` (118 checks), installer scenario *2: signed release manifest*, hygiene check that the
-  pinned keys agree and that no private key is in the tree.
+### Documentation
+- [Original CoffeeSense NFC reference](docs/stock-coffeesense-nfc.md) covering the tag format, background
+  codes, compatible exports and writing a MIFARE Classic 1K tag.
 
 ## [6.24] — 2026-11-25
 **Water tank: a real message instead of *UNKNOWN FAULT*** (fixes [#1](https://github.com/thomasgrastein/merakitech-plus/issues/1)).
@@ -117,6 +109,21 @@ Meraki+ had no text for; the stock UI shows them as water-tank icons. Details: [
   `sim/selftest.py` 204/0, installer suite 152/152, launcher tests (96 power-cut states), switcher 55/0, manifest
   tests 115/115, hygiene + bin/ drift OK (official zig 0.17.1).
 - **Not yet on a machine.**
+### Also in v6.24: signed releases (OTA phase 2, tooling only)
+No device binary changed. Details: [docs/signing.md](docs/signing.md), [docs/ota-plan.md](docs/ota-plan.md#phase-2--implemented-2026-11-23).
+#### Added
+- **Signed release manifests.** `manifest.json` (every asset with size + SHA-256, a monotonic `seq`, tag and commit)
+  + `manifest.sig` (Ed25519, signify format), signed **offline** by the maintainer with `tools/sign_release.py` after
+  a byte-for-byte rebuild of the tag with the official zig. CI cannot sign; it publishes `manifest.unsigned.json` for
+  comparison and refuses to replace assets under an existing signed manifest. **v6.23 is signed** (seq 1; the two
+  files were added to the published release).
+- **Installer:** verifies the release's signed manifest on the computer before any change on the display, records the
+  newest accepted `seq` on the display and refuses older signed releases (`--allow-downgrade`); `--require-signed`;
+  `merakiplus.py verify-release DIR` for downloads; `--bin-dir` also takes the WAVs and a signed manifest.
+- **Device verifier** `merakiplus_upd` (C + Zig standard library crypto), built and tested on the host and as a static
+  ARMv7 binary in an arm32v7 container — not shipped yet (phase 3).
+- Tests: `tests/test_upd.py` (118 checks), installer scenario *2: signed release manifest*, hygiene check that the
+  pinned keys agree and that no private key is in the tree.
 
 ## [6.23] — 2026-11-23
 **Auto off: 30 minutes by default, like the stock UI.** Until now Meraki+'s AUTO OFF was *off* unless you turned it
