@@ -1,0 +1,398 @@
+{
+  "name": "grind_size_ruler",
+  "ui_only": true,
+  "description": "The GRIND page's grind size ruler (word 37, read-only): tap the bean icon -> the GRIND page shows the measured grind size from word 37 on a 1..30 scale (labels 1·5·10·15·20·25·30, mirrored like the hopper dial: FINE right / COARSE left) while the gear-40 point is uncalibrated (word 75 = 0xFFFF); word 37 12 -> 27 moves the marker live; word 75 = 3640 (word 75 - word 65 >= 100) switches to 0..40 (labels every 10) and -3 (65533) pins to the right end with the tab showing -3; link silent -> '--', no marker, HOLD TO START dimmed; link up -> back. Nothing is written (no frame outside the polls) the whole time.",
+  "duration_s": 22,
+  "events": [
+    {
+      "t": 1,
+      "target": "sim",
+      "event": {
+        "type": "set_reg",
+        "word": 65,
+        "value": 3219
+      }
+    },
+    {
+      "t": 1,
+      "target": "sim",
+      "event": {
+        "type": "set_reg",
+        "word": 75,
+        "value": 65535
+      }
+    },
+    {
+      "t": 1,
+      "target": "sim",
+      "event": {
+        "type": "set_reg",
+        "word": 37,
+        "value": 12
+      }
+    },
+    {
+      "t": 2,
+      "target": "ui",
+      "cmd": "touch",
+      "layout": "grind",
+      "ms": 90
+    },
+    {
+      "t": 3.5,
+      "target": "runner",
+      "op": "snapshot",
+      "label": "gear-12"
+    },
+    {
+      "t": 4.5,
+      "target": "sim",
+      "event": {
+        "type": "set_reg",
+        "word": 37,
+        "value": 27
+      }
+    },
+    {
+      "t": 5.5,
+      "target": "runner",
+      "op": "snapshot",
+      "label": "gear-27"
+    },
+    {
+      "t": 7,
+      "target": "sim",
+      "event": {
+        "type": "set_reg",
+        "word": 75,
+        "value": 3640
+      }
+    },
+    {
+      "t": 7,
+      "target": "sim",
+      "event": {
+        "type": "set_reg",
+        "word": 37,
+        "value": 34
+      }
+    },
+    {
+      "t": 8.5,
+      "target": "runner",
+      "op": "snapshot",
+      "label": "scale40-34"
+    },
+    {
+      "t": 10,
+      "target": "sim",
+      "event": {
+        "type": "set_reg",
+        "word": 37,
+        "value": 65533
+      }
+    },
+    {
+      "t": 11.5,
+      "target": "runner",
+      "op": "snapshot",
+      "label": "scale40-negative"
+    },
+    {
+      "t": 13,
+      "target": "sim",
+      "event": {
+        "type": "link",
+        "state": "silent"
+      }
+    },
+    {
+      "t": 16,
+      "target": "runner",
+      "op": "snapshot",
+      "label": "offline"
+    },
+    {
+      "t": 17,
+      "target": "sim",
+      "event": {
+        "type": "link",
+        "state": "up"
+      }
+    },
+    {
+      "t": 19.5,
+      "target": "runner",
+      "op": "snapshot",
+      "label": "recovered"
+    }
+  ],
+  "expect": [
+    {
+      "kind": "page",
+      "t": 3.5,
+      "window": 0.6,
+      "value": "settings"
+    },
+    {
+      "kind": "state",
+      "path": "tab",
+      "t": 3.5,
+      "window": 0.6,
+      "equals": "grind"
+    },
+    {
+      "kind": "state",
+      "path": "grind_size.drawn",
+      "t": 3.5,
+      "window": 0.6,
+      "equals": true
+    },
+    {
+      "kind": "state",
+      "path": "grind_size.value",
+      "t": 3.5,
+      "window": 0.6,
+      "equals": 12
+    },
+    {
+      "kind": "state",
+      "path": "grind_size.shown",
+      "t": 3.5,
+      "window": 0.6,
+      "equals": "12"
+    },
+    {
+      "kind": "state",
+      "path": "grind_size.lo",
+      "t": 3.5,
+      "window": 0.6,
+      "equals": 1
+    },
+    {
+      "kind": "state",
+      "path": "grind_size.hi",
+      "t": 3.5,
+      "window": 0.6,
+      "equals": 30
+    },
+    {
+      "kind": "state",
+      "path": "grind_size.scale40",
+      "t": 3.5,
+      "window": 0.6,
+      "equals": false
+    },
+    {
+      "kind": "state",
+      "path": "grind_size.labels",
+      "t": 3.5,
+      "window": 0.6,
+      "equals": [
+        1,
+        5,
+        10,
+        15,
+        20,
+        25,
+        30
+      ]
+    },
+    {
+      "kind": "state",
+      "path": "grind_size.marker",
+      "t": 3.5,
+      "window": 0.6,
+      "equals": true
+    },
+    {
+      "kind": "state",
+      "path": "grind_size.pos",
+      "t": 3.5,
+      "window": 0.6,
+      "min": 0.37,
+      "max": 0.39
+    },
+    {
+      "kind": "state",
+      "path": "grind_size.start",
+      "t": 3.5,
+      "window": 0.6,
+      "equals": "on"
+    },
+    {
+      "kind": "state",
+      "path": "grind_size.value",
+      "t": 5.5,
+      "window": 0.6,
+      "equals": 27
+    },
+    {
+      "kind": "state",
+      "path": "grind_size.pos",
+      "t": 5.5,
+      "window": 0.6,
+      "min": 0.89,
+      "max": 0.9
+    },
+    {
+      "kind": "state",
+      "path": "grind_size.scale40",
+      "t": 8.5,
+      "window": 0.6,
+      "equals": true
+    },
+    {
+      "kind": "state",
+      "path": "grind_size.hi",
+      "t": 8.5,
+      "window": 0.6,
+      "equals": 40
+    },
+    {
+      "kind": "state",
+      "path": "grind_size.lo",
+      "t": 8.5,
+      "window": 0.6,
+      "equals": 0
+    },
+    {
+      "kind": "state",
+      "path": "grind_size.value",
+      "t": 8.5,
+      "window": 0.6,
+      "equals": 34
+    },
+    {
+      "kind": "state",
+      "path": "grind_size.labels",
+      "t": 8.5,
+      "window": 0.6,
+      "equals": [
+        0,
+        10,
+        20,
+        30,
+        40
+      ]
+    },
+    {
+      "kind": "state",
+      "path": "grind_size.pos",
+      "t": 8.5,
+      "window": 0.6,
+      "min": 0.849,
+      "max": 0.851
+    },
+    {
+      "kind": "state",
+      "path": "grind_size.value",
+      "t": 11.5,
+      "window": 0.6,
+      "equals": -3
+    },
+    {
+      "kind": "state",
+      "path": "grind_size.shown",
+      "t": 11.5,
+      "window": 0.6,
+      "equals": "-3"
+    },
+    {
+      "kind": "state",
+      "path": "grind_size.pinned",
+      "t": 11.5,
+      "window": 0.6,
+      "equals": true
+    },
+    {
+      "kind": "state",
+      "path": "grind_size.pos",
+      "t": 11.5,
+      "window": 0.6,
+      "equals": 0
+    },
+    {
+      "kind": "state",
+      "path": "grind_size.marker",
+      "t": 11.5,
+      "window": 0.6,
+      "equals": true
+    },
+    {
+      "kind": "state",
+      "path": "link_up",
+      "t": 16,
+      "window": 0.5,
+      "equals": false
+    },
+    {
+      "kind": "state",
+      "path": "grind_size.value",
+      "t": 16,
+      "window": 0.5,
+      "equals": null
+    },
+    {
+      "kind": "state",
+      "path": "grind_size.shown",
+      "t": 16,
+      "window": 0.5,
+      "equals": "--"
+    },
+    {
+      "kind": "state",
+      "path": "grind_size.marker",
+      "t": 16,
+      "window": 0.5,
+      "equals": false
+    },
+    {
+      "kind": "state",
+      "path": "grind_size.start",
+      "t": 16,
+      "window": 0.5,
+      "equals": "dim"
+    },
+    {
+      "kind": "state",
+      "path": "grind_size.drawn",
+      "t": 16,
+      "window": 0.5,
+      "equals": true
+    },
+    {
+      "kind": "state",
+      "path": "grind_size.value",
+      "t": 19.5,
+      "window": 0.6,
+      "equals": -3
+    },
+    {
+      "kind": "state",
+      "path": "grind_size.start",
+      "t": 19.5,
+      "window": 0.6,
+      "equals": "on"
+    },
+    {
+      "kind": "state",
+      "path": "tab",
+      "t0": 2.8,
+      "t1": 20,
+      "equals": "grind",
+      "mode": "all"
+    },
+    {
+      "kind": "sim_log",
+      "assert": "no_writes_between",
+      "t0": 1,
+      "t1": 20.5,
+      "except_subs": [
+        0,
+        1,
+        112
+      ]
+    }
+  ]
+}

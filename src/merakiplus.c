@@ -7,6 +7,10 @@
  *  shows them as water-tank icons, Meraki+ had no text for them. HOME now says WATER TANK MISSING / WATER TANK LOW · PLEASE REFILL /
  *  NO WATER FLOW · CHECK THE TANK (codes E3 / E3 / E2). Display only: the phase (ERROR), the start guards and the frame policy are unchanged;
  *  unmapped bits still read UNKNOWN FAULT. Gen 1 evidence (controller 5.1.4); Gen 2 not verified yet.
+ * v6.24 also = + BEAN CONTAINER MESSAGE (work_sta word 33 bit 8): removing the bean container showed ASLEEP / SOVER, because phase_raw()
+ *  read bit 8 clear as sleep. Stock shows lackBeenTank.png for exactly that bit (comment at the water-tank evidence below). HOME now says
+ *  BEAN CONTAINER MISSING · FIT IT / BØNNEBEHOLDER MANGLER · SÆT DEN I with an amber MISSING / MANGLER chip; sleep stays
+ *  word 1 = 1 / word 0 = 0, offline stays no link. Display only: the start guards block as before (new guard text), no frame-policy change.
  * v6.23 = v6.22 + AUTO OFF 30 MIN BY DEFAULT, like stock (docs/time-scheduling.md §5.1, docs/safety.md §3). The schedule file's
  *  autooff key now means: absent / no file / not one of 0|15|20|30|60 -> 30 min (was OFF); any valid value -> exactly that value,
  *  so an explicit autooff=0 stays OFF and 15/20/60 stay as they are. Files written by v6.16..v6.22 always carry the key, so an
@@ -182,7 +186,7 @@
  *    (tmp+rename, pristine+rolling backup, md5 log). The UI is the only range guard.
  *  - ACTIVITIES: GRIND/BREW/WATER/STEAM w. observed recipes (hold-to-start),
  *    STOP for steam (word24=0), auto-stop expectation in UI text.
- *  - PHASES: steam = work_sta bits 5+14 (0x4020); sleep = word1==1 / bit8 cleared.
+ *  - PHASES: steam = work_sta bits 5+14 (0x4020); sleep = word1==1 / word0==0; bean container removed = work_sta bit 8 clear (v6.24).
  *  - GRAPHICS: anti-aliased stroke font (own, no dependencies), AA primitives,
  *    270-degree gauge w. LUT, retained compositor w. dirty rects, page slide,
  *    crossfade, touch ripple, toasts, boot splash. Global circle clip kept.
@@ -1304,6 +1308,10 @@ enum { K0=0, KT, KSUB, KLAB, KCHIP, KBTN, KBTNS, KTITLE, KPSUB, KSPL, KDL, KDV, 
  X(TX_LV_BREW, K0, "BOILER %s° · GROUP %s°", "KEDEL %s° · GRUPPE %s°") \
  X(TX_LV_WATER, K0, "WATER %s°", "VAND %s°") \
  X(TX_LV_STEAM, K0, "BOILER %s° · MILK %s°", "KEDEL %s° · MÆLK %s°") \
+ /* grinder size ruler on the GRIND page (word 37, read-only); FINE / COARSE = the stock UI's own words for the dial's ends */ \
+ X(TX_GS_TITLE, K0, "GRIND SIZE", "MALEGRAD") \
+ X(TX_GS_FINE, K0, "FINE", "FIN") \
+ X(TX_GS_COARSE, K0, "COARSE", "GROV") \
  X(TX_SL_GRINDW, K0, "GRIND DOSE", "KVÆRN-DOSIS") \
  X(TX_SN_GRINDW, KNOTE, "STOPS AUTOMATICALLY AT THIS WEIGHT", "STOPPER AUTOMATISK VED DENNE VÆGT") \
  X(TX_SL_GRINDMODE, K0, "GRIND MODE", "KVÆRN-TILSTAND") \
@@ -1381,6 +1389,7 @@ enum { K0=0, KT, KSUB, KLAB, KCHIP, KBTN, KBTNS, KTITLE, KPSUB, KSPL, KDL, KDV, 
  X(TX_UL_DA, K0, "DANSK", "DANSK") \
  X(TX_PH_OFFLINE, KCHIP, "OFFLINE", "OFFLINE") \
  X(TX_PH_SLEEP, KCHIP, "ASLEEP", "SOVER") \
+ X(TX_PH_BEAN, KCHIP, "MISSING", "MANGLER") \
  X(TX_PH_ERROR, KCHIP, "ERROR", "FEJL") \
  X(TX_PH_HEAT, KCHIP, "HEATING UP", "VARMER OP") \
  X(TX_PH_READY, KCHIP, "READY", "KLAR") \
@@ -1413,6 +1422,8 @@ enum { K0=0, KT, KSUB, KLAB, KCHIP, KBTN, KBTNS, KTITLE, KPSUB, KSPL, KDL, KDV, 
  X(TX_G_NOLINK, KT, "NO CONNECTION", "INGEN FORBINDELSE") \
  X(TX_G_ERROR, KT, "ERROR ACTIVE · START BLOCKED", "FEJL AKTIV · START SPÆRRET") \
  X(TX_G_SLEEP, KT, "WAKING UP · ONE MOMENT", "VÅGNER · ET ØJEBLIK") \
+ X(TX_G_BEAN, KT, "FIT THE BEAN CONTAINER", "SÆT BØNNEBEHOLDEREN I") \
+ X(TX_H_BEAN, KSUB, "BEAN CONTAINER MISSING · FIT IT", "BØNNEBEHOLDER MANGLER · SÆT DEN I") \
  X(TX_G_BUSY, KT, "ACTIVITY IN PROGRESS", "AKTIVITET I GANG") \
  X(TX_G_WAIT, KT, "ONE MOMENT…", "ET ØJEBLIK…") \
  X(TX_G_NOCFG, KT, "CONFIG MISSING · START BLOCKED", "CONFIG MANGLER · START SPÆRRET") \
@@ -1485,7 +1496,7 @@ enum { K0=0, KT, KSUB, KLAB, KCHIP, KBTN, KBTNS, KTITLE, KPSUB, KSPL, KDL, KDV, 
  X(TX_ST_PULSE, K0, "PULSE", "PULS") \
  X(TX_ST_FLOW, K0, "FLOW", "FLOW") \
  X(TX_ST_CURRENT, K0, "CURRENT", "STRØM") \
- X(TX_ST_GRINDSTEP, K0, "STEP", "TRIN") \
+ X(TX_ST_GRINDSTEP, K0, "SIZE", "GRAD") \
  X(TX_ST_BOILER, K0, "BOILER", "KEDEL") \
  X(TX_ST_STEAMBOILER, K0, "STEAM", "DAMP") \
  X(TX_ST_LEVEL, K0, "LEVEL", "NIVEAU") \
@@ -2794,7 +2805,7 @@ static int act_push_stop(int kind){
 static struct { int kind, active; ms_t t_req; long seq, n_req, n_ok, n_fail; } stp={ACT_NONE,0,0,0,0,0,0};
 
 /* ================= phases (work_sta word 33; SESSION.md §6) ================= */
-enum { PH_OFFLINE=0, PH_SLEEP, PH_ERROR, PH_HEAT, PH_READY, PH_GRIND, PH_PRE, PH_EXT, PH_WATER, PH_STEAM, PH_DONE, NPHASE };
+enum { PH_OFFLINE=0, PH_SLEEP, PH_BEAN, PH_ERROR, PH_HEAT, PH_READY, PH_GRIND, PH_PRE, PH_EXT, PH_WATER, PH_STEAM, PH_DONE, NPHASE };
 _Static_assert(TX_PH_DONE-TX_PH_OFFLINE==NPHASE-1,"TX_PH_* must follow PH_*");
 static const char* ph_name(int p){ return TR(TX_PH_OFFLINE+((p>=0&&p<NPHASE)?p:PH_OFFLINE)); }
 static int link_up(ms_t now){ return now-last_rx_ms<1500; }
@@ -2806,7 +2817,9 @@ static int phase_raw(ms_t now){
     if((ws&0x0006)==0x0006) return (ws&0x0200)?PH_EXT:PH_PRE;/* bits 1+2 (+9 = extraction) */
     if((ws&0x000A)==0x000A) return PH_WATER;                 /* bits 1+3 */
     if(reg[34]||reg[35]||reg[36]) return PH_ERROR;
-    if((reg_seen[1]&&reg[1]==1) || (reg_seen[33]&&!(ws&0x0100))) return PH_SLEEP;
+    if(reg_seen[1]&&reg[1]==1) return PH_SLEEP;
+    if(reg_seen[0]&&reg[0]==0) return PH_SLEEP;               /* v6.24: power off = the MCU going to sleep (word 0 = 0) */
+    if(reg_seen[33]&&!(ws&0x0100)) return PH_BEAN;            /* v6.24: bean container removed (stock lackBeenTank.png), NOT sleep */
     if(reg_seen[40]&&reg_seen[11]&&(int)reg[40] < (int)reg[11]-20) return PH_HEAT;
     return PH_READY;
 }
@@ -3761,6 +3774,7 @@ static void gfx_init(void){
 static uint32_t ph_hi(int p){
     switch(p){
     case PH_OFFLINE: return rgb(124,130,144); case PH_SLEEP: return rgb(136,144,222);
+    case PH_BEAN:    return rgb(255,190,84);                 /* v6.24: warning amber (the container is missing, the machine is awake) */
     case PH_ERROR:   return rgb(255,96,96);   case PH_HEAT:  return rgb(255,186,84);
     case PH_READY:   return rgb(98,222,168);  case PH_GRIND: return rgb(174,228,112);
     case PH_PRE:     return rgb(92,180,255);  case PH_EXT:   return rgb(255,142,68);
@@ -3771,6 +3785,7 @@ static uint32_t ph_hi(int p){
 static uint32_t ph_lo(int p){
     switch(p){
     case PH_OFFLINE: return rgb(66,70,80);    case PH_SLEEP: return rgb(58,62,120);
+    case PH_BEAN:    return rgb(150,78,26);                  /* v6.24: warning amber, dark end */
     case PH_ERROR:   return rgb(130,36,40);   case PH_HEAT:  return rgb(150,78,26);
     case PH_READY:   return rgb(24,104,92);   case PH_GRIND: return rgb(62,116,46);
     case PH_PRE:     return rgb(30,74,168);   case PH_EXT:   return rgb(166,54,28);
@@ -3984,6 +3999,7 @@ static const char* act_guard(int kind,ms_t now){
     if(p==PH_OFFLINE) return TR(TX_G_NOLINK);
     if(p==PH_ERROR)   return TR(TX_G_ERROR);
     if(p==PH_SLEEP)   return TR(TX_G_SLEEP);
+    if(p==PH_BEAN)    return TR(TX_G_BEAN);                  /* v6.24: bean container removed — start stays blocked, as before */
     if(phase_active(p)&&!(kind==ACT_STEAM&&steam_brew_ok(now))) return TR(TX_G_BUSY);
     if(reg[34]||reg[35]||reg[36]) return TR(TX_G_ERROR);           /* v6.20: phase_raw puts a running brew before the error words */
     if(wq_busy()||act.pending!=ACT_NONE||sav.active) return TR(TX_G_WAIT);
@@ -4822,7 +4838,7 @@ static void home_model(ms_t now){
             m->gf=clampf(fr/1.15f,0,1); m->gmark=1/1.15f;
             if(wm){ m->gf=clampf((float)w/WMAN_GAUGE,0,1); m->gmark=-1; }   /* v6.22: no target mark; the ring fills over WMAN_GAUGE */
             snprintf(m->svv[0],16,"%s",tb);
-            if(e==PH_GRIND){ ss=SS_GRIND; snprintf(m->svv[1],16,"%u",reg[58]); snprintf(m->svv[2],16,"%u",reg[37]); }
+            if(e==PH_GRIND){ ss=SS_GRIND; snprintf(m->svv[1],16,"%u",reg[58]); snprintf(m->svv[2],16,"%d",s16(37)); }   /* SIZE = word 37 (signed: 0x181E can report down to -3 on a 0..40 scale) */
             else { ss=SS_WATER; snprintf(m->svv[1],16,"%u",reg[52]); fmt_t10(b,sizeof b,reg[40],1); snprintf(m->svv[2],16,"%s°",b); }
         }
         /* v6.6: steam CONCURRENT with the main activity (e.g. flush during brew, work_sta 5327): weight and gauge
@@ -4861,6 +4877,7 @@ static void home_model(ms_t now){
         switch(ph){
         case PH_OFFLINE: snprintf(m->sub,sizeof m->sub,"%s",TR(TX_H_NORESP)); break;
         case PH_SLEEP:   snprintf(m->sub,sizeof m->sub,"%s",TR(TX_H_WAKING)); break;
+        case PH_BEAN:    snprintf(m->sub,sizeof m->sub,"%s",TR(TX_H_BEAN)); break;   /* v6.24: bean container missing, not sleep */
         case PH_ERROR:   snprintf(m->sub,sizeof m->sub,"%s",err_text()); break;
         case PH_HEAT:    snprintf(m->sub,sizeof m->sub,TR(TX_H_HEATING_TO),a); break;
         default:         snprintf(m->sub,sizeof m->sub,TR(TX_H_SET_TO),a); break;
@@ -5397,6 +5414,51 @@ static void draw_start(ms_t now){
         W_end();
     }
 }
+/* GRIND page: the grinder's MEASURED grind size as a ruler (the stock dial unrolled) in the band between GRIND MODE and HOLD TO START.
+ * Word 37 = the controller's grind gear (MCU 0x181E: word 69's ADC against the factory calibration words 59/60/64/65/74/75), already
+ * polled (sub33). Read-only: nothing is sent and the calibration is never written. Scale 1..30; 0..40 when the gear-40 point is
+ * calibrated (word 75 != 0xFFFF and word 75 - word 65 >= 100), where 0x181E can report down to -3: values outside the scale pin to its
+ * ends (the tab still shows the number). No link / word 37 not polled yet: "--", no marker (HOLD TO START is dimmed by its guard).
+ * Orientation (v6.24, hw-confirmed): MIRRORED like the physical dial on the bean container — FINE / FIN at the RIGHT end, COARSE / GROV
+ * at the LEFT, numbers ascending right-to-left; the marker's screen fraction from the left is 1 - t. */
+typedef struct { int ok, g, lo, hi; float t; } GSize;
+static GSize gsize(ms_t now){
+    GSize s; s.ok=link_up(now)&&reg_seen[37]; s.g=s.ok?s16(37):0;
+    int s40=reg_seen[75]&&reg_seen[65]&&reg[75]!=0xFFFF&&(int)reg[75]-(int)reg[65]>=100;
+    s.lo=s40?0:1; s.hi=s40?40:30; s.t=s.ok?clampf((s.g-s.lo)/(float)(s.hi-s.lo),0,1):0; return s;
+}
+static int gs_label(const GSize*s,int v){ return s->hi==40?v%10==0:(v%5==0||v==s->lo||v==s->hi); }   /* 0..40: every 10 (no crowding) */
+static void gs_text(const GSize*s,char*o,size_t n){ if(s->ok) snprintf(o,n,"%d",s->g); else snprintf(o,n,"--"); }
+#define GS_Y0 214            /* content y: the band below the GRIND page's two rows (LIST_Y0 + 2 * ROW_P = 212) and above FEAT_VY1 */
+#define GS_X0 100
+#define GS_X1 380
+#define GS_BY (GS_Y0+80)     /* the scale's baseline */
+#define GS_TAB_H 30
+static float gs_px(const GSize*s){ return GS_X1-(GS_X1-GS_X0)*s->t; }   /* mirrored: FINE (lo) at the RIGHT end, like the hopper dial */
+/* the value tab above the marker (also used by the selftest): x, top, width — kept within the scale's ends */
+static void gs_tab(const GSize*s,const char*num,int oy,int*bx,int*bt,int*bw){
+    *bw=text_w(num,F_M)+24; *bx=(int)lroundf(gs_px(s))-*bw/2; *bt=GS_BY+oy-56;
+    if(*bx<GS_X0-14) *bx=GS_X0-14; if(*bx+*bw>GS_X1+14) *bx=GS_X1+14-*bw;
+}
+static uint32_t gs_sig(uint32_t h,ms_t now){ GSize s=gsize(now); return hi(hi(hi(hi(h,s.ok),s.g),s.lo),s.hi); }
+static void gs_draw(int oy,ms_t now){
+    GSize s=gsize(now); uint32_t ac=ph_hi(PH_GRIND), al=ph_lo(PH_GRIND);
+    const int x0=GS_X0, x1=GS_X1, by=GS_BY+oy, n=s.hi-s.lo; float px=gs_px(&s); char num[8]; gs_text(&s,num,sizeof num);
+    text_at(x0-4,GS_Y0+oy+8,TR(TX_GS_TITLE),F_XS,C_TXT3,255);
+    capsule(x0,by,x1,by,2.0f,rgb(34,38,47),255);                                                  /* the track */
+    for(int k=0;k<=n;k++){ int v=k+s.lo, maj=(v%5==0)||k==0||k==n; float x=x1-(x1-x0)*(float)k/n;   /* one tick per step, every 5th long; mirrored */
+        capsule(x,by-(maj?14:8),x,by-5,maj?1.1f:0.7f,maj?rgb(98,106,122):rgb(62,68,82),255);
+        if(gs_label(&s,v)){ char l[8]; snprintf(l,sizeof l,"%d",v); text_c((int)lroundf(x),by+9,l,F_XS,C_TXT3,255); } }
+    if(s.ok){
+        if(s.t>0){ const int seg=40; for(int q=0;q<seg;q++){ float xa=x1+(px-x1)*q/seg, xb=x1+(px-x1)*(q+1)/seg; capsule(xa,by,xb,by,2.6f,mix(al,ac,(int)(255.f*(q+1)/seg)),255); } }
+        capsule(px,by-20,px,by+4,1.6f,ac,255); disc(px,by,5.5f,ac,255); disc(px,by,2.6f,rgb(255,255,255),255);
+        int bx,bt,bw; gs_tab(&s,num,oy,&bx,&bt,&bw);
+        rrect(bx,bt+2,bw,GS_TAB_H,GS_TAB_H/2,rgb(0,0,0),70); rrect(bx,bt,bw,GS_TAB_H,GS_TAB_H/2,ac,255);
+        capsule(px-5,bt+29,px,bt+35,1.6f,ac,255); capsule(px+5,bt+29,px,bt+35,1.6f,ac,255);            /* the tab's pointer */
+        text_c(bx+bw/2,bt+6,num,F_M,rgb(22,30,16),255);
+    } else text_c(CX,by-50,num,F_M,C_DIS,255);
+    text_r(x1+4,by+28,TR(TX_GS_FINE),F_XS,C_TXT3,255); text_at(x0-4,by+28,TR(TX_GS_COARSE),F_XS,C_TXT3,255);   /* FINE right / COARSE left = the hopper dial */
+}
 #define WMAN_Y0 170          /* v6.22: the manual-only WATER page's three lines (title F_S, two F_XS lines) */
 static void draw_list(ms_t now){
     Row rw[ROW_MAX]; int n=rows_get(page,rw), vy1=list_vy1(page); int sc=(int)lroundf(scroll[page]); int prow=-1;
@@ -5408,6 +5470,7 @@ static void draw_list(ms_t now){
     uint32_t h=hi(hi(hi(hi(H0,sc),prow),page),sec_open*8+ui_lang);
     for(int k=0;k<n;k++){ h=hi(h,rw[k].kind*64+rw[k].a); if(rw[k].kind==RK_SET){ const Setting*q=&SET[rw[k].a]; h=hi(hi(h,q->val),q->loaded); } }
     h=hi(h,sv(S_TUNIT));
+    if(page==PG_GRIND) h=gs_sig(h,now);                                  /* the grind size ruler */
     int wman=page==PG_WATER&&n==0; if(wman) h=hi(h,100+wd_why());      /* v6.22: the manual-only WATER page */
     if(page==PG_SYS){ char sm[40]; h=hi(hi(hi(h,bs.flag*8+bs.lock),switch_locked()),switch_mode()); for(int q=0;q<NSEC;q++){ sec_summary(q,sm,sizeof sm); h=hs(h,sm); } h=hi(hs(h,dgs),(int)dgc); }
     Rect vr=R(60,LIST_VY0,360,vy1-LIST_VY0);
@@ -5453,6 +5516,7 @@ static void draw_list(ms_t now){
                 text_at(380,y+19,">",F_XS,C_TXT3,255);
             }
         }
+        if(page==PG_GRIND) gs_draw(-sc,now);
         if(c0>=0){ int ya=c0<LIST_VY0?LIST_VY0:c0, yb=c1>vy1?vy1:c1; if(yb>ya) fill_rect(64,ya,2,yb-ya,C_ACC,150); }   /* the open section's rows are tied together by a thin accent rail */
         if(wman){   /* v6.22: no dosing — what HOLD TO START does here, and why there is no weight target (docs/water-dosing-compat.md §5.2) */
             static const short WHY[3]={TX_W_WHY_OLD,TX_W_WHY_UNK,TX_W_WHY_FAULT}; int why=wd_why();
@@ -6369,7 +6433,7 @@ static void jb_s(JB*j,const char*s){
 }
 
 /* ---- state that exists only for the state JSON ---- */
-static const char*const PH_KEY[NPHASE]={"OFFLINE","SLEEP","ERROR","HEAT","READY","GRIND","PRE","EXT","WATER","STEAM","DONE"};
+static const char*const PH_KEY[NPHASE]={"OFFLINE","SLEEP","BEAN","ERROR","HEAT","READY","GRIND","PRE","EXT","WATER","STEAM","DONE"};
 static const char*const ACT_KEY[4]={"grind","brew","water","steam"};
 static const char*const STOP_KEY[4]={"grind_stop","brew_stop","water_stop","steam_stop"};   /* v6.13: ctrl action + layout names */
 /* parity_spec id -> SET[] row (sim_e2e.py checks the table against parity_spec.json + --dump-table) */
@@ -6461,6 +6525,14 @@ static void sim_state_emit(ms_t now,int force){   /* force=0: only if the line's
          MVK[vs],wd_ver_dosing()?"true":"false",wd_dosing()?"true":"false",wd_scale_fault()?"true":"false",water_manual()?"manual":"auto",wd.man?"true":"false",rows_get(PG_WATER,wr),wd.n_fault,wd.n_stop);
       { char dv[28],dw[28]; uint32_t c1,c2; diag_mcu_text(dv,&c1,dw,&c2); j.p--; jb(&j,",\"diag_ver\":"); jb_s(&j,dv);   /* DIAGNOSTICS › CONTROLLER as drawn */
         jb(&j,",\"diag_wd\":\"%s\"}",wd_dosing()?"TX_DV_WD_AUTO":(wd_ver_dosing()?"TX_DV_WD_FAULT":"TX_DV_WD_MAN")); } }
+    /* the GRIND page's grind size ruler (word 37, read-only): value (null = "--"), the scale, where the marker sits (pos 0..1), the labelled
+     * ticks, whether the ruler is on screen now and HOLD TO START's state there */
+    { GSize g=gsize(now); char gt[8]; gs_text(&g,gt,sizeof gt);
+      jb(&j,",\"grind_size\":{\"value\":"); if(g.ok) jb(&j,"%d",g.g); else jb(&j,"null");
+      jb(&j,",\"shown\":"); jb_s(&j,gt); jb(&j,",\"lo\":%d,\"hi\":%d,\"scale40\":%s,\"marker\":%s,\"pos\":%.3f,\"pinned\":%s,\"labels\":[",
+         g.lo,g.hi,g.hi==40?"true":"false",g.ok?"true":"false",(double)g.t,(g.ok&&(g.g<g.lo||g.g>g.hi))?"true":"false");
+      for(int v=g.lo,c=0;v<=g.hi;v++) if(gs_label(&g,v)) jb(&j,"%s%d",c++?",":"",v);
+      jb(&j,"],\"drawn\":%s,\"start\":\"%s\"}",(view==V_MAIN&&page==PG_GRIND)?"true":"false",act_guard(ACT_GRIND,now)?"dim":"on"); }
     jb(&j,",\"regs\":{"); for(unsigned k=0;k<sizeof SHOWN/sizeof SHOWN[0];k++) jb(&j,"%s\"%d\":%u",k?",":"",SHOWN[k],reg[SHOWN[k]]);
     jb(&j,"},\"regs_s\":{\"38\":%d,\"39\":%d}",s16(38),s16(39));
     /* v6.18 (addendum): the sound engine — events by name with their outcome; log = newest first "event:outcome" */
@@ -7064,6 +7136,9 @@ static void pv_mcu_ver(const char*a,const char*b){
     char x[16],y[16]; memset(x,0,16); memset(y,0,16); if(!b) b=a; memcpy(x,a,strlen(a)<16?strlen(a):16); memcpy(y,b,strlen(b)<16?strlen(b):16);
     for(int k=0;k<8;k++){ reg[80+k]=(uint16_t)((unsigned char)x[2*k]|((unsigned char)x[2*k+1]<<8)); reg[88+k]=(uint16_t)((unsigned char)y[2*k]|((unsigned char)y[2*k+1]<<8)); reg_seen[80+k]=reg_seen[88+k]=1; }
 }
+/* the reference machine's grinder calibration (words 59/60/64/65/74 = min / gear 5 / gear 25 / max / fu4 ADC; word 75 = the gear-40 point,
+ * 0xFFFF = not calibrated -> scale 1..30) and a grind size g in word 37 (word 69's ADC is not used by the UI) */
+#define PV_GRIND_CAL(g_) do{ reg[59]=1278; reg[60]=1541; reg[64]=2906; reg[65]=3219; reg[74]=1808; reg[75]=0xFFFF; reg[37]=(uint16_t)(int16_t)(g_); }while(0)
 static void sim_base(void){
     memset(reg,0,sizeof reg); for(int i=0;i<REGN;i++) reg_seen[i]=1;
     reg[0]=1; reg[1]=0; reg[33]=0x0101; reg[2]=1; reg[4]=185; reg[11]=870; reg[14]=3; reg[17]=400; reg[23]=360; reg[25]=650;
@@ -8744,7 +8819,7 @@ static void st_v617(void){
       int bad=0; for(int i=0;i<NSTR;i++){ int k=STR_K[i]; if(k==KCON||k==KDL||k==KDV||k==KDF) continue; for(int lg=0;lg<NLANG;lg++){ const char*t=STR[lg][i];
             if(strstr(t,"CONFIG ONLY")||strstr(t,"KUN CONFIG")||strstr(t,"CMD8")||strstr(t,"CONFIG.JSON")||strstr(t,"OR STOP")||strstr(t,"ELLER STOP")||strstr(t,"EST.")){ bad++; printf("     [%s] %s: '%s'\n",LANG_CODE[lg],STR_ID[i],t); } } }
       printf("       string table: %d ids (v6.16: 449)\n",NSTR);
-      st_check("text: no user-facing string says CONFIG ONLY / CONFIG.JSON / CMD8 / '· OR STOP' / 'EST.' any more; the string table is smaller than v6.16's 449 ids although v6.17 adds pages (v6.18's sound block aside)",bad==0&&NSTR-(TX_DV_SO_DROP-TX_SL_SOUND+1)-(TX_DV_WD_FAULT-TX_ER_E2_SCALE+1)-(TX_ER_E2_NOFLOW-TX_ER_E3_TANK+1)<449);   /* v6.18: the sound feature's own strings (one contiguous block) are not counted; v6.22: nor the water gate's; v6.24: nor the water tank's */
+      st_check("text: no user-facing string says CONFIG ONLY / CONFIG.JSON / CMD8 / '· OR STOP' / 'EST.' any more; the string table is smaller than v6.16's 449 ids although v6.17 adds pages (v6.18's sound block aside)",bad==0&&NSTR-(TX_DV_SO_DROP-TX_SL_SOUND+1)-(TX_DV_WD_FAULT-TX_ER_E2_SCALE+1)-(TX_ER_E2_NOFLOW-TX_ER_E3_TANK+1)-(TX_PH_BEAN-TX_PH_BEAN+1)-(TX_H_BEAN-TX_G_BEAN+1)<449);   /* v6.18: the sound feature's own strings (one contiguous block) are not counted; v6.22: nor the water gate's; v6.24: nor the water tank's; v6.24: nor the bean container's (chip + the G/H pair) */
       st_home(); home_model(sim_now); int one=!strcmp(hm.hint1,TR(TX_C_HINT))&&hm.hint2==NULL&&!strcmp(hm.label,TR(TX_H_BOILER))&&!st_has(hm.label,"\xC2\xB7");
       reg[33]=0x0141; sim_run(600); home_model(sim_now); fmt_fix(a,sizeof a,sv(S_GRINDW),1); snprintf(b,sizeof b,TR(TX_H_AUTOSTOP_G),a); int g=!strcmp(hm.label,TR(TX_H_DOSE))&&!st_has(hm.label,a)&&!strcmp(hm.sub,b)&&sub_font(&hm)==F_S;
       st_check("HOME: one hint line; the label is the name of the number only ('BREW BOILER', 'DOSE' — no '· NOW', no repeated target); during an activity the target is said once, in F_S ('STOPS AT 18.5 G')",one&&g); }
@@ -9417,6 +9492,111 @@ static void st_v624(void){
         static const short L[]={TX_ER_E3_TANK,TX_ER_E3_LOW,TX_ER_E2_NOFLOW}; for(unsigned q=0;q<sizeof L/sizeof L[0];q++) LAY(text_wf(TR(L[q]),F_XS),KB[KSUB].maxw,"HOME subline",TR(L[q])); }
     lang_set(kl);
     st_check("v6.24 texts fit the HOME subline (both languages)",ok);
+    sim_reset();
+}
+/* ============================ v6.24: bean container message (work_sta bit 8; display only) ============================ */
+static void st_bean(void){
+    printf("== selftest: v6.24 bean container (stock lackBeenTank.png: work_sta word 33 bit 8 clear = container removed; not sleep, not offline) ==\n");
+    int ok=1, kl=ui_lang; ms_t t;
+    for(int lg=0;lg<NLANG;lg++){ lang_set(lg);
+        t=st_home(); st_s33(0x0001,t+=220); ui_frame(t); home_model(sim_now);   /* bit 8 clear, word 0 = 1, word 1 = 0, link up */
+        const char*g=act_guard(ACT_BREW,sim_now);
+        if(act.ph!=PH_BEAN||phase_raw(sim_now)!=PH_BEAN||strcmp(hm.chip,TR(TX_PH_BEAN))||strcmp(hm.sub,TR(TX_H_BEAN))||!g||strcmp(g,TR(TX_G_BEAN))||strcmp(hm.hint1,TR(TX_G_BEAN))){
+            ok=0; printf("     [%s] bean: ph %d chip '%s' sub '%s' hint '%s'\n",LANG_CODE[lg],act.ph,hm.chip,hm.sub,hm.hint1); }
+        reg[1]=1; ui_frame(t+=100); home_model(sim_now);                        /* sleep (word 1) wins over the missing container */
+        if(act.ph!=PH_SLEEP||strcmp(hm.sub,TR(TX_H_WAKING))){ ok=0; printf("     [%s] bean+word1: ph %d sub '%s'\n",LANG_CODE[lg],act.ph,hm.sub); }
+        reg[1]=0; reg[0]=0; ui_frame(t+=100); home_model(sim_now);              /* power off (word 0 = 0) is sleep, not bean */
+        if(act.ph!=PH_SLEEP){ ok=0; printf("     [%s] bean+word0=0: ph %d\n",LANG_CODE[lg],act.ph); }
+        reg[0]=1; st_s33(0x0101,t+=100); ui_frame(t); home_model(sim_now);     /* container back -> READY, start allowed again */
+        if(act.ph!=PH_READY||strcmp(hm.sub,TR(TX_H_BEAN))==0||act_guard(ACT_BREW,sim_now)!=NULL){ ok=0; printf("     [%s] bean back: ph %d sub '%s'\n",LANG_CODE[lg],act.ph,hm.sub); }
+        st_s33(0x0041,t+=100); ui_frame(t); home_model(sim_now);               /* a running grind keeps priority over the container */
+        if(act.ph!=PH_GRIND){ ok=0; printf("     [%s] bean+grind: ph %d\n",LANG_CODE[lg],act.ph); }
+        st_s33(0x0001,t+=100); reg[34]=1; ui_frame(t+=100); home_model(sim_now);   /* real faults keep priority too */
+        if(act.ph!=PH_ERROR){ ok=0; printf("     [%s] bean+E1: ph %d\n",LANG_CODE[lg],act.ph); }
+        reg[34]=0; }
+    lang_set(kl);
+    st_check("bean container removed (work_sta bit 8 clear, EN + DA): phase BEAN, chip 'MISSING' / 'MANGLER', HOME subline 'BEAN CONTAINER MISSING · FIT IT' / 'BØNNEBEHOLDER MANGLER · SÆT DEN I', hint = the guard text; word 1 = 1 and word 0 = 0 stay ASLEEP, a running grind stays GRIND, E1 stays ERROR; container back -> READY with a free start guard",ok);
+    /* display only: the four start guards block exactly as they did when the state was (mis)labelled sleep; nothing is sent */
+    t=st_home(); st_s33(0x0001,t+=220); ui_frame(t);
+    { const char*g=act_guard(ACT_BREW,t); int same=g==TR(TX_G_BEAN); for(int k=0;k<4;k++) same&=act_guard(k,t)==g;
+      int f=st_hold(CX,372,700); same&=wq.n==0&&act.pending==ACT_NONE; (void)f;
+      st_check("display only: with the container missing all four start guards return 'FIT THE BEAN CONTAINER' / 'SÆT BØNNEBEHOLDEREN I' and a hold queues no frame",same); }
+    sim_link=0; sim_run(2500);                                                  /* no link: OFFLINE, not bean */
+    st_check("no link with bit 8 clear: OFFLINE (the bean state needs a live controller)",phase_raw(sim_now)==PH_OFFLINE);
+    sim_link=1; sim_run(400);
+    ok=1; for(int lg=0;lg<NLANG;lg++){ lang_set(lg);
+        LAY(text_wf(TR(TX_PH_BEAN),F_S),KB[KCHIP].maxw,"phase chip",TR(TX_PH_BEAN));
+        LAY(text_wf(TR(TX_H_BEAN),F_XS),KB[KSUB].maxw,"HOME subline",TR(TX_H_BEAN));
+        LAY(text_wf(TR(TX_G_BEAN),F_XS),KB[KT].maxw,"toast",TR(TX_G_BEAN)); }
+    lang_set(kl);
+    st_check("v6.24 bean texts fit the phase chip, the HOME subline and the toast (both languages)",ok);
+    sim_reset();
+}
+/* ============================ grinder size ruler (GRIND page; word 37, read-only) ============================ */
+static int gs_px_is(int x,int y,uint32_t c,int tol){   /* the last frame's pixel (x, y) is colour c within tol per channel */
+    if(!sim_last||x<0||y<0||x>=W||y>=H) return 0; uint32_t p=sim_last[y*W+x];
+    for(int sh=0;sh<24;sh+=8){ int d=(int)((p>>sh)&255)-(int)((c>>sh)&255); if(d<-tol||d>tol) return 0; } return 1;
+}
+static int gs_accent_px(void){ int n=0; uint32_t ac=ph_hi(PH_GRIND); for(int y=GS_Y0;y<FEAT_VY1;y++) for(int x=GS_X0-20;x<=GS_X1+20;x++) n+=gs_px_is(x,y,ac,24); return n; }
+static void gs_page(int lg,int g,uint16_t w75){   /* the GRIND page in language lg, reference calibration, word 37 = g, word 75 = w75 */
+    sim_reset(); lang_set(lg); PV_GRIND_CAL(g); reg[75]=w75; page=PG_GRIND; static_dirty=1; force_all=1; sim_run(600);
+}
+static void st_grind_size(void){
+    printf("== selftest: grinder size ruler (GRIND page: word 37, read-only; scale 1..30, or 0..40 when word 75 != 0xFFFF and word 75 - word 65 >= 100 — MCU 0x181E) ==\n");
+    int kl=ui_lang, ok=1; uint32_t ac=ph_hi(PH_GRIND);
+    /* (1) the model: value, scale and marker position (reference calibration: word 65 = 3219, so the 0..40 boundary is word 75 = 3319) */
+    { static const struct { int g; uint16_t w75; int lo,hi; float t; } M[]={
+        {3,0xFFFF,1,30,2/29.f},{12,0xFFFF,1,30,11/29.f},{27,0xFFFF,1,30,26/29.f},{1,0xFFFF,1,30,0},{30,0xFFFF,1,30,1},
+        {0,0xFFFF,1,30,0},{-2,0xFFFF,1,30,0},{33,0xFFFF,1,30,1},                                     /* outside 1..30: pinned to the ends */
+        {34,3640,0,40,34/40.f},{0,3640,0,40,0},{-3,3640,0,40,0},{-1,3640,0,40,0},{40,3640,0,40,1},{44,3640,0,40,1},
+        {12,3319,0,40,12/40.f},{12,3318,1,30,11/29.f},{12,0,1,30,11/29.f},{12,3219,1,30,11/29.f}};   /* the >= 100 boundary; word 75 below word 65 */
+      for(unsigned q=0;q<sizeof M/sizeof M[0];q++){ sim_reset(); PV_GRIND_CAL(M[q].g); reg[75]=M[q].w75; sim_run(100); GSize g=gsize(sim_now);
+        if(!g.ok||g.g!=M[q].g||g.lo!=M[q].lo||g.hi!=M[q].hi||fabsf(g.t-M[q].t)>1e-4f){ ok=0; printf("     g %d w75 %u: ok %d g %d scale %d..%d t %.4f (want %d..%d t %.4f)\n",M[q].g,M[q].w75,g.ok,g.g,g.lo,g.hi,(double)g.t,M[q].lo,M[q].hi,(double)M[q].t); } }
+      sim_reset(); PV_GRIND_CAL(12); reg[75]=3640; reg[65]=0xFFFF; sim_run(100); ok&=gsize(sim_now).hi==30;            /* word 65 uncalibrated: 1..30 */
+      sim_reset(); PV_GRIND_CAL(12); reg[75]=3640; reg_seen[75]=0; sim_run(100); ok&=gsize(sim_now).hi==30;             /* word 75 not polled yet: 1..30 */
+      sim_reset(); PV_GRIND_CAL(12); reg[75]=3640; reg_seen[65]=0; sim_run(100); ok&=gsize(sim_now).hi==30;
+      st_check("model: word 37 (signed) on 1..30, or 0..40 only when word 75 != 0xFFFF and word 75 - word 65 >= 100 (3319 yes, 3318 / 3219 / 0 / 0xFFFF no; word 65 = 0xFFFF or a word not polled yet -> 1..30); marker t = (g - lo) / (hi - lo), values outside the scale (-3, 0 on 1..30, 33, 44) pinned to the ends",ok); }
+    /* (2) the labelled ticks: 1·5·10·15·20·25·30, on 0..40 every 10 */
+    { char a[64]="",b[64]=""; GSize g={1,12,1,30,0}; for(int v=g.lo;v<=g.hi;v++) if(gs_label(&g,v)) snprintf(a+strlen(a),sizeof a-strlen(a),"%d ",v);
+      g.lo=0; g.hi=40; for(int v=g.lo;v<=g.hi;v++) if(gs_label(&g,v)) snprintf(b+strlen(b),sizeof b-strlen(b),"%d ",v);
+      st_check("tick labels: 1..30 -> '1 5 10 15 20 25 30', 0..40 -> '0 10 20 30 40' (every 10, no crowding)",!strcmp(a,"1 5 10 15 20 25 30 ")&&!strcmp(b,"0 10 20 30 40 ")); }
+    /* (3) rendered, both languages: the value tab in the grind accent above the marker, the marker stem at x = 380 - 280 t (mirrored), nothing sent */
+    { static const struct { int g; uint16_t w75; } R[]={{3,0xFFFF},{12,0xFFFF},{27,0xFFFF},{34,3640},{-3,3640},{1,0xFFFF},{30,0xFFFF}};
+      ok=1; for(int lg=0;lg<NLANG;lg++) for(unsigned q=0;q<sizeof R/sizeof R[0];q++){
+        gs_page(lg,R[q].g,R[q].w75); memset(&wq,0,sizeof wq); txq_len=0; sim_run(400);
+        GSize g=gsize(sim_now); char num[8]; gs_text(&g,num,sizeof num); int bx,bt,bw; gs_tab(&g,num,0,&bx,&bt,&bw); int mx=(int)lroundf(gs_px(&g));
+        int tab=gs_px_is(bx+bw/2,bt+2,ac,24)&&gs_px_is(bx+4,bt+GS_TAB_H/2,ac,24), stem=gs_px_is(mx,GS_BY-12,ac,40), in=bx>=GS_X0-14&&bx+bw<=GS_X1+14;
+        int quiet=wq.n==0&&txq_len==0&&gs_accent_px()>200;
+        if(!(tab&&stem&&in&&quiet&&g.ok)){ ok=0; printf("     [%s] g %d: tab %d stem %d (x %d) in %d quiet %d (accent px %d)\n",LANG_CODE[lg],R[q].g,tab,stem,mx,in,quiet,gs_accent_px()); } }
+      lang_set(kl);
+      st_check("rendered (EN + DA) at gear 3 / 12 / 27 / 1 / 30 (1..30) and 34 / -3 (0..40, -3 pinned right): the value tab is the grind accent and stays within the scale's ends, the marker stem sits at x = 380 - 280 t (mirrored like the hopper dial); no frame is queued while the page shows it",ok); }
+    /* (4) the value follows word 37 live (the list widget repaints): 12 -> 20 moves the tab, the old place is no longer accent */
+    { gs_page(kl,12,0xFFFF); GSize g=gsize(sim_now); int bx,bt,bw; gs_tab(&g,"12",0,&bx,&bt,&bw); int x12=bx+bw/2, y12=bt+2, a12=gs_px_is(x12,y12,ac,24);
+      reg[37]=20; sim_run(300); g=gsize(sim_now); gs_tab(&g,"20",0,&bx,&bt,&bw);
+      st_check("live: word 37 12 -> 20 while the GRIND page is open moves the tab (accent at the new place, background at the old one)",a12&&gs_px_is(bx+bw/2,bt+2,ac,24)&&!gs_px_is(x12,y12,ac,60)); }
+    /* (5) no connection / word 37 not polled yet: "--", no marker, HOLD TO START dimmed by its guard */
+    { ok=1; for(int lg=0;lg<NLANG;lg++){
+        sim_reset(); lang_set(lg); PV_GRIND_CAL(12); sim_link=0; last_rx_ms=sim_now-9000; page=PG_GRIND; static_dirty=1; force_all=1; sim_run(1500);
+        GSize g=gsize(sim_now); char num[8]; gs_text(&g,num,sizeof num); int ac_n=gs_accent_px();
+        if(g.ok||strcmp(num,"--")||ac_n!=0||act_guard(ACT_GRIND,sim_now)!=TR(TX_G_NOLINK)){ ok=0; printf("     [%s] offline: ok %d '%s' accent px %d guard '%s'\n",LANG_CODE[lg],g.ok,num,ac_n,act_guard(ACT_GRIND,sim_now)?act_guard(ACT_GRIND,sim_now):"-"); }
+        sim_reset(); lang_set(lg); PV_GRIND_CAL(12); reg_seen[37]=0; page=PG_GRIND; static_dirty=1; force_all=1; sim_run(600);
+        g=gsize(sim_now); gs_text(&g,num,sizeof num); if(g.ok||strcmp(num,"--")||gs_accent_px()!=0){ ok=0; printf("     [%s] word 37 not polled: ok %d '%s'\n",LANG_CODE[lg],g.ok,num); } }
+      lang_set(kl);
+      st_check("no connection (EN + DA): '--', no marker or tab (0 accent pixels in the band), HOLD TO START dimmed ('NO CONNECTION' guard); word 37 not polled yet: '--', no marker",ok); }
+    /* (6) HOME during a grind: the third stat is SIZE / GRAD (was STEP / TRIN) = word 37, signed */
+    { ok=1; for(int lg=0;lg<NLANG;lg++){ st_home(); lang_set(lg); PV_GRIND_CAL(-3); reg[75]=3640; reg[33]=0x0141; reg[38]=50; sim_run(400); home_model(sim_now);
+        if(!hm.sl[2]||strcmp(hm.sl[2],TR(TX_ST_GRINDSTEP))||strcmp(hm.svv[2],"-3")||strcmp(TR(TX_ST_GRINDSTEP),lg==LANG_EN?"SIZE":"GRAD")){ ok=0; printf("     [%s] HOME grind stat '%s' = '%s'\n",LANG_CODE[lg],hm.sl[2]?hm.sl[2]:"-",hm.svv[2]); } }
+      lang_set(kl); reg[33]=0x0101;
+      st_check("HOME during a grind: the third stat is 'SIZE' / 'GRAD' (the ruler's name; was STEP / TRIN) and shows word 37 signed ('-3', not 65533)",ok); }
+    /* (7) layout: the band between GRIND MODE and HOLD TO START, texts within the scale and the circle, both languages */
+    { ok=1; for(int lg=0;lg<NLANG;lg++){ lang_set(lg);
+        LAY(text_wf(TR(TX_GS_TITLE),F_XS),GS_X1-GS_X0,"grind size title",TR(TX_GS_TITLE));
+        LAY(text_wf(TR(TX_GS_FINE),F_XS)+text_wf(TR(TX_GS_COARSE),F_XS)+24,GS_X1-GS_X0+8,"FINE + COARSE under the scale",TR(TX_GS_COARSE));
+        LAY((float)(GS_X1-GS_X0+8),2*chord_half(GS_BY+28,12)-24,"the scale + its end labels (circle)",TR(TX_GS_COARSE));
+        LAY(text_wf("-3",F_M)+24,GS_X1-GS_X0,"value tab",TR(TX_GS_TITLE)); }
+      lang_set(kl);
+      int band=GS_Y0>=row_y0(PG_GRIND,page_rows(PG_GRIND)-1)+ROW_H+8&&GS_BY+28+14<=FEAT_VY1&&GS_BY-56>GS_Y0+8+12&&FEAT_VY1<=START_HIT_Y;
+      st_check("layout (EN + DA): the ruler sits between GRIND MODE and HOLD TO START (y 214..342, below the last row, the tab clear of the title), title / FINE / COARSE / tab fit the scale and the circle",ok&&band&&page_rows(PG_GRIND)==2); }
     sim_reset();
 }
 static int selftest(const char*cfgsrc){
@@ -10115,6 +10295,8 @@ static int selftest(const char*cfgsrc){
     st_v620();                         /* v6.20 */
     st_v622();                         /* v6.22 */
     st_v624();                         /* v6.24 */
+    st_bean();                         /* v6.24: bean container (work_sta bit 8) */
+    st_grind_size();                   /* the grinder size ruler (GRIND page) */
     /* ============================ v6.15 ============================ */
     st_graph();
     printf("== selftest [%s]: %s (%d checks, %d failed) — work dir %s ==\n",LANG_CODE[base_lang],st_fail?"FAILED":"ALL OK",st_n,st_fail,dir);
@@ -10365,6 +10547,13 @@ int main(int argc,char**argv){
     sim_reset(); pv_mcu_ver("V5.1.2",NULL); sim_run(400); reg[19]=1; sim_tick=tick_water; sim_t0=sim_now; sim_run(5200); dump(out,"110_home_water_manual_running");
     sim_reset(); page=PG_DIAG; scroll[PG_DIAG]=DG_MCU-LIST_VY0-12; sim_run(600); dump(out,"111_diag_controller");
     sim_reset(); reg[35]=0x1000; page=PG_DIAG; scroll[PG_DIAG]=DG_MCU-LIST_VY0-12; sim_run(600); dump(out,"112_diag_controller_scale_fault");
+    /* the grind size ruler on the GRIND page (word 37, read-only) with the reference machine's grinder calibration (PV_GRIND_CAL) */
+    sim_reset(); PV_GRIND_CAL(12); page=PG_GRIND; sim_run(600); dump(out,"113_page_grind_size");
+    sim_reset(); PV_GRIND_CAL(3); page=PG_GRIND; sim_run(600); dump(out,"114_page_grind_size_fine");
+    sim_reset(); PV_GRIND_CAL(27); page=PG_GRIND; sim_run(600); dump(out,"115_page_grind_size_coarse");
+    sim_reset(); PV_GRIND_CAL(12); sim_link=0; last_rx_ms=sim_now-9000; page=PG_GRIND; sim_run(1500); dump(out,"116_page_grind_size_offline");
+    sim_reset(); PV_GRIND_CAL(34); reg[75]=3640; page=PG_GRIND; sim_run(600); dump(out,"117_page_grind_size_scale40");
+    sim_reset(); PV_GRIND_CAL(-3); reg[75]=3640; page=PG_GRIND; sim_run(600); dump(out,"118_page_grind_size_scale40_negative");
     return 0;
 }
 #endif

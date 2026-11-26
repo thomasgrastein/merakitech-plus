@@ -239,6 +239,7 @@ class McuSim:
         self.calm_prev = {}
         self.calm_hist = {}
         self.maint = True        # idle maintenance pulses (deadhead); False = demo-only without pulses
+        self.bean_tank = True    # bean container switch (work_sta bit 8; stock shows lackBeenTank.png when clear)
         self._last_wall = 0.0
 
     # ------------------------------------------------------------ link setup
@@ -591,7 +592,7 @@ class McuSim:
         act = self.act or {}
         kind = act.get("kind", self.mode)
         if kind == "grind":
-            r[33] = WS_IDLE
+            r[33] = self.ws_idle()
             # v6.13: a MANUAL stop (word6=0) halts the grinder immediately —
             # the weight stops rising (w_end=w0). Auto-stop already reaches
             # stop_w=target+2, so the after-phase there is flat; a manual stop must NOT
@@ -601,7 +602,7 @@ class McuSim:
                          min(65535, act.get("target", r[38]) + 2),
                          "tare_clear_at": self.t + 0.4}
         elif kind == "brew":
-            r[33] = WS_IDLE
+            r[33] = self.ws_idle()
             # v6.6: word22 is cleared ~0.16 s after stop (live 24.577→24.739 /
             # 245.851→246.007); after-drip +12 (live +5..+15). The post-stop
             # bit2 pulse is suppressed if a flush overlapped the brew (live
@@ -612,7 +613,7 @@ class McuSim:
                          "pulse": not act.get("flush_overlap"),
                          "flag_clear_at": self.t + 0.16}
         elif kind == "water":
-            r[33] = WS_IDLE
+            r[33] = self.ws_idle()
             r[16] = 0                     # the MCU clears hotwater_auto itself
             r[19] = 0
             self.post = {"kind": "water", "t0": self.t, "w0": r[39],
@@ -709,6 +710,10 @@ class McuSim:
             self.alarm_fired = True
             self._power_wake("alarm")
 
+    def ws_idle(self):
+        """Idle work_sta: bit 8 = bean container present (stock shows lackBeenTank.png when it is clear)."""
+        return WS_IDLE if self.bean_tank else WS_IDLE & ~0x0100
+
     def do_reboot(self, factory=False, cause="ctrl"):
         self.stats["reboots"] += 1
         self.regs = [0] * REGN
@@ -724,7 +729,7 @@ class McuSim:
             # v6.14 power wake: CPU reset to the start values (REGISTERMAP §2,
             # init 0x9966) — the config is NOT preloaded; the host's
             # boot push/re-push is expected (boot_push_missing otherwise).
-            self.regs[33] = WS_IDLE       # word0=1, word1=0 → awake idle
+            self.regs[33] = self.ws_idle()  # word0=1, word1=0 → awake idle
             defaults = {str(w): self.regs[w] for w in (0, 4, 11, 14, 17, 23, 25, 114)}
         else:
             # compat: ctrl reboot / word30 preloads the config (as before)
@@ -1092,9 +1097,9 @@ class McuSim:
                 self.post = None
         elif kind == "brew":
             if p.get("pulse", True) and el < 0.21:
-                r[33] = 0x0105            # post-stop bit2 pulse (BREW §5.2)
+                r[33] = self.ws_idle() | 0x0004   # post-stop bit2 pulse (BREW §5.2)
             else:
-                r[33] = WS_IDLE
+                r[33] = self.ws_idle()
             if self.steam_ch:
                 r[33] |= 0x4020           # steam keeps running on top of the brew stop
             if self.t >= p.get("flag_clear_at", 0):
@@ -1313,7 +1318,7 @@ class McuSim:
             self.mode = "sleep"
         else:
             self.mode = "steam" if steam_act else "idle"
-            base = WS_IDLE | (0x4020 if steam_act else 0)
+            base = self.ws_idle() | (0x4020 if steam_act else 0)
             if self.pulse and self.t < self.pulse["until"]:
                 r[33] = base | self.pulse["bits"]
                 if not steam_act and not sp_cur:
@@ -1487,7 +1492,7 @@ class McuSim:
                 m = fr["words"][33 - fr["sub"]] & ~WS_PULSE_MASK
                 if t_ext is None and m == WS_BREW_EXT:
                     t_ext = fr["t"]
-                if t_ext is not None and t_stop is None and m in (WS_IDLE, 0x0105):
+                if t_ext is not None and t_stop is None and m in (WS_IDLE, 0x0105, WS_IDLE & ~0x0100, 0x0005):
                     t_stop = fr["t"]
             if fr["sub"] <= 39 < fr["sub"] + len(fr["words"]):
                 w39 = s16(fr["words"][39 - fr["sub"]])
@@ -1721,7 +1726,7 @@ class McuSim:
                 return
         if cls == "fast":
             ws_m = self.regs[33] & ~WS_PULSE_MASK
-            idle = ws_m in (WS_IDLE, 0x0105) and not self.act
+            idle = ws_m in (self.ws_idle(), self.ws_idle() | 0x0004) and not self.act
             # v6.6: stochastic idle maintenance cycles are tolerated on both sides:
             # live cur1 400-1000 / word51 400-900 in ~30-45 % of idle frames
             # (ALL captures) — the phase cannot be matched deterministically. Same
@@ -2030,6 +2035,12 @@ class McuSim:
             w = int(ev["word"])
             r[w] = int(ev["value"]) & 0xFFFF
             self.alog.log(self.t, "set_reg", word=w, value=r[w])
+            return True
+        if typ == "bean_tank":
+            # v6.24: the bean container switch (work_sta bit 8). Removed = bit 8 clear while awake
+            # (stock lackBeenTank.png); the idle work_sta is recomputed from ws_idle() every tick.
+            self.bean_tank = bool(ev.get("present", True))
+            self.alog.log(self.t, "bean_tank", present=self.bean_tank)
             return True
         if typ in ("wand", "wand_down", "wand_up"):
             # v6.6: PE.2 wand switch (STEAMLIVE §6). word44 bit0 + word46 mirror
