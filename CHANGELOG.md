@@ -3,6 +3,34 @@
 All notable changes to Meraki+. Details (with evidence, frames and test figures) are in
 [docs/dev/UI_v6.md](docs/dev/UI_v6.md) under *CHANGES-v6.x*. All dates are 2026.
 
+## Unreleased — OTA phase 3 on-device fetch
+**Updates from the machine's own screen: SYSTEM › UPDATES (opt-in, default off, signed releases only).**
+Not yet verified on a machine. Details: [docs/ota-plan.md](docs/ota-plan.md) (Phase 3 — implemented).
+### On the machine
+- Updates from GitHub, on the screen
+- Signed releases only, you decide
+### Added
+- **SYSTEM › UPDATES** (row below DIAGNOSTICS): CHECK NOW asks GitHub for the newest signed release (manifest +
+  signature + these notes only, nothing on flash); the install view shows the notes and offers AT NEXT START (the
+  launcher starts it at the next power-on) or INSTALL NOW (exec-reload once the machine is idle). The download starts
+  only after that choice; never during an activity. A failed new version rolls back by itself (phase 1b).
+- **`merakiplus_upd check | install`**: HTTPS with BearSSL (third_party/bearssl, MIT) and 9 pinned root certificates
+  (keys/tls/), GitHub hosts only, ≤ 5 redirects, clock floor; Ed25519 signature + anti-downgrade before any asset;
+  streamed SHA-256 staging into rel/, state `pending` + `trial_seq` under ota/lock. URLs up to 4095 bytes (GitHub's
+  signed asset URLs are ~900 and vary per download). The updater ships in every release directory from now on (bin/,
+  release asset, installer).
+- **Anti-downgrade counts only healthy releases:** an on-device install raises `max_seq` only after the launcher has
+  committed it as healthy (`trial_seq` in ota/state; the computer installer applies the same rule). A release that was
+  rolled back is offered again and can be retried; older signed releases are still refused.
+- **`THIRD-PARTY-NOTICES`** (BearSSL, Zig standard library, musl — MIT): a release asset and built into the updater
+  (`merakiplus_upd notices`); `LICENSE` points to it and to `third_party/`. `tests/hygiene.py` locks the vendored
+  BearSSL to upstream commit 7bea48e (git tree hashes); `.gitattributes` marks `third_party/` as vendored.
+- **Weekly live canary** (`.github/workflows/live-canary.yml`, `tests/live_canary.py`): the updater against the real
+  GitHub with only the pinned roots (check, full install, signed-URL lengths); not part of the merge gate.
+- **Release notes on the machine:** every release (and every Unreleased block) carries a `### On the machine`
+  subsection (1–4 bullets, ≤ 36 ASCII characters), published as the signed asset `notes.txt`; hygiene, release.yml
+  and sign_release.py refuse a release without it.
+
 ## [6.25] — 2026-11-26
 **Grinder: the measured grind size as a ruler, and a bean container message instead of *ASLEEP*.** Both are display-only
 and read-only: no UART frame, frame-policy rule or guard changed, and the grinder calibration is never written.

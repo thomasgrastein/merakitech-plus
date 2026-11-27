@@ -729,6 +729,21 @@ def signed_install(srv, root):
         check("2: status shows the newest accepted seq", "newest accepted seq 5" in out, out[-500:])
         rc, out = run(srv, root, "install", "--bin-dir", str(good), unsigned=False)
         check("2: re-install of the same signed release (seq == max_seq) is fine", rc == 0 and ota(root).get("max_seq") == "5")
+        # the on-device updater records trial_seq=<name> <seq> at staging; it counts once the launcher committed <name>
+        stf = root / mp.OTA_STATE.lstrip("/")
+        saved_state = stf.read_text()
+        cur = ota(root).get("current") or ota(root).get("pending")
+        stf.write_text(saved_state.replace(f"pending={cur}\n", "pending=\n").replace("current=", f"current={cur}\nx_was_current=", 1)
+                       + f"trial_seq={cur} 6\n")
+        before = tree_digest(root)
+        rc, out = run(srv, root, "install", "--bin-dir", str(good), unsigned=False)
+        check("2: an on-device trial (seq 6) committed as healthy raises the floor: signed seq 5 is OLDER VERSION REFUSED",
+              rc == 1 and "OLDER VERSION REFUSED" in out and tree_digest(root) == before, (out[-400:], ota(root)))
+        stf.write_text(saved_state + "trial_seq=6.99-rolledback 6\n")
+        rc, out = run(srv, root, "status")
+        check("2: a rolled-back on-device trial (not current) does not count: newest accepted seq stays 5",
+              "newest accepted seq 5" in out, out[-500:])
+        stf.write_text(saved_state)
 
         old = tmp / "old"
         sigtest.signed_release(old, key, seq=3)

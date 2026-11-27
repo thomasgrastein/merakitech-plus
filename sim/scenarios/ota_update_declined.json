@@ -1,0 +1,111 @@
+{
+  "name": "ota_update_declined",
+  "description": "OTA phase 3: CHECK NOW finds v6.99 and opens the install view; the user closes it (chevron). Nothing is downloaded or staged, the state file keeps no pending release, the row says V6.99 NY; no controller frame.",
+  "duration_s": 20,
+  "ui_env": {
+    "MERAKIPLUS_UPD_BIN": "{sim}/fixtures/ota/upd_sim.py",
+    "MERAKIPLUS_UPD_SIM_CASE": "ok"
+  },
+  "sandbox_files": {
+    "new_customer/demo_v9": "LAUNCHER STAND-IN (sim)\n",
+    "new_customer/merakiplus/ota/state": "format=1\ncurrent=6.25-aaaaaaaa\nprevious=\npending=\ntries=0\nlast=\nmax_seq=3\n"
+  },
+  "events": [
+    {
+      "t": 2,
+      "target": "ui",
+      "cmd": "page",
+      "name": "updates"
+    },
+    {
+      "t": 3,
+      "target": "ui",
+      "cmd": "touch",
+      "layout": "save",
+      "ms": 90
+    },
+    {
+      "t": 9,
+      "target": "runner",
+      "op": "snapshot",
+      "label": "install-view"
+    },
+    {
+      "t": 10,
+      "target": "ui",
+      "cmd": "touch",
+      "layout": "close",
+      "ms": 90
+    },
+    {
+      "t": 15,
+      "target": "runner",
+      "op": "snapshot",
+      "label": "declined"
+    }
+  ],
+  "expect": [
+    {
+      "kind": "state",
+      "path": "shown.x",
+      "t0": 5,
+      "t1": 9.8,
+      "equals": "install"
+    },
+    {
+      "kind": "state",
+      "path": "updates.available",
+      "t0": 5,
+      "t1": 9.8,
+      "equals": true
+    },
+    {
+      "kind": "page",
+      "t": 13,
+      "window": 2,
+      "value": "settings"
+    },
+    {
+      "kind": "state",
+      "path": "updates.staged",
+      "t0": 11,
+      "t1": 19,
+      "equals": "",
+      "mode": "all"
+    },
+    {
+      "kind": "state",
+      "path": "updates.done",
+      "t0": 11,
+      "t1": 19,
+      "equals": "check",
+      "mode": "all"
+    },
+    {
+      "kind": "state",
+      "path": "updates.op",
+      "t0": 10.5,
+      "t1": 19,
+      "equals": "",
+      "mode": "all"
+    },
+    {
+      "kind": "state",
+      "path": "updates.summary",
+      "t0": 11,
+      "t1": 19,
+      "contains": "V6.99"
+    },
+    {
+      "kind": "sim_log",
+      "assert": "no_writes_between",
+      "t0": 1,
+      "t1": 19,
+      "except_subs": [
+        0,
+        1,
+        112
+      ]
+    }
+  ]
+}

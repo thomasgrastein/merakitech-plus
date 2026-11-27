@@ -71,11 +71,12 @@ RAW_AUDIO = "https://raw.githubusercontent.com/" + REPO + "/{ref}/audio/{name}"
 
 # md5 of the shipped device binaries in bin/ (kept in sync with bin/MD5SUMS by CI).
 BIN_MD5 = {
-    "merakiplus": "ac0fa84c83cd0ebbafc7672948e025a1",
+    "merakiplus": "6121515bd1ecab2cec2da06d4b600634",
     "switcher": "e02a463c16278545c04b8e4022b8369f",
     "grab_shim.so": "c42076c807c54d477a5868977404186d",
     "merakiplus_snd": "a7659c176b8ef78385b0b612a69e81ca",
     "merakiplus_boot": "c0035acd75049bea2570a6ea99c4ab5d",
+    "merakiplus_upd": "24772e795f5e17c6d47967eca1dd4130",          # OTA phase 3: the on-device updater (in every release directory)
 }
 # v6.18: Meraki+'s own sounds (tools/gen_audio.py; docs/audio.md; v6.19: marimba / glockenspiel timbres) — installed next to the sound helper
 AUDIO_MD5 = {
@@ -86,11 +87,12 @@ AUDIO_MD5 = {
 # SHA-256 of the same files (docs/ota-plan.md phase 1a). Checked on the computer before upload, and on the display
 # when its busybox has sha256sum. md5 stays as well (the display always has md5sum; older docs/scripts quote it).
 BIN_SHA256 = {
-    "merakiplus": "bb620afab1732f683955285fe1a1466bc465d65d4ef4a46236ab5e824f480f71",
+    "merakiplus": "9174ee130d68ba448b35d8a3c57eb392b04be2d70fc1e940d957f1133af1494b",
     "switcher": "6af721e297e8d13dedc9ad9c14bf39d925eb7d4cc7ae9fab49f99b428873d5bf",
     "grab_shim.so": "c02f61b53ec4613f04950966bcfab7e7aa2ad53dfe1035eae22a542861d268d7",
     "merakiplus_snd": "84c06c507a04d0c06ae9250a60405f10bcf05b105e481144869180fd30d479cb",
     "merakiplus_boot": "4cbcc5fb20469ba25b79ee1523b4639a2a81af84e96b996e97d2af0d535fd8ed",
+    "merakiplus_upd": "8b3949739f9066291ba64492d02c4f6fb651fda0b3b5597a1509a32cc51e1765",
 }
 AUDIO_SHA256 = {
     "start.wav": "4633a9ecd800119732886e5255f404d76eb9743dda3ebdd2c270d5106650ff01",
@@ -854,6 +856,17 @@ def fetch_signed_manifest(args, o):
     return got[0], got[1].decode("ascii", errors="replace")
 
 
+def ota_max_seq(ota):
+    """The newest signed seq this display accepted, or None: max_seq, raised by a release the on-device updater staged
+    (trial_seq=<name> <seq>) once the launcher committed it as healthy (current=<name>). A rolled-back trial does not count
+    (src/merakiplus_upd.c state_read: the same rule)."""
+    ms = int(ota["max_seq"]) if ota.get("max_seq", "").isdigit() else None
+    t = ota.get("trial_seq", "").split()
+    if len(t) == 2 and t[1].isdigit() and t[0] and t[0] == ota.get("current") and int(t[1]) > (ms or 0):
+        ms = int(t[1])
+    return ms
+
+
 def check_signed_release(args, o, files, max_seq):
     """Verify the installed files against the release's signed manifest (computer side). Never touches the display.
 
@@ -1099,8 +1112,8 @@ def print_status(o, st):
         o.say(f"  releases           : current {ota.get('current') or '-'}, previous {ota.get('previous') or '-'}"
               + (f", TRIAL {ota['pending']} (started {ota.get('tries', '0')}x)" if ota.get("pending") else "")
               + f"   [on flash: {', '.join(st['rels']) or 'none'}]")
-        if ota.get("max_seq"):
-            o.say(f"  signed releases    : newest accepted seq {ota['max_seq']} (older ones need --allow-downgrade)")
+        if ota_max_seq(ota) is not None:
+            o.say(f"  signed releases    : newest accepted seq {ota_max_seq(ota)} (older ones need --allow-downgrade)")
         if ota.get("last", "").startswith("rolled_back:"):
             r = ota["last"].split(":")
             o.say(f"  last rollback      : {r[1]} ({r[2] if len(r) > 2 else '?'}) — the launcher went back automatically")
@@ -1343,6 +1356,8 @@ def cmd_install(dev, o, args):
     want = BIN_MD5["merakiplus"]
     snd = get_binary("merakiplus_snd", args, o)                  # v6.18: sound helper + our own sounds
     check_arm_elf(snd, "merakiplus_snd")
+    upd = get_binary("merakiplus_upd", args, o)                  # OTA phase 3: the on-device updater (SYSTEM > UPDATES)
+    check_arm_elf(upd, "merakiplus_upd")
     boot = get_binary("merakiplus_boot", args, o)                # v6.21: the launcher (/new_customer/demo_v9)
     check_arm_elf(boot, "merakiplus_boot")
     sounds = {n: get_binary(n, args, o, sub="audio") for n in AUDIO_MD5}
@@ -1354,12 +1369,12 @@ def cmd_install(dev, o, args):
         extra["grab_shim.so"] = get_binary("grab_shim.so", args, o)
         check_arm_elf(extra["grab_shim.so"], "grab_shim.so", shared=True)
     # OTA phase 2: the release's signed manifest (Ed25519, offline key) must list every file we install
-    max_seq = int(st["ota"]["max_seq"]) if st["ota"].get("max_seq", "").isdigit() else None
-    signed = check_signed_release(args, o, {"merakiplus": merakiplus, "merakiplus_snd": snd, "merakiplus_boot": boot,
+    max_seq = ota_max_seq(st["ota"])
+    signed = check_signed_release(args, o, {"merakiplus": merakiplus, "merakiplus_snd": snd, "merakiplus_upd": upd, "merakiplus_boot": boot,
                                             **sounds, **extra}, max_seq)
     rel = rel_name(VERSION, merakiplus)
     rel_exe = f"{REL_DIR}/{rel}/demo_v9"
-    files = [("demo_v9", merakiplus), ("merakiplus_snd", snd)] + [("audio/" + n, b) for n, b in sounds.items()]
+    files = [("demo_v9", merakiplus), ("merakiplus_snd", snd), ("merakiplus_upd", upd)] + [("audio/" + n, b) for n, b in sounds.items()]
     man = manifest(VERSION, files)
     # free space: the new release + the launcher (+ its upload) + a migrated copy of the running build + margin
     need_kb = (sum(len(b) for _, b in files) * 2 + len(boot) * 2 + sum(map(len, extra.values()))) // 1024 + 512
@@ -1440,6 +1455,7 @@ def cmd_install(dev, o, args):
             new_ota["current"] = ota.get("previous", "")          # (re-trial of a build that is current: keep a real fallback)
     if signed:                                                    # anti-downgrade record (docs/signing.md)
         new_ota["max_seq"] = str(signed["seq"] if args.allow_downgrade else max(signed["seq"], max_seq or 0))
+        new_ota.pop("trial_seq", None)                            # folded into max_seq above (or dropped on purpose)
     if new_ota != st["ota"]:
         dev.w(f"rm -f {dev.d(OTA_HEALTHY)}")
         write_ota_state(dev, new_ota)

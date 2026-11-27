@@ -1,0 +1,90 @@
+{
+  "name": "ota_update_older",
+  "description": "OTA phase 3: CHECK NOW, GitHub's latest is a validly signed OLDER release (seq 2 < max_seq 3): refused (anti-downgrade); nothing is offered or staged, the status line says FAILED; no controller frame.",
+  "duration_s": 14,
+  "ui_env": {
+    "MERAKIPLUS_UPD_BIN": "{sim}/fixtures/ota/upd_sim.py",
+    "MERAKIPLUS_UPD_SIM_CASE": "older"
+  },
+  "sandbox_files": {
+    "new_customer/demo_v9": "LAUNCHER STAND-IN (sim)\n",
+    "new_customer/merakiplus/ota/state": "format=1\ncurrent=6.25-aaaaaaaa\nprevious=\npending=\ntries=0\nlast=\nmax_seq=3\n"
+  },
+  "events": [
+    {
+      "t": 2,
+      "target": "ui",
+      "cmd": "page",
+      "name": "updates"
+    },
+    {
+      "t": 3,
+      "target": "ui",
+      "cmd": "touch",
+      "layout": "save",
+      "ms": 90
+    },
+    {
+      "t": 10,
+      "target": "runner",
+      "op": "snapshot",
+      "label": "result"
+    }
+  ],
+  "expect": [
+    {
+      "kind": "toast",
+      "t": 7,
+      "window": 4,
+      "contains": "ÆLDRE VERSION AFVIST"
+    },
+    {
+      "kind": "state",
+      "path": "updates.done",
+      "t0": 6,
+      "t1": 13,
+      "equals": "check"
+    },
+    {
+      "kind": "state",
+      "path": "updates.ok",
+      "t0": 6,
+      "t1": 13,
+      "equals": false
+    },
+    {
+      "kind": "state",
+      "path": "updates.available",
+      "t0": 3.5,
+      "t1": 13,
+      "equals": false,
+      "mode": "all"
+    },
+    {
+      "kind": "state",
+      "path": "updates.staged",
+      "t0": 3.5,
+      "t1": 13,
+      "equals": "",
+      "mode": "all"
+    },
+    {
+      "kind": "state",
+      "path": "shown.x",
+      "t0": 6,
+      "t1": 13,
+      "equals": "updates"
+    },
+    {
+      "kind": "sim_log",
+      "assert": "no_writes_between",
+      "t0": 1,
+      "t1": 13,
+      "except_subs": [
+        0,
+        1,
+        112
+      ]
+    }
+  ]
+}

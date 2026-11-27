@@ -381,11 +381,16 @@ Without `--persist` the machine starts the original UI. With `--persist`: see th
   trusts GitHub and this repository; a clone you keep (and update only to release tags you choose) keeps its own
   pinned key and is not affected by later changes to the repository. How releases are made and what CI may do:
   [docs/release-process.md](docs/release-process.md).
-- **Planned:** an opt-in update check on the display itself — see [docs/ota-plan.md](docs/ota-plan.md)
-  (phases 1a, 1b and 2 are done; on-device download is not implemented yet).
-- **Meraki+ itself** opens no new network ports and contacts no servers. Its only network function
-  is bringing up the display's Wi-Fi at boot from slot B (the same configuration the stock UI uses;
-  the password is never logged).
+- **Updates on the display itself (unreleased, not yet verified on a machine):** *SYSTEM › UPDATES* — **off until
+  you tap**. CHECK NOW asks GitHub for the newest signed release (only the signed manifest and its short notes);
+  the release itself is downloaded only after you choose AT NEXT START or INSTALL NOW, never during an activity.
+  The updater (`merakiplus_upd`) verifies the Ed25519 signature and refuses older releases before it downloads
+  anything, talks HTTPS only to GitHub with its own pinned root certificates ([keys/tls/](keys/tls/README.md)),
+  sends no identifiers, opens no port and exits when done. A new version that fails rolls back by itself.
+  Details: [docs/ota-plan.md](docs/ota-plan.md) (phase 3).
+- **Meraki+ itself** opens no new network ports. Apart from the opt-in update check above it contacts no
+  servers; its other network function is bringing up the display's Wi-Fi at boot from slot B (the same
+  configuration the stock UI uses; the password is never logged).
 - Found a security bug in Meraki+'s own code? See [SECURITY.md](SECURITY.md).
 
 ## Troubleshooting / FAQ

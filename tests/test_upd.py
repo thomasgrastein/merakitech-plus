@@ -53,9 +53,16 @@ def build_test_upd(key, work, arm=False):
     zig_obj(["-target", "arm-linux-musleabihf", "-mcpu", "cortex_a7", "-fstrip"] if arm else [], obj)
     out = work / f"upd_test_{sfx}"
     tgt = ["-target", "arm-linux-musleabihf", "-mcpu=cortex_a7", "-static", "-s"] if arm else []
-    subprocess.run(["zig", "cc", *tgt, "-O2", "-Wall", "-Wextra", "-Werror",
-                    f'-DMERAKIPLUS_UPD_TEST_KEYID="{key.id}"', f'-DMERAKIPLUS_UPD_TEST_PK="{key.pk.hex()}"',
-                    "-o", str(out), str(ROOT / "src/merakiplus_upd.c"), str(obj)], check=True)
+    bs = ["-I" + str(ROOT / "third_party/bearssl/inc"), "-I" + str(ROOT / "third_party/bearssl/src")]
+    objs = []
+    for src in ("merakiplus_upd.c", "merakiplus_upd_net.c"):          # our code with -Werror, BearSSL without
+        o = work / f"{src}.{sfx}.o"
+        subprocess.run(["zig", "cc", *tgt, "-O2", "-Wall", "-Wextra", "-Werror", *bs,
+                        f'-DMERAKIPLUS_UPD_TEST_KEYID="{key.id}"', f'-DMERAKIPLUS_UPD_TEST_PK="{key.pk.hex()}"',
+                        "-c", str(ROOT / "src" / src), "-o", str(o)], check=True)
+        objs.append(str(o))
+    bearssl = sorted(str(p) for p in (ROOT / "third_party/bearssl/src").rglob("*.c"))
+    subprocess.run(["zig", "cc", *tgt, "-O2", *bs, "-o", str(out), *objs, str(obj), *bearssl], check=True)
     return out
 
 
@@ -129,7 +136,7 @@ def run(work, arm):
     check("every asset listed with size + sha256", {e["name"] for e in m["assets"]} == set(assets)
           and all(re.fullmatch(r"[0-9a-f]{64}", e["sha256"]) for e in m["assets"]))
     check("release section = UI, sound helper, WAVs (like the installer's release directory)",
-          [e["name"] for e in m["release"]] == ["demo_v9", "merakiplus_snd"] + ["audio/" + n for n in st.AUDIO_ASSETS])
+          [e["name"] for e in m["release"]] == ["demo_v9", "merakiplus_snd", "merakiplus_upd"] + ["audio/" + n for n in st.AUDIO_ASSETS])
     check("platform section = launcher, switcher, shim", sorted(e["src"] for e in m["platform"]) ==
           ["grab_shim.so", "merakiplus_boot", "switcher"])
     check("base_url pins the tag", m["base_url"].endswith(f"/releases/download/v{mp.VERSION}/"))
@@ -231,7 +238,7 @@ def run(work, arm):
     for e in m["release"]:
         shutil.copy(rel / e["src"], rd / e["name"])
     r = subprocess.run([str(upd), "verify", str(man), str(sig), "--release-dir", str(rd)], capture_output=True, text=True)
-    check("release directory matches the signed manifest", r.returncode == 0 and "files=5" in r.stdout, r.stdout)
+    check("release directory matches the signed manifest", r.returncode == 0 and f"files={len(sr.RELEASE_FILES)}" in r.stdout, r.stdout)
     (rd / "demo_v9").write_bytes(b"\x7fELF not ours")
     r = subprocess.run([str(upd), "verify", str(man), str(sig), "--release-dir", str(rd)], capture_output=True, text=True)
     check("replaced demo_v9 in the release directory rejected", r.returncode == 6, r.stdout)
@@ -297,6 +304,27 @@ def run(work, arm):
         except sr.Fail as e:
             check("encrypted key refuses a wrong passphrase", "passphrase" in str(e), str(e))
 
+    print("== release notes on the machine (CHANGELOG '### On the machine' -> notes.txt) ==")
+    sys.path.insert(0, str(ROOT / "tools"))
+    import release_notes as rn
+    def notes(body):
+        try:
+            return rn.device_notes("## [9.9] — 2026-12-01\nsummary\n" + body)
+        except rn.NotesError as e:
+            return "ERR " + str(e)
+    check("valid: 1..4 plain bullets -> one line each", notes("### On the machine\n- Updates on the screen\n- Two\n### Added\n- x\n") == "Updates on the screen\nTwo\n")
+    check("missing subsection -> refused", notes("### Added\n- x\n").startswith("ERR no '### On the machine'"))
+    check("more than 4 bullets -> refused", notes("### On the machine\n" + "- a\n" * 5).startswith("ERR"))
+    check("empty subsection -> refused", notes("### On the machine\n### Added\n- x\n").startswith("ERR"))
+    check("a bullet over 36 characters -> refused", notes("### On the machine\n- " + "x" * 37 + "\n").startswith("ERR") and
+          notes("### On the machine\n- " + "x" * 36 + "\n") == "x" * 36 + "\n")
+    check("markdown / links / non-ASCII / prose lines -> refused",
+          all(notes("### On the machine\n" + b + "\n").startswith("ERR") for b in ("- **bold**", "- [x](y)", "- Grøn", "plain line")))
+    r = subprocess.run([sys.executable, str(ROOT / "tools/release_notes.py"), "6.25", "--device"], capture_output=True, text=True)
+    check("release_notes.py --device exits non-zero for a section without it (v6.25)", r.returncode != 0 and "On the machine" in r.stderr, r.stderr)
+    check("sign_release.py refuses to sign a release after 6.25 without notes.txt, and verifies it against the CHANGELOG",
+          sr.NOTES == "notes.txt" and sr.NOTES_FROM == (6, 25) and "release_notes.py --device @commit == asset" in (ROOT / "tools/sign_release.py").read_text())
+
     print("== release.yml: the unsigned-manifest step (dry run) ==")
     wf = (ROOT / ".github/workflows/release.yml").read_text()
     files = re.search(r'^\s*files="([^"]+)"', wf, re.M).group(1).split()
@@ -307,8 +335,14 @@ def run(work, arm):
           "manifest.unsigned.json" in pub_assets and "manifest.json" not in pub_assets and "manifest.sig" not in pub_assets)
     check("published assets = files + MD5SUMS + SHA256SUMS + manifest.unsigned.json",
           sorted(pub_assets) == sorted(files + ["MD5SUMS", "SHA256SUMS", "manifest.unsigned.json"]), pub_assets)
-    check("every published binary/sound is one sign_release.py knows how to verify",
-          all(f in sr.COMMITTED_ONLY or f in mp.AUDIO_MD5 or f in st.BIN_ASSETS for f in files))
+    check("every published binary/sound/notes file is one sign_release.py knows how to verify",
+          all(f in sr.COMMITTED_ONLY or f in mp.AUDIO_MD5 or f in st.BIN_ASSETS or f in (sr.NOTES, sr.NOTICES) for f in files))
+    check("release.yml publishes THIRD-PARTY-NOTICES (BearSSL / Zig std / musl, MIT) with the binaries, and the sign tool "
+          "compares it with the file at the commit", sr.NOTICES in files and "cp THIRD-PARTY-NOTICES dist/" in wf
+          and "THIRD-PARTY-NOTICES@commit == asset" in (ROOT / "tools/sign_release.py").read_text())
+    gen = re.search(r'^\s*python3 tools/release_notes\.py "\$VERSION" --device > dist/notes\.txt$', wf, re.M)
+    check("release.yml writes notes.txt with release_notes.py --device (fails without valid 'On the machine') BEFORE "
+          "the sums and the manifest", gen is not None and "notes.txt" in files and wf.index(gen.group(0)) < wf.index("md5sum $files"))
     if step:
         dist = work / "dist"
         st.make_dist(dist)

@@ -4,6 +4,7 @@
 |---|---|---|
 | `merakiplus` | **Meraki+ v6.25** device binary (static ARMv7, musl). Installed as `/new_customer/merakiplus/rel/<version>-<sha8>/demo_v9`. | `src/merakiplus.c` |
 | `merakiplus_boot` | the launcher (static ARMv7, no UI/network/UART). Installed as `/new_customer/demo_v9`; starts the chosen release and rolls back (docs/ota-plan.md phase 1b) | `src/merakiplus_boot.c` |
+| `merakiplus_upd` | the on-device updater (static ARMv7: Ed25519/SHA-256 from the Zig standard library, TLS = BearSSL with the pinned roots of `keys/tls/`). Installed into each release directory; SYSTEM › UPDATES runs it (`check`, `install`). Never a daemon, no listening socket (docs/ota-plan.md phase 3) | `src/merakiplus_upd.c`, `src/merakiplus_upd_net.c`, `src/merakiplus_crypto.zig`, `third_party/bearssl/` |
 | `merakiplus_snd` | sound helper (ARMv7, dynamic against the display's glibc 2.28; `dlopen`s the display's own `libmi_*.so` at run time). Installed into each release directory, next to `audio/` | `src/merakiplus_snd.c` |
 | `switcher` | gesture switcher daemon (center-hold 5 s → stock to Meraki+), only with `--gesture` | `boot/switcher.c` |
 | `merakiplus_boot` | `c0035acd75049bea2570a6ea99c4ab5d` | `./build.sh` → `build/merakiplus_boot` |
@@ -18,6 +19,18 @@
 **No vendor firmware, libraries or scripts are included here or anywhere in this repository.**
 
 ## Provenance of the ARM binaries
+
+**Unreleased — OTA phase 3, on-device update fetch (no version bump; built with the V6.25 string):** `merakiplus`
+(`6121515b…`), `merakiplus_sim_arm` and the two host SIM builds rebuilt with the official zig 0.17.1 (SYSTEM › UPDATES:
+CHECK NOW, the install view with the release's ultrashort notes, AT NEXT START / INSTALL NOW). **New: `merakiplus_upd`**
+(`24772e79…`, ~275 KB static ARMv7; review fixes 2026-11-27: 4 KiB URLs, max_seq after the healthy commit, built-in
+THIRD-PARTY-NOTICES), now shipped in every release directory: the phase 2 verifier plus HTTPS (BearSSL,
+`third_party/bearssl/`, pinned roots `keys/tls/`), `check` and `install`. `merakiplus_boot`, `merakiplus_snd`,
+`switcher`, `tinj_hold`, `keyinj`, `grab_shim.so` and `audio/` are byte-identical to v6.25. **Not yet verified on a
+machine** (hardware plan: docs/ota-plan.md, "Phase 3 — implemented"). Covered by `tests/test_ota_fetch.py` (local
+TLS server, host + ARMv7 container), `tests/test_upd.py`, the UI self-test (EN + DA, also as a 32-bit ARM binary), the
+`ota_update_*` simulator scenarios (the real updater against a TLS stand-in for GitHub) and the full E2E suite. A live
+`merakiplus_upd_host check` against the real GitHub release (v6.25, two redirects, pinned roots) passed on 2026-11-26.
 
 **v6.25 (2026-11-26, grind size ruler + bean container message):** `merakiplus` (`ac0fa84c…`), `merakiplus_sim_arm`
 and the two host SIM builds were rebuilt from the v6.25 source with the official zig 0.17.1. Both changes are display-only
@@ -150,14 +163,15 @@ self-test and the simulator E2E suite.
 
 | File | md5 (this repo) | Built with |
 |---|---|---|
-| `merakiplus` (V6.25) | `ac0fa84c83cd0ebbafc7672948e025a1` | `./build.sh` → `build/merakiplus` |
-| `merakiplus_sim_arm` (V6.25) | `7e0b4f53173496e3497171e4559d22ff` | `./build.sh` → `build/merakiplus_sim_arm` |
+| `merakiplus` (V6.25 + unreleased OTA phase 3) | `6121515bd1ecab2cec2da06d4b600634` | `./build.sh` → `build/merakiplus` |
+| `merakiplus_sim_arm` (V6.25 + unreleased) | `8cd4b88950c467d5609cdd19e01d543b` | `./build.sh` → `build/merakiplus_sim_arm` |
 | `merakiplus_snd` (V6.18.1) | `a7659c176b8ef78385b0b612a69e81ca` | `./build.sh` → `build/merakiplus_snd` |
 | `switcher` | `e02a463c16278545c04b8e4022b8369f` | `./build.sh` → `build/switcher` |
 | `tinj_hold` | `e9806fb92e9b8a7e506a34639173c648` | `./build.sh` → `build/tinj_hold` |
 | `keyinj` | `a0cbd4bc2a670abe0e250ec34a193843` | `./build.sh` → `build/keyinj` |
-| `merakiplus_sim-linux-x86_64` (V6.25) | `1531b1142b13e154591c06b3cdd5e436` | `zig cc -target x86_64-linux-musl -DMERAKIPLUS_SIM -O2 -static -s src/merakiplus.c -lm` |
-| `merakiplus_sim-macos-arm64` (V6.25) | `d49f022589fc10f73cd8d4c23fd5f8a4` | `zig cc -DMERAKIPLUS_SIM -O2 -s src/merakiplus.c -lm` (Mach-O builds are not bit-reproducible) |
+| `merakiplus_upd` (unreleased, OTA phase 3) | `24772e795f5e17c6d47967eca1dd4130` | `./build.sh` → `build/merakiplus_upd` |
+| `merakiplus_sim-linux-x86_64` (V6.25 + unreleased) | `286461c3c87a55e3db4e2b10920f4ce8` | `zig cc -target x86_64-linux-musl -DMERAKIPLUS_SIM -O2 -static -s src/merakiplus.c -lm` |
+| `merakiplus_sim-macos-arm64` (V6.25 + unreleased) | `b8116320e70cc1140b208f71a8b10008` | `zig cc -DMERAKIPLUS_SIM -O2 -s src/merakiplus.c -lm` (Mach-O builds are not bit-reproducible) |
 
 The ARM builds above are reproducible: running `./build.sh` on the same sources with the **official**
 zig 0.17.1 release (the ziglang.org tarball CI installs) gives the same md5 on macOS and Linux,
@@ -168,7 +182,7 @@ reproducible file with the official toolchain (`switcher`, `tinj_hold`, `keyinj`
 Note that a zig cache shared with a Homebrew zig of the same version can hand its objects to the official
 zig: use a separate `ZIG_GLOBAL_CACHE_DIR`. `tests/hygiene.py` rejects Homebrew-built files in `bin/`. The Linux SIM build (`-target x86_64-linux-musl
 -static -s`) is reproducible the same way. CI enforces this on every push and PR
-(`tests/check_bins.py`): the committed `bin/` must be byte-identical to fresh builds of these nine
+(`tests/check_bins.py`): the committed `bin/` must be byte-identical to fresh builds of these ten
 reproducible targets (including the trimmed `grab_shim.so`, see below), so a source change without a `bin/`
 rebuild fails CI. Only `merakiplus_sim-macos-arm64` (Mach-O is not bit-reproducible) is excluded from that
 check; `tests/hygiene.py` still md5-gates every file in `bin/`.

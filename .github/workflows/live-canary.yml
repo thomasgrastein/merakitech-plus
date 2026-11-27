@@ -1,0 +1,45 @@
+name: Live update canary
+
+# The on-device updater against the REAL GitHub, weekly, with only the pinned roots (tests/live_canary.py): `check` with
+# the production build, a full `install` of the latest release into a temp root, and the length of every signed asset
+# URL. It catches a CA rotation by GitHub or its asset CDN (keys/tls/README.md), a TLS change, a new redirect host or a
+# URL format change BEFORE machines in the field fail to fetch the release that would fix it.
+#
+# Deliberately separate from ci.yml: it depends on github.com being reachable, so it must never block a merge
+# (merge-gate does not need it). A failure here means: read the log, update keys/tls/ (or the updater) in a normal PR,
+# and release it while the machines can still fetch it.
+#
+# Hardening as ci.yml: read-only token, actions pinned to full commit SHAs, no persisted credentials, no secrets.
+
+on:
+  schedule:
+    - cron: "41 6 * * 3"   # weekly (Wednesdays)
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: live-canary
+  cancel-in-progress: false
+
+jobs:
+  live:
+    name: updater vs. real GitHub (pinned roots only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: 0.17.1
+          use-cache: false
+      - name: Build the updater (host production + test builds)
+        run: ./build.sh host
+      - name: check + install + URL lengths against github.com
+        run: python3 tests/live_canary.py

@@ -18,7 +18,8 @@ swiping) with one root and sheets — the reasoning is in [ux-audit-v617.md](ux-
 HOME ─ icon, tap ─► GRIND / BREW / WATER / STEAM   (live line · that feature's settings · HOLD TO START)
      ─ icon, hold ► starts the activity (650 ms)
      ─ gear ──────► SYSTEM ─ DISPLAY · SOUND · CLOCK · SCHEDULE · STOCK UI (sections, one open at a time)
-     │                     └ DIAGNOSTICS ─► DIAGNOSTICS
+     │                     ├ DIAGNOSTICS ─► DIAGNOSTICS
+     │                     └ UPDATES ─► CHECK NOW ─► the install view (unreleased, OTA phase 3, §24)
      └ error / offline hint, tap ─► DIAGNOSTICS
 ```
 
@@ -32,7 +33,7 @@ whole header is the target), or swipe right. There are no page dots, no edge zon
 | **BREW** | tap the cup icon | live line *BOILER 92.4° · GROUP 70°* · BREW WEIGHT, BREW TEMP, PRE-INFUSION, PRE-INF. TIME, PRE-INF. PRESSURE, GROUP HEAD (4 in view, the list scrolls) · HOLD TO START |
 | **WATER** | tap the drop icon | live line *WATER 99.9°* (word 40 — the "water sensor") · HOT WATER, WATER MODE · HOLD TO START. **v6.22:** on a controller that cannot dose (≤ 5.1.2, version unknown, scale fault) no rows — *MANUAL HOT WATER · RUNS UNTIL YOU TAP STOP* + the reason (§21) |
 | **STEAM** | tap the steam icon | live line *BOILER 130° · MILK 22.6°* · MILK TEMP, STEAM LEVEL · HOLD TO START |
-| **SYSTEM** | the gear | *MERAKI+ V6.18.1* · four section headers with a summary (**DISPLAY · SOUND** *ENGLISH* · **CLOCK** *16:35* · **SCHEDULE** *06:30 / OFF* · **STOCK UI**) + the **DIAGNOSTICS** row (*OK* / the error code / *DOWN*). Closed: 5 rows, no scrolling. A tap on a header opens it (and closes the other) |
+| **SYSTEM** | the gear | *MERAKI+ V6.18.1* · four section headers with a summary (**DISPLAY · SOUND** *ENGLISH* · **CLOCK** *16:35* · **SCHEDULE** *06:30 / OFF* · **STOCK UI**) + the **DIAGNOSTICS** row (*OK* / the error code / *DOWN*) + the **UPDATES** row (unreleased, §24). Closed: 6 rows; the first five as in v6.17, UPDATES one short scroll below. A tap on a header opens it (and closes the other) |
 | **DIAGNOSTICS** | SYSTEM's last row, or a tap on HOME's error / offline hint | STATUS, BOOT · SLOT · SWITCHER, NET, GRAPH (smooth / raw), PRESSURE · ESTIMATE, RAW COUNTERS, POWER BUTTON, TIME · SCHEDULE, SOUND (v6.18), ABOUT — scrolls vertically. Its chevron returns to where it was opened from |
 
 A feature page's live line turns **amber and names the reason** when a start is not possible (*NO
@@ -459,3 +460,20 @@ stays *OFFLINE*, and only then reads bit 8 clear as the new **BEAN** phase.
   word 0 = 1 / word 1 = 0 and E1/E2/E3 = 0; the old build showed SOVER, the fixed build shows the bean message;
   putting it back returns READY. SIM: `bean_tank` switch event in `sim/mcu_sim.py` (idle work_sta recomputed from
   it), scenario `bean_container_missing`, UI self-test section `st_bean` (EN + DA). Gen 2: not verified yet.
+
+## 24. Updates on the display (unreleased, OTA phase 3)
+
+*SYSTEM › UPDATES* (the row below DIAGNOSTICS; its value is the installed version, or *V6.26 NEW* / *V6.26 READY* /
+*42 %*). **Nothing is contacted until you tap CHECK NOW.** Details and the security design: [ota-plan.md](ota-plan.md)
+"Phase 3 — implemented".
+
+| View | Contents |
+|---|---|
+| UPDATES | title, the SYSTEM line (version · TRIAL / FAILED / FALLBACK), hero = the installed version / *CHECKING* / *UP TO DATE* / *V6.26 NEW*, *LAST CHECK 14:32 · …*, the consent note *ONLY WHEN YOU TAP · DOWNLOADS NOTHING*, BACK + **CHECK NOW** (*SHOW* once a release is known) |
+| install view | *V6.26 AVAILABLE* · *INSTALLED V6.25* · the release's ultrashort notes (CHANGELOG `### On the machine`, up to 4 lines) · *DOWNLOADS ONLY AFTER YOUR CHOICE* / *DOWNLOADING 42 %* / *DOWNLOADED · STARTS AT NEXT START* · **AT NEXT START** / **INSTALL NOW**; the chevron or a swipe = no |
+| locks | only BACK + the reason: *UPDATER MISSING · USE A COMPUTER*, *NEEDS AN INSTALL FROM A COMPUTER* (another launcher), *THIS VERSION IS ON TRIAL · TRY LATER* |
+
+Toasts: *V6.26 AVAILABLE*, *UP TO DATE*, *NO SIGNED RELEASE FOUND*, *NO CONNECTION TO GITHUB*, *SECURE CONNECTION
+FAILED*, *UPDATE REJECTED: SIGNATURE*, *OLDER VERSION REFUSED*, *DOWNLOAD DAMAGED · TRY AGAIN*, *NOT ENOUGH SPACE*,
+*NOT WHILE THE MACHINE IS BUSY*, *V6.26 STARTS AT NEXT START*, *STARTING V6.26*. INSTALL NOW returns to HOME and the
+new version starts as soon as the machine is idle; AT NEXT START at the next power-on. Previews 119–127.

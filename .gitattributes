@@ -1,0 +1,5 @@
+# GitHub: the vendored third-party source (BearSSL, unmodified upstream 7bea48e — third_party/README.md) is folded in PR
+# diffs and left out of the language statistics. Its content is enforced by tests/hygiene.py (git tree-hash lock), so a
+# folded diff hides nothing that CI does not check. Nothing else is folded: this file decides what reviewers see, so it
+# is a trust anchor itself (.github/CODEOWNERS) — never mark our own sources (or the generated anchors header) here.
+third_party/** linguist-vendored

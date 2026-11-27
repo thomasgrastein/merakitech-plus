@@ -2,11 +2,14 @@
 
 Status: **phases 1a and 1b implemented** (v6.21: hardened companion installer, launcher, release directories and
 automatic rollback — see [Phase 1a — implemented](#phase-1a--implemented-2026-11-22) and
-[Phase 1b — implemented](#phase-1b--implemented-2026-11-22)); **1a + the 1b ordinary update and trial rollback
-hardware-verified 2026-11-23** (v6.22, reference machine; power-cut/pre-Wi-Fi tests pending — see "Hardware results"
-under phase 1b); **phase 2 implemented 2026-11-23** (signed release manifests, offline Ed25519 key, v6.23 is the
-first signed release — see [Phase 2 — implemented](#phase-2--implemented-2026-11-23) and [signing.md](signing.md)).
-Phases 3–4 are a plan, not implemented. It builds on the vendor A/B mechanism described in
+[Phase 1b — implemented](#phase-1b--implemented-2026-11-22)); **1a + 1b fully hardware-verified** (v6.22 ordinary
+update + trial rollback 2026-11-23; **v6.25 signed install + pre-Wi-Fi crash fallback + user power-cut replays
+2026-11-26** — see "Hardware results" under phase 1b); **phase 2 implemented 2026-11-23** (signed release manifests,
+offline Ed25519 key, v6.23 is the first signed release — see [Phase 2 — implemented](#phase-2--implemented-2026-11-23)
+and [signing.md](signing.md)).
+**Phase 3 implemented 2026-11-26, unreleased and not yet hardware-verified** (on-device HTTPS check + fetch with
+consent, SYSTEM › UPDATES — see [Phase 3 — implemented](#phase-3--implemented-2026-11-26)). Phase 4 (automation) is
+a plan, not implemented. It builds on the vendor A/B mechanism described in
 [boot.md](boot.md) and refines its §7 (vendor OTA interaction).
 Confidence: **H** = proven from code or an on-device observation; **M** = strong inference; **L** = guess.
 
@@ -245,6 +248,8 @@ pending=                 release on trial ("" = none)
 tries=0                  starts of `pending` that did not become healthy
 starts=…                 boot_id + count of starts in this boot (crash-storm detection)
 max_seq=27               highest seq ever accepted (anti-rollback for network installs)
+trial_seq=6.26-ab12cd34 28   seq of the release the on-device updater staged; counts as max_seq only once it is
+                         `current` (committed healthy), so a rolled-back trial can be retried (phase 3)
 fallback=                "stock" while the launcher is falling back to slot A
 last=ok|rolled_back:<release>:<reason>|…   shown once by the UI
 ```
@@ -373,6 +378,12 @@ On-device TLS details (phase 3):
 ### 6.3 Anti-rollback
 
 - A network install (on-device fetch or companion default) requires `seq > max_seq`.
+- `max_seq` counts only releases that became **healthy**: the on-device updater records `trial_seq=<name> <seq>` when it
+  stages, and that seq raises `max_seq` only once the launcher has committed `<name>` as `current` (the updater and the
+  companion both apply the rule; the next on-device install writes it into `max_seq`). A trial that was rolled back is
+  therefore offered again and can be retried from SYSTEM › UPDATES; a genuinely older signed release is still refused.
+  (Implemented this way in phase 3, 2026-11-27, after review: raising `max_seq` at staging showed a rolled-back release
+  as UP TO DATE and locked out a retry.)
 - **Rolling back to `previous`** (already installed, verified when it was installed) is always allowed — it is a local
   choice, not a downgrade attack.
 - An explicit downgrade to an older release is possible only from the companion with `--allow-downgrade` (LAN presence
@@ -544,8 +555,9 @@ Deviations from the plan text above, all deliberate:
 
 ### Phase 1b — implemented (2026-11-22)
 
-Shipped as **v6.21** (the first release with the phase 1a installer too). **Partially hardware-verified on the
-reference machine 2026-11-23 with v6.22** (ordinary update + trial rollback; see "Hardware results" below).
+Shipped as **v6.21** (the first release with the phase 1a installer too). **Fully hardware-verified on the
+reference machine**: ordinary update + trial rollback 2026-11-23 (v6.22), and signed v6.25 install + pre-Wi-Fi
+crash fallback + user power-cut replays 2026-11-26 (see "Hardware results" below).
 
 | Item | Implementation |
 |---|---|
@@ -602,20 +614,22 @@ Deviations from the plan text above, all deliberate:
 - **`ota/lock`** is taken by the launcher only (non-blocking, ≤ 2 s); the installer writes the state only before it
   activates and after the health check, and uses its own temp name.
 
-Next hardware session (user present; §13 decision 5; together with phase 0 probes P1–P10):
+Next hardware session (user present; §13 decision 5; together with phase 0 probes P1–P10) — **all done
+2026-11-26 with v6.25** (see "Hardware results (2026-11-26)" below; probes P1–P10 recorded in the session report):
 
 1. Ordinary update to v6.21 with `./install.sh` (idle machine): migration, launcher selftest on the display, watchdog
-   activation, healthy marker, commit; `./install.sh status`. — **done 2026-11-23 with v6.22** (see below).
+   activation, healthy marker, commit; `./install.sh status`. — **done 2026-11-23 with v6.22**; signed update
+   (seq 3 > max_seq 2) **done 2026-11-26 with v6.25**.
 2. **Clear the boot flag first** (user-approved write), so every power cycle returns to stock. — **done** (flag cleared
-   before the rollback test; still cleared at session end — safe: next boot is stock).
+   before the 2026-11-26 tests; restored to JA at session end).
 3. Canary releases built for the test (not published): one that exits at once → 3 starts → rollback; one that crashes
-   before Wi-Fi with the flag set → stock fallback brings Wi-Fi back (telnet reachable). — **exit-canary done**;
-   pre-Wi-Fi canary built but **pending** (user away).
+   before Wi-Fi with the flag set → stock fallback brings Wi-Fi back (telnet reachable). — **both done** (exit-canary
+   2026-11-23 and 2026-11-26; pre-Wi-Fi canary **2026-11-26**, flag JA temporarily, user power cycle).
 4. Power cuts **performed by the user** at announced points (during a trial start, right after a commit); any
-   injected long power-button press needs explicit approval per session. — **pending** (user away; the one staging
-   window completed without a cut).
+   injected long power-button press needs explicit approval per session. — **done 2026-11-26** (two user cuts:
+   trial/rollback-commit boundary + staging rename point; no long-press injection used).
 5. Restore the flag; revisit the vendor OTA block decision (§13 decision 6) before stock runs during these tests.
-   — flag restore **pending** with the runbook in the session report; decision 6 revisited and unchanged (no block).
+   — **done** (flag JA restored; decision 6 unchanged — no block, nobody opened the stock Software Update page).
 
 #### Hardware results (2026-11-23, reference machine, v6.22)
 
@@ -632,6 +646,25 @@ state names; GC removes them on the next install) — removal is in the report's
 | Trial rollback (flag cleared) | **PASS.** A deliberately broken canary (`TESTEXIT-<sha8>`, exits at once; built for the test, never published, removed afterwards) staged with the installer's own `install_release` and set `pending`; activated by the running v6.22's exec-reload when idle. The launcher wrote `tries` 1→2→3 to flash before each exec; the vendor watchdog supplied the restarts; the 4th start rolled back: `last=rolled_back:TESTEXIT-<sha8>:crashloop`, `pending` cleared, v6.22 running and healthy again. SYSTEM showed the amber *"V6.22 · VTESTEXIT FAILED"* line (fb). No power cycle was needed. |
 | Pre-Wi-Fi crash → stock fallback | **PENDING.** Canary built (crashes after ~4 s, before Wi-Fi); the test needs the flag set and a user power cycle. Design: state `current`/`previous` → two crash-canary dirs, boot, crash-storm demotion current→previous→stock, telnet returns via stock Wi-Fi, then restore. |
 | Power-cut replay (staging / trial) | **PENDING.** The staging window (full v6.22 set re-staged under a TEST name) completed without a cut — the owner was not at the machine. The container replay tests (96 installer states, launcher oplog prefixes) remain the exhaustive evidence; hardware confirms the real UBIFS in the next session. |
+
+#### Hardware results (2026-11-26, reference machine, v6.25 — 1b complete)
+
+Session report: `ONDEVICE-OTA-HW-SESSION.md` in the development workspace (evidence `ondevice/ota_hw_session/`).
+User present throughout; all physical power cuts / power-ons performed by the user (no agent reboot, no long-press
+injection). Boot flag cleared before the tests (§13 decision 5), restored to JA at the end. Probes P1–P10 recorded
+in the report; the phase-3 prerequisites are answered: **sha256sum yes** (busybox 1.20.2, correct RFC vector),
+**CA bundle no** (ship pinned anchors in the static helper, as §6.2 plans), **RTC survives power-off** (hwclock =
+system clock = correct time after every cut; the old ~1 h boot jump is the stock HTTP time sync, not RTC loss),
+**RAM ample** (MemAvailable ~66 MB vs the plan's ~22 MB estimate), no on-device firewall (no netfilter), `/etc/hosts`
+absent (layer-2 hosts pin stays deferred, decision 6). End state: signed v6.25 current + healthy, flag JA, config
+byte-identical, backups intact, all TEST releases removed, `/tmp` clean.
+
+| Test | Result |
+|---|---|
+| Signed update v6.25 (seq 3 > max_seq 2) | **PASS.** Real `install.sh` from origin/main `ad2ecf6`: manifest Ed25519-valid (key `26f673cde8584ba0`), all 8 installed files match; `rel/6.25-bb620afa` staged (md5 + SHA-256, MANIFEST last, sync, one rename); state `pending` + `max_seq=3`; launcher already current (no swap); **exec-reload same PID, no reboot**; healthy 59 s; committed `current=6.25`, `previous=6.24-f3e30271` (the user-approved ruler dev build); GC removed the unreferenced signed v6.24 dir. Live `/proc/<pid>/exe` sha256 `bb620afa…` = release; fb SYSTEM "MERAKI+ V6.25"; config unchanged. |
+| Trial rollback (flag cleared) | **PASS.** `TESTEXIT-96703369` (exits at once; built for the test, never published, removed afterwards) staged with the installer's own `install_release`, `pending` set; activated by the running v6.25's exec-reload when idle. Launcher wrote `tries` 1→2→3 to flash before each exec; 4th start rolled back (`last=rolled_back:TESTEXIT-96703369:crashloop`); v6.25 running and healthy again; SYSTEM showed the amber *"V6.25 · VTESTEXIT FEJLET"* line (fb). No power cycle needed. |
+| Pre-Wi-Fi crash → stock fallback | **PASS.** Flag JA temporarily; state `current=TESTCRASH-1c3ec085`, `previous=TESTCRASH2-1c3ec085` (same canary: SIGSEGV after ~4 s, before Wi-Fi — P7 shows Wi-Fi UP at ~9 s); user power cycle → boot B → launch log `crash storm on TESTCRASH (3 starts without healthy)` (up=19 s) → `crash storm on TESTCRASH2` (up=34 s) → **`stock UI from slot A`** (up=34 s); `/tmp/merakiplus_launch` level=2 rel=stock; exe `/customer/demo_v9`; **telnet returned via stock's own Wi-Fi** (~60 s). State untouched (steady state writes nothing). The `--persist` pre-Wi-Fi soft brick is closed on real hardware. |
+| Power-cut replay (trial + staging) | **PASS (2 user cuts).** Cut 1 landed at the trial's rollback-commit boundary: the fsynced state on flash is the complete post-rollback state, the best-effort launch.log entry was lost (state is the commit point, by design); no temp leftovers; release intact; stock booted clean. Cut 2 landed at the staging rename point: the **complete** `TESTCOPY` release dir on flash (hashes match), no `.stage-` leftovers, no half-written final names, state untouched — UBIFS rename atomicity confirmed on the real device. The container replays (96 installer states, launcher oplog prefixes) remain the exhaustive evidence. |
 
 ### Phase 1b — launcher, release directories, auto-rollback (3–4 d) — the original plan
 
@@ -700,7 +733,9 @@ Deviations from the plan text above, all deliberate:
 - **No separate cold backup key**: the maintainer keeps backup copies of the one encrypted key (signing.md §3 covers
   loss and rotation). The verifiers accept several keys, so one can be added later.
 - **Release directory names** stay `<version>-<sha8>`; `seq` lives in the manifest and `max_seq` in `ota/state`.
-- Hardware ("one signed update via the companion"): **pending**, next hardware session (with probes P1–P10).
+- Hardware ("one signed update via the companion"): **done** — signed v6.24 (seq 2) installed 2026-11-26
+  (`ONDEVICE-v624-UPDATE.md`), signed v6.25 (seq 3) installed 2026-11-26 with probes P1–P10
+  (`ONDEVICE-OTA-HW-SESSION.md`).
 
 ### Phase 3 — on-device check + fetch with consent (5–7 d)
 
@@ -712,6 +747,87 @@ Deviations from the plan text above, all deliberate:
 - **Sim:** UPDATES rows, toasts, idle gate (an update offered during a brew is deferred), EN/DA previews.
 - Hardware: CHECK NOW against the real GitHub release; install a real signed release; observe RAM during TLS.
 - Risk: medium (TLS code size, anchor maintenance). Effort is dominated by TLS integration and tests.
+
+### Phase 3 — implemented (2026-11-26)
+
+**Unreleased** (no version bump: the release PR assigns it; CHANGELOG *Unreleased — OTA phase 3 on-device fetch*),
+**not yet verified on a machine**. `merakiplus_upd` ships from now on (bin/, release asset, installed into every
+release directory).
+
+| Item | Implementation |
+|---|---|
+| TLS | `src/merakiplus_upd_net.c`: BearSSL (`third_party/bearssl/`, MIT, unmodified, commit `7bea48e`), statically linked; **TLS 1.2 only, ECDHE + AEAD** (ChaCha20-Poly1305, AES-GCM), hostname verification. No vendor libcurl/OpenSSL. Static ARMv7 helper ~270 KB (the phase 2 verifier was ~96 KB). |
+| Anchors | **9 pinned self-signed roots** in `keys/tls/` → `src/merakiplus_upd_anchors.h` (`tools/gen_anchors.py`, checked by `build.sh` + hygiene): github.com's Sectigo chain (E46 + its USERTrust ECC cross-signer, R46 + USERTrust RSA) and the asset CDN's Let's Encrypt chain (Root YR + its X1 cross-signer, YE, X2), plus DigiCert Global Root G2 (the CDN's previous chain). The live chains were inspected 2026-11-26. Rotation risk and the update procedure: [keys/tls/README.md](../keys/tls/README.md). |
+| Hosts + redirects | only `github.com`, `release-assets.githubusercontent.com`, `objects.githubusercontent.com`, port 443; the first URL and every redirect target are checked **before** connecting (HTTPS only, no port, no user info), at most 5 redirects; relative redirects stay on the same host. Discovery: the fixed `…/releases/latest/download/manifest.json` + `.sig` (two redirects today). |
+| Clock | certificates are checked at `max(clock, floor)` (floor = 2026-11-26 in the anchors header); a clock > 20 years past the floor also uses the floor. The RTC survives power-off (P6), so the floor is only the fallback. |
+| Limits | URLs and redirect targets ≤ 4095 bytes (GitHub's signed asset URLs are ~900 today and vary per download; the first draft's 1 KiB request buffer was too small — review 2026-11-27), manifest ≤ 64 KiB, signature ≤ 4 KiB, notes ≤ 8 KiB, each asset ≤ its signed size (Content-Length checked first), header ≤ 16 KiB, socket timeouts 20 s, deadline 90 s (check) / 15 min (install); bodies are streamed (chunked or length) — nothing large in RAM or `/tmp`. |
+| `check` | fetch manifest + signature → **Ed25519 first, then the format** → `seq` vs. `max_seq` (incl. a committed `trial_seq`; older = refused, equal or the installed version = up to date, 404 = no signed release) → the launcher in slot B must be the manifest's `platform` launcher (else *blocked=launcher*: install from a computer, §5.6) → the signed `notes.txt` (hash-checked). **Writes nothing on flash** (only the status file in `/tmp`). |
+| `install --version V` | the same verification again (and `V` must still be the latest: *changed* otherwise), anti-downgrade `seq > max_seq`, no other trial pending; GC of stages, damaged and unreferenced releases (never current / previous / pending / running); free space ≥ 2 × release + 1 MB; every release file streamed into `rel/.stage-<name>/` with size + SHA-256, fsync, re-read from flash; `MANIFEST` in the installer's format; `sync`, **one rename** into `rel/<version>-<sha8>`; then under `ota/lock` `pending=<name>`, `tries=0`, `trial_seq=<name> <seq>` — **not** `max_seq`, which the seq joins only after the healthy commit (§6.3) — (tmp + fsync + rename + fsync dir; unknown state keys kept; `ota/healthy` removed). GC runs under `ota/lock` and skips directories changed in the last 10 minutes (a computer install in progress). Idempotent: a release staged before is not downloaded again. `SIGPIPE` is ignored (a reset connection is a reported error). |
+| IPC | the UI starts the helper as a child (no inherited descriptors, stdio → `/dev/null`) and **only reads** `/tmp/merakiplus_upd.status` (key=value, replaced atomically: op, state, phase, result, error, pct, version, notes1..4); it reaps the child with `waitpid` and never signals it. One helper at a time (`/tmp/merakiplus_upd.lock`). |
+| UI | SYSTEM › **UPDATES** (the row below DIAGNOSTICS; the four sections + DIAGNOSTICS stay where they were): the version or what is new (*V6.26 NEW*, *V6.26 READY*, *42 %*). The UPDATES view: installed version + trial/fallback/failed line, last check, the consent note *ONLY WHEN YOU TAP · DOWNLOADS NOTHING*, CHECK NOW. A newer release opens the **install view**: its ultrashort notes, *DOWNLOADS ONLY AFTER YOUR CHOICE*, **AT NEXT START** / **INSTALL NOW**; back = no download. Locks (only BACK + the reason): updater missing, release for another launcher, this version still on trial. EN + DA. |
+| Activation | AT NEXT START: `pending` only; the launcher starts the trial at the next power-on (or any launcher start). INSTALL NOW: HOME, then the exec-reload of phase 1b once idle (same PID, no reboot). The trial/rollback machinery is unchanged (3 failed starts → previous → stock). |
+| Consent | **off by default**: without a tap nothing is contacted. CHECK NOW downloads only the manifest, signature and notes; release files only after AT NEXT START / INSTALL NOW. Check and install are refused during an activity (and while a write is pending); the reload waits for idle HOME. No automatic check (phase 4). |
+| Release notes on the machine | every release carries a CHANGELOG `### On the machine` subsection (1–4 bullets, ≤ 36 ASCII characters), published as the signed asset `notes.txt` (`release_notes.py --device`). Enforced: hygiene (every Unreleased block and every release after 6.25), `release.yml` (no draft without it), `sign_release.py` (no signature without it; regenerated from the CHANGELOG at the commit and compared). |
+| Licenses | `THIRD-PARTY-NOTICES` (BearSSL, Zig standard library + compiler runtime, musl — all MIT) is a release asset and built into the updater (`merakiplus_upd notices`); `LICENSE` points to it. BearSSL stays unmodified: `tests/hygiene.py` locks the git tree hashes of `third_party/bearssl/src` + `inc` to upstream `7bea48e`; `.gitattributes` marks `third_party/` vendored. |
+| Live canary | `.github/workflows/live-canary.yml` (weekly + on demand, separate from the merge gate): `tests/live_canary.py` runs `check` (production build) and a full `install` (temp root) against the real GitHub with only the pinned roots, and measures every signed asset URL — a CA rotation, TLS or URL-format change shows up before machines fail. |
+| Release tooling | `merakiplus_upd` + `notes.txt` are release assets; `merakiplus_upd` joined the manifest's `release` set (`sign_release.py RELEASE_FILES`) and the installer's release directory; anchors, BearSSL, the HTTPS client and `gen_anchors.py` are trust anchors (CODEOWNERS, signing review). |
+
+Tests (no hardware): `tests/test_ota_fetch.py` — the helper's TEST build (`-DMERAKIPLUS_UPD_TEST`: also trusts a
+test CA / key from the environment and connects every pinned host to a local port; never shipped — the production
+binaries are checked for the absence of these hooks) against `tests/ota_fixture.py` (Python TLS server with GitHub's
+redirect chain, a throwaway test CA, ECDSA + RSA server certificates, test-key-signed releases): available / up to
+date / no release / older / bad, missing and unknown-key signatures / launcher mismatch; untrusted CA, wrong host name,
+expired and not-yet-valid certificates, the clock floor at 1970 and in 2255, a plausible late clock not floored;
+unpinned-host / http / port / user-info redirects, loops, relative redirects; 404 / 500 / refused connection; install
+(files, modes, MANIFEST = installer format, state, GC, temp files, **the launcher starts the staged trial**), tampered /
+oversize / truncated / missing assets, a server stalling mid-transfer, a helper killed mid-download and run again,
+chunked bodies, changed release, trial pending, no space, no state, idempotent re-install, one run at a time; GitHub-sized
+signed URLs by default, requests of 1023 / 1024 / 1025 / 1500 / 2048 bytes, the 4095-byte maximum and a refused 4096;
+**rollback then check** (the rolled-back release is offered and installable again, after the healthy commit it is
+current and older releases are refused) — on the host and as the static ARMv7 build in the arm32v7 container (`--arm`).
+UI self-test section *OTA phase 3* (fake helper: default off, consent, busy gate, AT NEXT START / INSTALL NOW, errors,
+locks, progress, no inherited descriptor, EN + DA fit). Simulator scenarios `ota_update_consent`, `_declined`,
+`_older`, `_badsig`, `_offline`, `_redirect`: the UI SIM build runs the **real** updater (TEST build) through
+`sim/fixtures/ota/upd_sim.py` against the TLS stand-in. Previews 119–127. A live `build/merakiplus_upd_host check`
+against the real GitHub (v6.25, two redirects, both pinned chains) passed on 2026-11-26.
+
+Deviations from the plan text above, all deliberate:
+
+- **No OFF / CHECK / AUTO mode row.** Phase 3 is manual only: nothing happens without a tap, which is the plan's
+  default OFF. The mode row arrives with phase 4 (automatic check / AUTO).
+- **No ROLL BACK button** yet; automatic rollback (1b) and `revert.sh` remain the ways back.
+- **The download is not paused by an activity.** It is network-only (the UI keeps full control of the machine);
+  starting a check/install and the activation are gated, never the transfer itself.
+- **No `requires` / `min_from_seq`** (format 1 stays): the launcher rule is "the manifest's platform launcher equals the
+  installed one", else the release is offered only via a computer.
+- **The trial is committed by the launcher** at its next start (as since 1b), not by the UI right after healthy.
+- **One anchor set for all three hosts** (not per host): a CA move between GitHub's hosts does not break updates.
+- **The release notes come from a mandatory CHANGELOG subsection** (`### On the machine`), not from the GitHub
+  release body (which would need the API host and is not signed).
+- **The UPDATES row sits below DIAGNOSTICS** (one row of scrolling when SYSTEM is closed) instead of being a fifth
+  section, so the v6.17 layout of the other five rows is unchanged.
+
+Hardware verification (separate, user-attended session; not done yet):
+
+1. Install this build with `./install.sh --allow-unsigned` (development build) — or, better, after the release PR the
+   signed release — so that `rel/<x>/merakiplus_upd` exists. `merakiplus_upd --selftest` and `--version` on the
+   display; check `cat /etc/resolv.conf` (the vendor default DNS 1.2.4.8 / 114.114.114.114, probe P4) resolves
+   `github.com` (`merakiplus_upd check` reports *dns* otherwise).
+2. CHECK NOW on the screen with Wi-Fi up: the pinned anchors validate the **live** github.com (Sectigo) and asset-host
+   (Let's Encrypt) chains through the two redirects; *UP TO DATE* (same seq) or the next release + its notes.
+   Observe RAM during TLS (`free`, the helper's `VmRSS`) and that the UI stays responsive (helper runs at nice 10).
+3. With a newer signed release published: back out of the install view (nothing in `rel/`, state unchanged), then
+   AT NEXT START (staged dir, `pending`, `max_seq`), power cycle by the user → trial → healthy → committed.
+4. INSTALL NOW on another release: HOME, exec-reload (same PID), trial, healthy, commit at the next launcher start.
+5. Anti-downgrade: `max_seq` above the latest seq on the display (state edit with the user's OK, restored after) →
+   *OLDER VERSION REFUSED*.
+6. Rollback: a deliberately failing **test-signed** canary cannot be fetched from GitHub (production key only) — the
+   1b canary procedure via the installer stays the rollback test; confirm the on-device staged trial rolls back the
+   same way (3 failed starts).
+7. Failure paths: Wi-Fi off / router blocking GitHub → *NO CONNECTION TO GITHUB*, no stage left over; check the clock
+   floor only if the RTC is ever found wrong.
+8. Record the live chains (`openssl s_client` from a computer) next to the session report; if GitHub changed CA,
+   update `keys/tls/` before the release.
 
 ### Phase 4 — opt-in automation (1.5–2 d)
 

@@ -1,6 +1,6 @@
 {
   "name": "ia_navigation",
-  "description": "v6.17 IA with REAL taps (layout targets): HOME icon tap → that feature's page (title/rows/live line) → row → editor → CANCEL → header chevron → HOME; gear → SYSTEM (closed: 4 sections + DIAGNOSTICS) → section opens/closes → row → editor; DIAGNOSTICS row → DIAGNOSTICS → back to SYSTEM → HOME. Navigation sends no frame and changes no config",
+  "description": "v6.17 IA with REAL taps (layout targets): HOME icon tap → that feature's page (title/rows/live line) → row → editor → CANCEL → header chevron → HOME; gear → SYSTEM (closed: 4 sections + DIAGNOSTICS + UPDATES, OTA phase 3) → section opens/closes → row → editor; DIAGNOSTICS row → DIAGNOSTICS → back to SYSTEM → HOME. Navigation sends no frame and changes no config",
   "duration_s": 34,
   "ui_only": true,
   "events": [
@@ -250,7 +250,7 @@
       "path": "shown.rows",
       "t": 15,
       "window": 0.8,
-      "equals": 5
+      "equals": 6
     },
     {
       "kind": "state",
@@ -271,7 +271,7 @@
       "path": "shown.rows",
       "t": 17,
       "window": 0.8,
-      "equals": 9
+      "equals": 10
     },
     {
       "kind": "page",
@@ -305,7 +305,7 @@
       "path": "shown.rows",
       "t": 23,
       "window": 0.8,
-      "equals": 5
+      "equals": 6
     },
     {
       "kind": "page",

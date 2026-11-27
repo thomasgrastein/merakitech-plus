@@ -17,6 +17,9 @@
   * every trust anchor (tools/sign_release.py TRUST_ANCHORS) is owned by the repository owner in .github/CODEOWNERS
   * workflows: actions pinned to commit SHAs, no pull_request_target/workflow_run, read-only default token, no persisted
     checkout credentials, contents: write only in release.yml's publish job; Dependabot for github-actions
+  * third_party/bearssl is upstream commit 7bea48e UNMODIFIED: the git tree hashes of src/ and inc/ and the blob hashes
+    of LICENSE.txt / README.txt (computed from the working tree) equal upstream's; nothing else is in third_party/;
+    .gitattributes marks it linguist-vendored; THIRD-PARTY-NOTICES carries BearSSL's license and LICENSE points to it
 
     python3 tests/hygiene.py --trust-anchors CHANGED.txt   advisory: list changed trust anchors (CI warning), exit 0
 """
@@ -284,6 +287,82 @@ for wf in sorted((ROOT / ".github" / "workflows").glob("*.yml")):
 _dep = ROOT / ".github" / "dependabot.yml"
 if not _dep.is_file() or "package-ecosystem: github-actions" not in _dep.read_text():
     fail(".github/dependabot.yml must keep the pinned GitHub Actions up to date (package-ecosystem: github-actions)")
+
+# 11. release notes on the machine (OTA phase 3): every Unreleased block and every release after 6.25 has a valid
+#     "### On the machine" subsection (1..4 bullets, <= 36 ASCII characters) — release.yml publishes it as notes.txt
+import release_notes as _rn  # noqa: E402
+_cl = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+_blocks = re.split(r"(?m)^(?=## )", _cl)
+_vt = lambda v: tuple(int(x) for x in v.split("."))
+for _b in _blocks:
+    _h = _b.splitlines()[0] if _b.startswith("## ") else ""
+    _m = re.match(r"## \[(\d+\.\d+(?:\.\d+)?)", _h)
+    if _h.startswith("## Unreleased") or (_m and _vt(_m.group(1)) > (6, 25)):
+        try:
+            _rn.device_lines(_b)
+        except _rn.NotesError as e:
+            fail(f"CHANGELOG.md '{_h[3:60]}': {e}")
+# the anchors header matches keys/tls/ (tools/gen_anchors.py --check)
+import gen_anchors as _ga  # noqa: E402
+_fl = re.search(r"/\* (\d{4}-\d{2}-\d{2}) 00:00 UTC", (ROOT / "src/merakiplus_upd_anchors.h").read_text())
+import datetime as _dt  # noqa: E402
+if not _fl or _ga.render(_dt.datetime.strptime(_fl.group(1), "%Y-%m-%d").replace(tzinfo=_dt.timezone.utc)) != \
+        (ROOT / "src/merakiplus_upd_anchors.h").read_text():
+    fail("src/merakiplus_upd_anchors.h differs from keys/tls/*.crt — run tools/gen_anchors.py")
+
+
+# 12. vendored BearSSL = upstream 7bea48e, unmodified. The hashes are git's object ids, computed here from the files on
+#     disk (so an uncommitted edit fails too); verify against upstream with
+#     `git -C BearSSL rev-parse 7bea48e:src 7bea48e:inc 7bea48e:LICENSE.txt 7bea48e:README.txt`.
+#     Updating BearSSL means changing these values in a reviewed commit (third_party/README.md).
+BEARSSL_COMMIT = "7bea48e5e850ab4cafbe68d3765cdaba13a86d6f"
+BEARSSL_LOCK = {"src": "9893f48d1a2f10322005fe5ec94609274f1fe279", "inc": "c2ce436ef6ad8048fb18294c6464768c3771fb99",
+                "LICENSE.txt": "088502032e4308068fb9d6e0aaead59494dcb035", "README.txt": "0cb5288740669690d2a0dea90dd0c3085bd84a8c"}
+
+
+def _git_obj(kind, data):
+    return hashlib.sha1(b"%s %d\0" % (kind, len(data)) + data).digest()
+
+
+def _git_tree(d):
+    """git's tree object id for directory d (regular files 100644/100755, sub-trees; git's name order)"""
+    ents = []
+    for p in d.iterdir():
+        if p.is_symlink():
+            raise ValueError(f"symlink {p}")
+        if p.is_dir():
+            ents.append((p.name + "/", b"40000 " + p.name.encode() + b"\0" + _git_tree(p)))
+        else:
+            mode = b"100755" if os.stat(p).st_mode & 0o111 else b"100644"
+            ents.append((p.name, mode + b" " + p.name.encode() + b"\0" + _git_obj(b"blob", p.read_bytes())))
+    return _git_obj(b"tree", b"".join(e for _, e in sorted(ents, key=lambda x: x[0].encode())))
+
+
+_bs = ROOT / "third_party" / "bearssl"
+if sorted(p.name for p in (ROOT / "third_party").iterdir()) != ["README.md", "bearssl"]:
+    fail("third_party/ holds only README.md and bearssl/")
+elif sorted(p.name for p in _bs.iterdir()) != sorted(BEARSSL_LOCK):
+    fail(f"third_party/bearssl/ holds exactly {sorted(BEARSSL_LOCK)} (upstream's inc/, src/, LICENSE.txt, README.txt)")
+else:
+    for _n, _want in BEARSSL_LOCK.items():
+        _p = _bs / _n
+        _got = (_git_tree(_p) if _p.is_dir() else _git_obj(b"blob", _p.read_bytes())).hex()
+        if _got != _want:
+            fail(f"third_party/bearssl/{_n} is not upstream BearSSL {BEARSSL_COMMIT[:7]} (git id {_got[:12]}, upstream "
+                 f"{_want[:12]}): it must stay unmodified (third_party/README.md)")
+if BEARSSL_COMMIT not in (ROOT / "third_party/README.md").read_text():
+    fail(f"third_party/README.md must name the vendored BearSSL commit {BEARSSL_COMMIT}")
+_ga_txt = (ROOT / ".gitattributes").read_text() if (ROOT / ".gitattributes").is_file() else ""
+if not re.search(r"(?m)^third_party/\*\* linguist-vendored$", _ga_txt):
+    fail(".gitattributes must mark third_party/** linguist-vendored (GitHub folds the vendored code in diffs)")
+_tpn = (ROOT / "THIRD-PARTY-NOTICES").read_text(encoding="utf-8") if (ROOT / "THIRD-PARTY-NOTICES").is_file() else ""
+_norm = lambda t: "\n".join(l.rstrip() for l in t.strip().splitlines())
+if _norm((_bs / "LICENSE.txt").read_text()) not in _norm(_tpn) or BEARSSL_COMMIT not in _tpn:
+    fail("THIRD-PARTY-NOTICES must carry BearSSL's LICENSE.txt and its commit (MIT: the notice goes with every copy)")
+if "Monocypher is NOT used" not in _tpn or "Zig standard library" not in _tpn or "musl" not in _tpn:
+    fail("THIRD-PARTY-NOTICES must name the Zig standard library (Ed25519/SHA-256; not Monocypher) and musl")
+if "THIRD-PARTY-NOTICES" not in (ROOT / "LICENSE").read_text() or "third_party/" not in (ROOT / "LICENSE").read_text():
+    fail("LICENSE's Scope section must point to third_party/ and THIRD-PARTY-NOTICES")
 
 print("HYGIENE: " + ("OK" if not fails else f"{len(fails)} problem(s)"))
 sys.exit(1 if fails else 0)

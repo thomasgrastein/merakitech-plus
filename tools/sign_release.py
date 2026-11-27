@@ -42,18 +42,24 @@ import merakiplus as mp  # noqa: E402
 DEFAULT_KEY = pathlib.Path.home() / ".merakiplus" / "signing_ed25519.pem"
 ZIG_VERSION = "0.17.1"
 # release directory (switches atomically, docs/ota-plan.md §5.2): name inside rel/<x>/ <- release asset, mode
-RELEASE_FILES = [("demo_v9", "merakiplus", "755"), ("merakiplus_snd", "merakiplus_snd", "755")] + \
-                [("audio/" + n, n, "644") for n in sorted(mp.AUDIO_MD5)]
+# (phase 3: + merakiplus_upd, the on-device updater, so every release carries the updater that can replace it)
+RELEASE_FILES = [("demo_v9", "merakiplus", "755"), ("merakiplus_snd", "merakiplus_snd", "755"),
+                 ("merakiplus_upd", "merakiplus_upd", "755")] + [("audio/" + n, n, "644") for n in sorted(mp.AUDIO_MD5)]
 # fixed-path platform components (updated separately, §5.6): component <- release asset
 PLATFORM_FILES = [("grab_shim.so", "grab_shim.so"), ("launcher", "merakiplus_boot"), ("switcher", "switcher")]
 SUMS = ("MD5SUMS", "SHA256SUMS")
+# the display's ultrashort release notes (OTA phase 3; CHANGELOG "### On the machine"): required after 6.25
+NOTES, NOTES_FROM = "notes.txt", (6, 25)
+# the third-party notices (BearSSL, Zig std, musl — MIT), published with the binaries: equal to the file at the commit
+NOTICES = "THIRD-PARTY-NOTICES"
 # not bit-reproducible: equal to the committed bin/. grab_shim.so is reproducible (trimmed) from the tags whose
 # tests/check_bins.py lists it; for older tags it is compared with the committed file only.
 COMMITTED_ONLY = ("grab_shim.so", "merakiplus_sim-macos-arm64")
 # Trust anchors: paths that decide what users install or which signatures they trust. .github/CODEOWNERS owns each of
 # them (tests/hygiene.py checks it), ci.yml warns when a PR changes one, and `sign` highlights them in its review.
 TRUST_ANCHORS = (".github/", "install.sh", "revert.sh", "build.sh", "tools/merakiplus.py", "tools/sign_release.py",
-                 "keys/", "src/merakiplus_upd_keys.h", "tests/hygiene.py", "tests/check_bins.py", "bin/")
+                 "keys/", "src/merakiplus_upd_keys.h", "tests/hygiene.py", "tests/check_bins.py", "bin/",
+                 "src/merakiplus_upd_anchors.h", "src/merakiplus_upd_net.c", "tools/gen_anchors.py", "third_party/", ".gitattributes")
 # The maintainer's own record of the release key(s), kept OUTSIDE the repository: a change to the pinned keys in a
 # release (a key added or replaced by a merged PR) is refused at signing time unless --accept-key-change is given.
 KEY_PIN = pathlib.Path.home() / ".merakiplus" / "trusted-key-pin"
@@ -412,6 +418,14 @@ def rebuild_and_compare(rev, dl, assets, zig_env, work):
             elif n in mp.AUDIO_MD5:
                 ok = sha256f(src / "audio" / n) == got            # build.sh also ran tools/gen_audio.py --check
                 report.append((n, "audio/@commit == asset (generator-checked)", ok))
+            elif n == NOTES:                                      # the CHANGELOG's "On the machine" bullets at the commit
+                ver = re.search(r'^VERSION = "([^"]+)"', (src / "tools/merakiplus.py").read_text(), re.M).group(1)
+                r = sh([sys.executable, str(src / "tools/release_notes.py"), ver, "--device"], capture_output=True, check=False)
+                ok = r.returncode == 0 and hashlib.sha256(r.stdout).hexdigest() == got
+                report.append((n, "release_notes.py --device @commit == asset (CHANGELOG 'On the machine')", ok))
+            elif n == NOTICES:
+                ok = sha256f(src / NOTICES) == got
+                report.append((n, "THIRD-PARTY-NOTICES@commit == asset", ok))
             else:
                 raise Fail(f"unexpected release asset {n} — teach sign_release.py what it is before signing")
         for n in SUMS:                                            # recomputed sums over the downloaded assets
@@ -498,6 +512,8 @@ def cmd_sign(a):
     if prev_ver and resign_seq is None and vkey(version) <= vkey(prev_ver):
         raise Fail(f"{tag} is not newer than the last signed release v{prev_ver} — seq must follow the version order")
     seq = resign_seq or prev_seq + 1
+    if vkey(version) > NOTES_FROM and NOTES not in assets:
+        raise Fail(f"{tag} has no {NOTES} (the display's release notes, CHANGELOG '### On the machine') — NOT signing")
 
     commit = resolve_commit(tag, rel)
     print(f"== REVIEW: {tag} = commit {commit} (on origin/main), since the last signed release {prev_tag or '-'}")
